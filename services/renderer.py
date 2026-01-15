@@ -5,6 +5,7 @@ MathJax 渲染器模块
 import asyncio
 import re
 import tempfile
+import traceback
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -28,12 +29,19 @@ class MathJaxRenderer:
     async def _get_browser(self) -> Browser:
         """获取或创建浏览器实例（线程安全）"""
         async with self._lock:
-            if self._browser is None or not self._browser.is_connected():
-                if self._playwright is None:
-                    self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(headless=True)
-                logger.info("浏览器实例已创建")
-            return self._browser
+            try:
+                if self._browser is None or not self._browser.is_connected():
+                    logger.info("[MathJax2Image] 正在启动浏览器...")
+                    if self._playwright is None:
+                        self._playwright = await async_playwright().start()
+                        logger.debug("[MathJax2Image] Playwright 已启动")
+                    self._browser = await self._playwright.chromium.launch(headless=True)
+                    logger.info("[MathJax2Image] 浏览器实例已创建")
+                return self._browser
+            except Exception as e:
+                logger.error(f"[MathJax2Image] 浏览器启动失败: {type(e).__name__}: {e}")
+                logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
+                raise
 
     async def close(self) -> None:
         """关闭浏览器和 Playwright"""
@@ -138,19 +146,26 @@ class MathJaxRenderer:
 
     async def render(self, content: str) -> Path:
         """渲染内容为图片，返回图片路径"""
-        html_content = self._convert_markdown_to_html(content)
-        logger.info("Markdown 转 HTML 完成")
+        logger.info(f"[MathJax2Image] 开始渲染，内容长度: {len(content)}")
 
-        # 使用唯一文件名避免并发冲突
-        output_dir = StarTools.get_data_dir('astrbot_plugin_mathjax2image')
-        output_path = output_dir / f"render_{uuid.uuid4().hex[:8]}.png"
+        try:
+            html_content = self._convert_markdown_to_html(content)
+            logger.debug("[MathJax2Image] Markdown 转 HTML 完成")
 
-        await self._render_html_to_image(html_content, output_path)
-        return output_path
+            output_dir = StarTools.get_data_dir('astrbot_plugin_mathjax2image')
+            output_path = output_dir / f"render_{uuid.uuid4().hex[:8]}.png"
+            logger.debug(f"[MathJax2Image] 输出路径: {output_path}")
+
+            await self._render_html_to_image(html_content, output_path)
+            return output_path
+
+        except Exception as e:
+            logger.error(f"[MathJax2Image] render 失败: {type(e).__name__}: {e}")
+            logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
+            raise
 
     async def _render_html_to_image(self, html: str, output: Path) -> None:
         """使用 Playwright 渲染 HTML 并截图"""
-        # 创建临时 HTML 文件
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.html', delete=False, encoding='utf-8'
         ) as tmp:
@@ -158,39 +173,48 @@ class MathJaxRenderer:
             tmp_path = tmp.name
 
         try:
+            logger.debug("[MathJax2Image] 获取浏览器实例...")
             browser = await self._get_browser()
+
+            logger.debug("[MathJax2Image] 创建新页面...")
             page = await browser.new_page(viewport={'width': 1150, 'height': 2000})
 
             try:
+                logger.debug(f"[MathJax2Image] 加载 HTML: {tmp_path}")
                 await page.goto(
                     f"file://{tmp_path}",
                     wait_until='domcontentloaded',
                     timeout=60000
                 )
 
-                # 等待 MathJax 渲染完成
                 try:
                     await page.wait_for_function(
                         "() => window.mathJaxReady === true",
                         timeout=10000
                     )
-                    logger.info("MathJax 渲染完成")
+                    logger.debug("[MathJax2Image] MathJax 渲染完成")
                 except Exception as e:
-                    logger.warning(f"MathJax 等待超时: {e}")
+                    logger.warning(f"[MathJax2Image] MathJax 等待超时: {e}")
 
-                # 调整视口高度并截图
                 height = await page.evaluate("document.body.scrollHeight")
                 await page.set_viewport_size({'width': 1150, 'height': height})
+
+                logger.debug(f"[MathJax2Image] 截图中，高度: {height}px")
                 await page.screenshot(
                     path=str(output),
                     full_page=True,
                     scale='device',
                     timeout=60000
                 )
-                logger.info(f"截图已保存: {output}")
+                logger.info(f"[MathJax2Image] 截图已保存: {output}")
 
             finally:
                 await page.close()
+
+        except Exception as e:
+            logger.error(f"[MathJax2Image] 截图失败: {type(e).__name__}: {e}")
+            logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
+            raise
 
         finally:
             Path(tmp_path).unlink(missing_ok=True)

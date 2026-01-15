@@ -3,6 +3,7 @@ AstrBot MathJax2Image 插件
 将 Markdown/MathJax 内容渲染为图片
 """
 import re
+import traceback
 from pathlib import Path
 from typing import Optional
 import urllib.request
@@ -67,16 +68,37 @@ class MathJax2ImagePlugin(Star):
         system_prompt: str
     ) -> Optional[str]:
         """统一的 LLM 调用方法"""
+        logger.info(f"[MathJax2Image] 开始调用 LLM，主题: {user_input[:50]}...")
+
         try:
+            provider = self.context.get_using_provider()
+            if provider is None:
+                logger.error("[MathJax2Image] LLM provider 未配置或不可用")
+                return None
+
+            logger.debug(f"[MathJax2Image] 使用 provider: {type(provider).__name__}")
+
             contexts = [{"role": "user", "content": user_input}]
-            response = await self.context.get_using_provider().text_chat(
+            response = await provider.text_chat(
                 system_prompt=system_prompt,
                 prompt="以下是文章围绕的话题",
                 contexts=contexts,
             )
+
+            if response is None:
+                logger.error("[MathJax2Image] LLM 返回空响应")
+                return None
+
+            if not response.completion_text:
+                logger.error("[MathJax2Image] LLM 返回内容为空")
+                return None
+
+            logger.info(f"[MathJax2Image] LLM 调用成功，响应长度: {len(response.completion_text)}")
             return self._filter_think_tags(response.completion_text)
+
         except Exception as e:
-            logger.error(f"LLM 调用失败: {e}")
+            logger.error(f"[MathJax2Image] LLM 调用失败: {type(e).__name__}: {e}")
+            logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
             return None
 
     def _filter_think_tags(self, text: Optional[str]) -> Optional[str]:
@@ -91,19 +113,23 @@ class MathJax2ImagePlugin(Star):
         content: str
     ):
         """渲染内容并发送图片"""
+        logger.info(f"[MathJax2Image] 开始渲染，内容长度: {len(content)}")
+
         try:
             image_path = await self.renderer.render(content)
 
             if not image_path.exists():
-                logger.error(f"图片未生成: {image_path}")
+                logger.error(f"[MathJax2Image] 图片文件不存在: {image_path}")
                 yield event.plain_result("图片生成失败，请检查日志。")
                 return
 
+            logger.info(f"[MathJax2Image] 图片生成成功: {image_path}")
             chain = [Comp.Image.fromFileSystem(str(image_path))]
             yield event.chain_result(chain)
 
         except Exception as e:
-            logger.error(f"渲染失败: {e}")
+            logger.error(f"[MathJax2Image] 渲染失败: {type(e).__name__}: {e}")
+            logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染失败: {e}")
 
     @filter.command("math")
