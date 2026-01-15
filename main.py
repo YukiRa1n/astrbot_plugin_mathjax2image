@@ -2,6 +2,7 @@
 AstrBot MathJax2Image 插件
 将 Markdown/MathJax 内容渲染为图片
 """
+import math
 import re
 import traceback
 from pathlib import Path
@@ -219,6 +220,85 @@ class MathJax2ImagePlugin(Star):
         text = self._convert_tikz(text)
         return text
 
+    def _convert_tikz_plot(self, tikz_code: str) -> str:
+        """将 TikZ plot 命令转换为坐标点序列（TikZJax 不支持 plot 函数）"""
+
+        def eval_tikz_expr(expr: str, x: float) -> float:
+            """计算 TikZ 数学表达式"""
+            # 替换 \x 为实际值
+            expr = expr.replace('\\x', str(x))
+            # 替换 TikZ/LaTeX 数学函数为 Python 函数
+            expr = re.sub(r'sqrt\s*\(', 'math.sqrt(', expr)
+            expr = re.sub(r'sin\s*\(', 'math.sin(', expr)
+            expr = re.sub(r'cos\s*\(', 'math.cos(', expr)
+            expr = re.sub(r'tan\s*\(', 'math.tan(', expr)
+            expr = re.sub(r'exp\s*\(', 'math.exp(', expr)
+            expr = re.sub(r'ln\s*\(', 'math.log(', expr)
+            expr = re.sub(r'log\s*\(', 'math.log10(', expr)
+            expr = re.sub(r'abs\s*\(', 'abs(', expr)
+            # 替换 ^ 为 **
+            expr = re.sub(r'\^', '**', expr)
+            # 替换 pi
+            expr = re.sub(r'\bpi\b', str(math.pi), expr)
+            expr = re.sub(r'\\pi', str(math.pi), expr)
+            try:
+                return eval(expr)
+            except Exception:
+                return float('nan')
+
+        def convert_plot_cmd(match):
+            """转换单个 plot 命令"""
+            full_match = match.group(0)
+            options = match.group(1) or ''
+            x_expr = match.group(2)
+            y_expr = match.group(3)
+
+            # 解析 domain 和 samples
+            domain_match = re.search(r'domain\s*=\s*([-\d.]+)\s*:\s*([-\d.]+)', options)
+            samples_match = re.search(r'samples\s*=\s*(\d+)', options)
+
+            if not domain_match:
+                logger.warning(f"[MathJax2Image] plot 命令缺少 domain: {full_match[:50]}")
+                return full_match
+
+            x_min = float(domain_match.group(1))
+            x_max = float(domain_match.group(2))
+            samples = int(samples_match.group(1)) if samples_match else 50
+
+            # 移除 domain 和 samples 选项，保留其他样式选项
+            style_options = re.sub(r',?\s*domain\s*=\s*[-\d.]+\s*:\s*[-\d.]+', '', options)
+            style_options = re.sub(r',?\s*samples\s*=\s*\d+', '', style_options)
+            style_options = style_options.strip(' ,')
+
+            # 生成坐标点
+            points = []
+            step = (x_max - x_min) / (samples - 1) if samples > 1 else 0
+            for i in range(samples):
+                x = x_min + i * step
+                # 计算 x 表达式（通常就是 \x）
+                x_val = eval_tikz_expr(x_expr, x)
+                # 计算 y 表达式
+                y_val = eval_tikz_expr(y_expr, x)
+                if not (math.isnan(x_val) or math.isnan(y_val) or
+                        math.isinf(x_val) or math.isinf(y_val)):
+                    points.append(f"({x_val:.4f},{y_val:.4f})")
+
+            if not points:
+                logger.warning(f"[MathJax2Image] plot 生成0个有效点: {full_match[:50]}")
+                return f"% plot 转换失败: {full_match[:30]}..."
+
+            # 生成 \draw 命令
+            coords = ' -- '.join(points)
+            result = f"\\draw[{style_options}] {coords};"
+            logger.info(f"[MathJax2Image] plot 转换: {samples}个点")
+            return result
+
+        # 匹配 \draw[options] plot (\x, {expr});
+        pattern = r'\\draw\s*\[([^\]]*)\]\s*plot\s*\(\s*([^,]+)\s*,\s*\{([^}]+)\}\s*\)\s*;'
+        tikz_code = re.sub(pattern, convert_plot_cmd, tikz_code)
+
+        return tikz_code
+
     def _convert_tikz(self, text: str) -> str:
         """将 tikzpicture 环境转换为 tikzjax 格式（支持多种 TikZ 库）"""
 
@@ -240,6 +320,9 @@ class MathJax2ImagePlugin(Star):
             }
             for macro, replacement in simple_macros.items():
                 tikz_code = tikz_code.replace(macro, replacement)
+
+            # 预处理 plot 命令（TikZJax 不支持 plot 函数）
+            tikz_code = self._convert_tikz_plot(tikz_code)
 
             # 自动检测需要的包
             packages = ['amsfonts', 'amssymb']
