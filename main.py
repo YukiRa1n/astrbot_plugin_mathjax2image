@@ -151,7 +151,10 @@ class MathJax2ImagePlugin(Star):
             yield event.plain_result("文章生成失败")
             return
 
-        async for result in self._render_and_send(event, llm_result):
+        # 预处理 LaTeX/TikZ 内容
+        processed = self._preprocess_latex_text(llm_result)
+
+        async for result in self._render_and_send(event, processed):
             yield result
 
     @filter.command("art")
@@ -171,7 +174,10 @@ class MathJax2ImagePlugin(Star):
             yield event.plain_result("文章生成失败")
             return
 
-        async for result in self._render_and_send(event, llm_result):
+        # 预处理 LaTeX/TikZ 内容
+        processed = self._preprocess_latex_text(llm_result)
+
+        async for result in self._render_and_send(event, processed):
             yield result
 
     @filter.command("render")
