@@ -1,16 +1,23 @@
-# Mathjax2image
+# MathJax2Image
 
-/mj2i 调用llm来生成支持mathjax的文章，并渲染为图片
+将 Markdown/MathJax 内容渲染为精美图片的 AstrBot 插件。
 
+## 命令
 
-/m2i 将带有数学公式的输入转化为输出（最后输出的都是和数学相关的）
+| 命令 | 说明 |
+|------|------|
+| `/math <主题>` | 调用 LLM 生成数学文章，支持 LaTeX 公式渲染 |
+| `/art <主题>` | 调用 LLM 生成普通文章 |
+| `/render <内容>` | 直接渲染 Markdown/LaTeX 内容为图片 |
 
+**示例：**
+```
+/math 勾股定理的证明
+/art 人工智能的发展历程
+/render $E=mc^2$ 是爱因斯坦的质能方程
+```
 
-/wz 调用llm生成文章（输出不一定是和数学相关的，不支持mathjax）
-
-推荐使用deepseekv3_0324模型
-
-## 安装说明
+## 安装
 
 ### 1. 安装依赖
 ```bash
@@ -18,35 +25,31 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. MathJax 自动安装 ✨
+### 2. MathJax 自动安装
+插件首次加载时会自动下载 MathJax 离线包（约 1.1MB），无需手动操作。
 
-**插件会在首次加载时自动下载 MathJax 离线包，无需手动操作！**
-
-- 首次启动时会自动检测 MathJax 是否存在
-- 如果不存在会自动从 CDN 下载（约 1.1MB）
-- 下载完成后即可正常使用
-
-如果自动下载失败，可以手动运行：
-```bash
-python install_mathjax.py
-```
-
-或手动下载：
-1. 下载 https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js
+如果自动下载失败，可手动下载：
+1. 访问 https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js
 2. 保存到 `static/mathjax/tex-chtml.js`
-
-### 3. 启动使用
-安装依赖后直接使用即可，MathJax 会自动安装。
 
 ## 特性
 
-- ✅ **自动安装** - 首次使用自动下载 MathJax
-- ✅ **完全离线** - 无需访问外部 CDN
-- ✅ **零配置** - 开箱即用
-- ✅ 自动处理 MathJax 渲染
-- ✅ 支持 Markdown 和数学公式
-- ✅ 自动管理浏览器驱动
+- **LaTeX 公式渲染** - 支持行内公式 `$...$` 和独立公式 `$$...$$`
+- **Markdown 智能预处理** - 自动修复格式问题，确保正确渲染
+- **代码块行号** - 代码块自动显示行号，长代码自动换行
+- **可配置背景色** - 支持自定义模板背景颜色
+- **离线渲染** - MathJax 本地运行，无需外部 CDN
 
-# 支持
+## 配置
 
-[帮助文档](https://astrbot.app)
+在 AstrBot 插件配置中可设置：
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `background_color` | 模板背景颜色 | `#FDFBF0` |
+| `math_system_prompt` | 数学文章提示词 | 内置默认 |
+| `article_system_prompt` | 普通文章提示词 | 内置默认 |
+
+## 支持
+
+[AstrBot 帮助文档](https://astrbot.app)
