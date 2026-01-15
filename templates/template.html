@@ -1,19 +1,38 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Markdown Render</title>
-    <!-- 移除 polyfill.io，现代浏览器已内置 ES6 支持 -->
+
+    <!-- 本地字体定义 -->
     <style>
-    html, body {
-        width: 1100px !important;
-        margin: 0;
-        padding: 0;
-        overflow: hidden; /* 禁止滚动 */
-        font-size:38px;
-    }
+        /* EB Garamond - 主要衬线字体 */
+        @font-face {
+            font-family: 'EB Garamond';
+            src: url('../static/fonts/EBGaramond-Regular.ttf') format('truetype');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'EB Garamond';
+            src: url('../static/fonts/EBGaramond-SemiBold.ttf') format('truetype');
+            font-weight: 600;
+            font-style: normal;
+            font-display: swap;
+        }
+        /* Fira Code - 代码字体 */
+        @font-face {
+            font-family: 'Fira Code';
+            src: url('../static/fonts/FiraCode-Regular.ttf') format('truetype');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
     </style>
 
+    <!-- MathJax 配置 -->
     <script id="MathJax-config">
         window.MathJax = {
             tex: {
@@ -25,7 +44,7 @@
                 load: ['[tex]/ams']
             },
             chtml: {
-                fontCache: 'none',  // 禁用字体缓存，加快加载
+                fontCache: 'none',
                 scale: 1.0
             },
             startup: {
@@ -42,16 +61,232 @@
     </script>
 
     <style>
+        :root {
+            --bg-color: #FDFBF0;
+            --text-color: #2c2c2c;
+            --accent-color: #555;
+            --code-bg: #EAEAEA;
+            --font-main: 'EB Garamond', 'Georgia', 'Times New Roman', 'Microsoft YaHei', serif;
+            --font-code: 'Fira Code', 'Courier New', monospace;
+        }
+
+        html, body {
+            width: 1100px !important;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
         body {
-            font-family: 'Noto Sans CJK', 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif;
-            font-size: 38px;
-            padding: 30px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-main);
+            line-height: 1.8;
+            padding: 40px;
+            font-size: 32px;
+        }
+
+        /* --- 头部样式 --- */
+        .header-line {
+            border-top: 3px solid #333;
+            margin-bottom: 4px;
+        }
+
+        .header-line-thin {
+            border-top: 1px solid #999;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.2em;
+            font-weight: 600;
+            margin: 20px 0 10px 0;
+            color: #000;
+            border-bottom: none;
+        }
+
+        h2 {
+            font-size: 1.6em;
+            font-weight: 600;
+            margin: 30px 0 15px 0;
+            color: #111;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 8px;
+        }
+
+        h3 {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin: 25px 0 10px 0;
+            color: #222;
+        }
+
+        h4, h5, h6 {
+            font-size: 1.1em;
+            font-weight: 600;
+            margin: 20px 0 8px 0;
+            color: #333;
+        }
+
+        p {
+            margin: 15px 0;
+            text-align: justify;
+        }
+
+        hr {
+            border: 0;
+            border-top: 1px solid #999;
+            margin: 30px 0;
+        }
+
+        /* --- 列表样式 (简化圆点) --- */
+        ul {
+            list-style-type: none;
+            padding-left: 20px;
+            margin: 15px 0;
+        }
+
+        ul li {
+            position: relative;
+            padding-left: 25px;
+            margin-bottom: 10px;
+        }
+
+        ul li::before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: #000;
+            font-size: 1.2em;
+            line-height: 1.6;
+        }
+
+        /* 嵌套列表使用空心圆 */
+        ul ul li::before {
+            content: "○";
+        }
+
+        ol {
+            padding-left: 40px;
+            margin: 15px 0;
+        }
+
+        ol li {
+            margin-bottom: 10px;
+        }
+
+        /* --- 引用样式 (单线条) --- */
+        blockquote {
+            border-left: 4px solid #666;
+            margin: 25px 0;
+            padding: 15px 25px;
+            font-style: italic;
+            color: #333;
+            background: rgba(0,0,0,0.02);
+        }
+
+        blockquote p {
+            margin: 10px 0;
+        }
+
+        /* --- 代码块样式 --- */
+        pre {
+            background-color: var(--code-bg);
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            font-family: var(--font-code);
+            font-size: 0.75em;
+            overflow-x: auto;
+            margin: 25px 0;
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+        }
+
+        code {
+            font-family: var(--font-code);
+            background-color: rgba(0,0,0,0.06);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+            font-size: 1em;
+        }
+
+        /* --- 表格样式 --- */
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 25px 0;
+            font-size: 0.9em;
+        }
+
+        th, td {
+            border: 1px solid #999;
+            padding: 12px 15px;
+            text-align: left;
+        }
+
+        th {
+            background-color: rgba(0,0,0,0.05);
+            font-weight: 600;
+        }
+
+        tr:nth-child(even) {
+            background-color: rgba(0,0,0,0.02);
+        }
+
+        /* --- 链接样式 --- */
+        a {
+            color: #1a5276;
+            text-decoration: none;
+            border-bottom: 1px dotted #1a5276;
+        }
+
+        a:hover {
+            color: #2980b9;
+            border-bottom-style: solid;
+        }
+
+        /* --- 强调样式 --- */
+        strong {
+            font-weight: 600;
+            color: #000;
+        }
+
+        em {
+            font-style: italic;
+        }
+
+        /* --- 底部样式 --- */
+        .footer-line {
+            border-top: 1px solid #333;
+            margin-top: 40px;
+            padding-top: 15px;
+        }
+
+        /* --- MathJax 公式样式 --- */
+        .MathJax {
+            font-size: 1.1em !important;
+        }
+
+        mjx-container[jax="CHTML"][display="true"] {
+            margin: 20px 0 !important;
         }
     </style>
 </head>
 <body>
+    <div class="header-line"></div>
+    <div class="header-line-thin"></div>
+
     {{CONTENT}}
-    <!-- 本地 MathJax 脚本放在 body 末尾加载 -->
+
+    <div class="footer-line"></div>
+
+    <!-- MathJax 脚本 -->
     <script src="../static/mathjax/tex-chtml.js"></script>
 </body>
 </html>

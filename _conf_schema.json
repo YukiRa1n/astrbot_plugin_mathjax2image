@@ -1,16 +1,14 @@
 {
-    "system_prompt_template": {
-        "description": "系统提示词",
+    "math_system_prompt": {
+        "description": "数学文章系统提示词",
         "type": "text",
-        "hint": "用于指导llm生成数学文章",
-        "default": "请根据要求写一篇数学文章,用markdown格式,其中数学公式用mathjax格式,由于要进行markdown转html渲染,\\之类的要改成\\\\"
-    }
-    ,
-    "wenzhang": {
-        "description": "正常风格系统提示词",
+        "hint": "用于指导 LLM 生成包含数学公式的文章",
+        "default": "写一篇文章，用 markdown 格式。数学公式用 MathJax 格式，反斜杠需要转义为双反斜杠，美元符号之间不要有中文字符。"
+    },
+    "article_system_prompt": {
+        "description": "普通文章系统提示词",
         "type": "text",
-        "hint": "生成文章",
-        "default": "请生成一篇文章。用markdown格式"
+        "hint": "用于指导 LLM 生成普通文章",
+        "default": "请生成一篇文章，使用 markdown 格式。"
     }
-
 }
