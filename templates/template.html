@@ -46,7 +46,7 @@
             tex: {
                 inlineMath: [['$', '$'], ['\\(', '\\)']],
                 displayMath: [['$$', '$$'], ['\\[', '\\]']],
-                packages: {'[+]': ['ams', 'newcommand', 'physics']},
+                packages: {'[+]': ['ams', 'newcommand']},
                 macros: {
                     // 群论/代数
                     Stab: '\\operatorname{Stab}',
@@ -108,11 +108,15 @@
                     A: '\\mathbb{A}',
                     // 常用符号
                     eps: '\\varepsilon',
-                    vphi: '\\varphi'
+                    vphi: '\\varphi',
+                    coloneqq: '\\mathrel{:=}',
+                    eqqcolon: '\\mathrel{=:}',
+                    // 加粗数学符号
+                    bm: ['\\boldsymbol{#1}', 1]
                 }
             },
             loader: {
-                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/physics'],
+                load: ['[tex]/ams', '[tex]/newcommand'],
                 paths: {mathjax: '../static/mathjax'}
             },
             chtml: {
@@ -208,31 +212,22 @@
             margin: 30px 0;
         }
 
-        /* --- 列表样式 (简化圆点) --- */
+        /* --- 列表样式 --- */
         ul {
-            list-style-type: none;
-            padding-left: 20px;
+            list-style-type: disc;
+            list-style-position: outside;
+            padding-left: 50px;
             margin: 15px 0;
         }
 
         ul li {
-            position: relative;
-            padding-left: 25px;
             margin-bottom: 10px;
-        }
-
-        ul li::before {
-            content: "•";
-            position: absolute;
-            left: 0;
-            color: #000;
-            font-size: 1.2em;
-            line-height: 1.6;
+            padding-left: 10px;
         }
 
         /* 嵌套列表使用空心圆 */
-        ul ul li::before {
-            content: "○";
+        ul ul {
+            list-style-type: circle;
         }
 
         ol {
@@ -375,6 +370,30 @@
         mjx-container[jax="CHTML"][display="true"] {
             margin: 20px 0 !important;
         }
+
+        /* --- TikZ SVG 样式 --- */
+        /* 只针对 TikZ 容器内的 SVG */
+        .tikz-diagram {
+            text-align: center;
+            margin: 80px 0;
+            padding: 60px 20px;
+            min-height: 200px;
+        }
+
+        .tikz-diagram svg {
+            display: block !important;
+            position: relative !important;
+            margin: 60px auto !important;
+            overflow: visible !important;
+            /* 放大 TikZ 图形 */
+            transform: scale(2.0) !important;
+            transform-origin: center center !important;
+        }
+
+        /* 不要影响 MathJax 的 SVG */
+        mjx-container svg {
+            transform: none !important;
+        }
     </style>
 </head>
 <body>
@@ -386,6 +405,10 @@
 
     <!-- MathJax 脚本 -->
     <script src="../static/mathjax/tex-chtml.js"></script>
+
+    <!-- TikZJax 脚本 -->
+    <link rel="stylesheet" type="text/css" href="../static/tikzjax/fonts.css">
+    <script src="../static/tikzjax/tikzjax.js"></script>
 
     <!-- 代码块行号处理 -->
     <script>
