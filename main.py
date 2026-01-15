@@ -6,7 +6,6 @@ import re
 import traceback
 from pathlib import Path
 from typing import Optional
-import urllib.request
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
@@ -42,25 +41,14 @@ class MathJax2ImagePlugin(Star):
         self._ensure_mathjax_installed()
 
     def _ensure_mathjax_installed(self) -> None:
-        """检查并自动下载 MathJax"""
+        """检查 MathJax 是否已安装"""
         plugin_dir = Path(__file__).resolve().parent
         mathjax_file = plugin_dir / "static" / "mathjax" / "tex-chtml.js"
 
         if mathjax_file.exists():
             logger.info(f"MathJax 已安装: {mathjax_file}")
-            return
-
-        mathjax_file.parent.mkdir(parents=True, exist_ok=True)
-        logger.info("首次使用，正在下载 MathJax...")
-
-        try:
-            url = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"
-            urllib.request.urlretrieve(url, mathjax_file)
-            size_kb = mathjax_file.stat().st_size / 1024
-            logger.info(f"MathJax 下载成功！({size_kb:.2f} KB)")
-        except Exception as e:
-            logger.error(f"MathJax 下载失败: {e}")
-            logger.error("请手动下载并保存到 static/mathjax/tex-chtml.js")
+        else:
+            logger.error("MathJax 未安装，请确保 static/mathjax/tex-chtml.js 存在")
 
     async def _call_llm(
         self,
@@ -215,6 +203,183 @@ class MathJax2ImagePlugin(Star):
         # \{ -> \lbrace, \} -> \rbrace (修复MathJax大括号渲染问题)
         text = text.replace(r'\{', r'\lbrace ')
         text = text.replace(r'\}', r'\rbrace ')
+        # 自动检测集合表示法 {... \mid ...} 并添加大括号
+        text = re.sub(r'(?<!\\)\{([^{}]*\\mid[^{}]*)\}', r'\\lbrace \1\\rbrace ', text)
+        # 处理 LaTeX enumerate/itemize 环境
+        text = self._convert_latex_lists(text)
+        # 处理 LaTeX tabular 表格
+        text = self._convert_latex_tables(text)
+        # 处理 TikZ 绘图环境
+        text = self._convert_tikz(text)
+        return text
+
+    def _convert_tikz(self, text: str) -> str:
+        """将 tikzpicture 环境转换为 tikzjax 格式（支持多种 TikZ 库）"""
+
+        def convert_tikz_block(match):
+            tikz_code = match.group(0)
+
+            # 简单宏替换
+            simple_macros = {
+                '\\Z': '\\mathbb{Z}',
+                '\\N': '\\mathbb{N}',
+                '\\Q': '\\mathbb{Q}',
+                '\\R': '\\mathbb{R}',
+                '\\C': '\\mathbb{C}',
+                '\\F': '\\mathbb{F}',
+                '\\P': '\\mathbb{P}',
+                '\\A': '\\mathbb{A}',
+                '\\eps': '\\varepsilon',
+                '\\vphi': '\\varphi',
+            }
+            for macro, replacement in simple_macros.items():
+                tikz_code = tikz_code.replace(macro, replacement)
+
+            # 自动检测需要的包
+            packages = ['amsfonts', 'amssymb']
+            tikzlibraries = []
+
+            # 检测 tikz-3dplot
+            if 'tdplot' in tikz_code or '3d' in tikz_code.lower():
+                packages.append('tikz-3dplot')
+
+            # 检测 pgfplots
+            if 'axis' in tikz_code or 'addplot' in tikz_code:
+                packages.append('pgfplots')
+
+            # 检测 circuitikz
+            if 'circuitikz' in tikz_code or 'to[' in tikz_code:
+                packages.append('circuitikz')
+
+            # 检测 tikz-cd (交换图)
+            if 'tikzcd' in tikz_code or 'arrow' in tikz_code:
+                packages.append('tikz-cd')
+
+            # 检测 arrows.meta (Stealth 箭头)
+            if 'Stealth' in tikz_code or 'Latex' in tikz_code:
+                tikzlibraries.append('arrows.meta')
+
+            # 检测其他常用 TikZ 库
+            if 'calc' in tikz_code or '($' in tikz_code:
+                tikzlibraries.append('calc')
+
+            # positioning 库 (检测 "of=" 语法)
+            if 'positioning' in tikz_code or ' of=' in tikz_code or ' of ' in tikz_code:
+                tikzlibraries.append('positioning')
+
+            # shapes 库 (检测各种形状)
+            if 'ellipse' in tikz_code or 'rectangle' in tikz_code or 'diamond' in tikz_code:
+                tikzlibraries.append('shapes.geometric')
+            if 'shapes' in tikz_code:
+                tikzlibraries.append('shapes')
+
+            # backgrounds 库
+            if 'background' in tikz_code:
+                tikzlibraries.append('backgrounds')
+
+            # fit 库
+            if 'fit=' in tikz_code:
+                tikzlibraries.append('fit')
+
+            logger.info(f"[MathJax2Image] TikZ 包: {packages}, 库: {tikzlibraries}")
+            logger.info(f"[MathJax2Image] TikZ 代码: {tikz_code[:200]}...")
+
+            # 构建 usepackage 和 usetikzlibrary 语句
+            usepackages = '\n'.join([f'\\usepackage{{{pkg}}}' for pkg in packages])
+            usetikzlibs = ''
+            if tikzlibraries:
+                usetikzlibs = f"\\usetikzlibrary{{{','.join(tikzlibraries)}}}"
+
+            # 构建完整的 TikZ 文档
+            full_tikz = f"""{usepackages}
+{usetikzlibs}
+\\begin{{document}}
+{tikz_code}
+\\end{{document}}"""
+
+            # 用 div 包装以便 CSS 精确选择
+            return f'<div class="tikz-diagram"><script type="text/tikz">\n{full_tikz}\n</script></div>'
+
+        # 调试：检查是否有 tikz 环境
+        has_tikzpicture = r'\begin{tikzpicture}' in text
+        has_tikzcd = r'\begin{tikzcd}' in text
+        logger.info(f"[MathJax2Image] _convert_tikz: tikzpicture={has_tikzpicture}, tikzcd={has_tikzcd}")
+
+        # 匹配 tikzpicture 环境
+        text = re.sub(
+            r'\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}',
+            convert_tikz_block, text
+        )
+
+        # 匹配 tikzcd 环境
+        text = re.sub(
+            r'\\begin\{tikzcd\}[\s\S]*?\\end\{tikzcd\}',
+            convert_tikz_block, text
+        )
+
+        # 调试：检查转换结果
+        has_script = '<script type="text/tikz">' in text
+        logger.info(f"[MathJax2Image] _convert_tikz: 转换后包含 script: {has_script}")
+
+        return text
+
+    def _convert_latex_lists(self, text: str) -> str:
+        """将 LaTeX 列表环境转换为 Markdown 格式"""
+        # 移除 \begin{enumerate}[...] 和 \end{enumerate}
+        text = re.sub(r'\\begin\{enumerate\}(\[.*?\])?', '', text)
+        text = re.sub(r'\\end\{enumerate\}', '', text)
+        # 移除 \begin{itemize} 和 \end{itemize}
+        text = re.sub(r'\\begin\{itemize\}', '', text)
+        text = re.sub(r'\\end\{itemize\}', '', text)
+        # 将 \item 转换为 Markdown 列表项
+        lines = text.split('\n')
+        result = []
+        item_counter = 0
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith(r'\item'):
+                item_counter += 1
+                # 移除 \item 并添加编号
+                content = re.sub(r'^\\item\s*', '', stripped)
+                result.append(f"{item_counter}. {content}")
+            else:
+                result.append(line)
+        return '\n'.join(result)
+
+    def _convert_latex_tables(self, text: str) -> str:
+        """将 LaTeX tabular 表格转换为 Markdown 格式"""
+        # 移除 \begin{table}...\end{table} 包装，保留内容
+        text = re.sub(r'\\begin\{table\}(\[.*?\])?', '', text)
+        text = re.sub(r'\\end\{table\}', '', text)
+        text = re.sub(r'\\centering', '', text)
+        text = re.sub(r'\\caption\{.*?\}', '', text)
+
+        # 处理 tabular 环境
+        def convert_tabular(match):
+            content = match.group(1)
+            # 移除 \hline
+            content = re.sub(r'\\hline\s*', '', content)
+            # 按 \\ 分割行
+            rows = re.split(r'\\\\\s*', content)
+            md_rows = []
+            for i, row in enumerate(rows):
+                row = row.strip()
+                if not row:
+                    continue
+                # 按 & 分割列
+                cells = [c.strip() for c in row.split('&')]
+                md_row = '| ' + ' | '.join(cells) + ' |'
+                md_rows.append(md_row)
+                # 第一行后添加分隔符
+                if i == 0:
+                    sep = '|' + '|'.join(['---'] * len(cells)) + '|'
+                    md_rows.append(sep)
+            return '\n'.join(md_rows)
+
+        text = re.sub(
+            r'\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}',
+            convert_tabular, text
+        )
         return text
 
     async def terminate(self):
