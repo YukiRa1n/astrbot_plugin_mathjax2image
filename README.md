@@ -4,11 +4,9 @@
 
 ## 命令
 
-| 命令 | 说明 |
-|------|------|
-| `/math <主题>` | 调用 LLM 生成数学文章，支持 LaTeX 公式渲染 |
-| `/art <主题>` | 调用 LLM 生成普通文章 |
-| `/render <内容>` | 直接渲染 Markdown/LaTeX 内容为图片 |
+- `/math <主题>` - 调用 LLM 生成数学文章，支持 LaTeX 公式渲染
+- `/art <主题>` - 调用 LLM 生成普通文章
+- `/render <内容>` - 直接渲染 Markdown/LaTeX 内容为图片
 
 **示例：**
 ```
@@ -54,11 +52,9 @@ playwright install chromium
 
 在 AstrBot 插件配置中可设置：
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `background_color` | 模板背景颜色 | `#FDFBF0` |
-| `math_system_prompt` | 数学文章提示词 | 内置默认 |
-| `article_system_prompt` | 普通文章提示词 | 内置默认 |
+- `background_color` - 模板背景颜色（默认 `#FDFBF0`）
+- `math_system_prompt` - 数学文章提示词
+- `article_system_prompt` - 普通文章提示词
 
 ## 支持
 
