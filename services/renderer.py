@@ -35,7 +35,15 @@ class MathJaxRenderer:
                     if self._playwright is None:
                         self._playwright = await async_playwright().start()
                         logger.debug("[MathJax2Image] Playwright 已启动")
-                    self._browser = await self._playwright.chromium.launch(headless=True)
+                    # 启动浏览器时添加参数以支持本地文件访问和 WebAssembly
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--disable-web-security',
+                            '--allow-file-access-from-files',
+                            '--disable-features=VizDisplayCompositor'
+                        ]
+                    )
                     logger.info("[MathJax2Image] 浏览器实例已创建")
                 return self._browser
             except Exception as e:
@@ -63,7 +71,6 @@ class MathJaxRenderer:
         for i, line in enumerate(lines):
             stripped = line.strip()
 
-            # 检测代码块边界
             if stripped.startswith('```') or stripped.startswith('~~~'):
                 in_code_block = not in_code_block
                 result.append(line)
@@ -73,21 +80,16 @@ class MathJaxRenderer:
                 result.append(line)
                 continue
 
-            # 修复标题语法：##标题 -> ## 标题
             heading_match = re.match(r'^(#{1,6})([^#\s])', stripped)
             if heading_match:
                 stripped = heading_match.group(1) + ' ' + stripped[len(heading_match.group(1)):]
                 line = stripped
 
-            # 检查是否是标题
             is_heading = bool(re.match(r'^#{1,6}\s+', stripped))
-
-            # 检查是否是列表项
             is_unordered = bool(re.match(r'^[-*]\s+', stripped))
             is_ordered = bool(re.match(r'^\d+\.\s+', stripped))
             is_list_item = is_unordered or is_ordered
 
-            # 如果是标题或列表项，且前一行不是空行，则添加空行
             if (is_heading or is_list_item) and result:
                 prev_line = result[-1].strip()
                 prev_is_unordered = bool(re.match(r'^[-*]\s+', prev_line))
@@ -102,17 +104,14 @@ class MathJaxRenderer:
 
     def _convert_markdown_to_html(self, md_text: str) -> str:
         """将 Markdown 转换为完整 HTML"""
-        # 预处理Markdown
         md_text = self._preprocess_markdown(md_text)
 
-        # 保护数学公式，防止被 Markdown 渲染器解析（如 _ 变斜体）
         math_blocks = []
         def substitute_math(match):
             placeholder = f"MATHBLOCK{len(math_blocks)}MATHBLOCK"
             math_blocks.append(match.group(0))
             return placeholder
 
-        # 1. 先保护代码块，避免代码块内的 $ 被误识别
         code_blocks = []
         def substitute_code(match):
             placeholder = f"CODEBLOCK{len(code_blocks)}CODEBLOCK"
@@ -120,10 +119,9 @@ class MathJaxRenderer:
             return placeholder
         md_text = re.sub(r'```[\s\S]*?```', substitute_code, md_text)
 
-        # 2. 保护数学公式
-        # 匹配 $$...$$ (多行) - 必须先匹配多行，再匹配单行
+        md_text = re.sub(r'\\\[[\s\S]*?\\\]', substitute_math, md_text)
+        md_text = re.sub(r'\\\([\s\S]*?\\\)', substitute_math, md_text)
         md_text = re.sub(r'\$\$.*?\$\$', substitute_math, md_text, flags=re.DOTALL)
-        # 匹配 $...$ (行内)
         md_text = re.sub(r'\$.*?\$', substitute_math, md_text)
 
         html_body = markdown.markdown(
@@ -131,12 +129,10 @@ class MathJaxRenderer:
             extensions=['fenced_code', 'tables', 'nl2br']
         )
 
-        # 3. 还原数学公式
         for i, block in enumerate(math_blocks):
             placeholder = f"MATHBLOCK{i}MATHBLOCK"
             html_body = html_body.replace(placeholder, block)
 
-        # 4. 还原代码块
         for i, block in enumerate(code_blocks):
             placeholder = f"CODEBLOCK{i}CODEBLOCK"
             html_body = html_body.replace(placeholder, block)
@@ -148,44 +144,18 @@ class MathJaxRenderer:
             html_template = f.read()
 
         full_html = html_template.replace("{{CONTENT}}", html_body)
-
-        # 替换背景颜色
         full_html = full_html.replace("--bg-color: #FDFBF0;", f"--bg-color: {self._bg_color};")
 
-        # 替换所有静态资源路径为绝对路径
-        mathjax_url = (static_dir / "mathjax" / "tex-chtml.js").as_uri()
-        full_html = full_html.replace("../static/mathjax/tex-chtml.js", mathjax_url)
+        tikzjax_dir = static_dir / "tikzjax"
+        tikzjax_js_path = tikzjax_dir / "tikzjax.js"
 
-        # 为 MathJax 动态加载组件提供本地路径前缀
-        # 注意：MathJax 内部通过 relative_path 查找，这里需要确保 page 加载的是正确的 file:// 路径
-        mathjax_base_url = (static_dir / "mathjax").as_uri()
-        if not mathjax_base_url.endswith('/'):
-            mathjax_base_url += '/'
-
-        # 显式配置 MathJax 路径映射
-        full_html = full_html.replace(
-            "paths: {mathjax: '../static/mathjax'}",
-            f"paths: {{mathjax: '{mathjax_base_url}'}}"
-        )
-
-        # 替换字体路径
-        fonts_dir = static_dir / "fonts"
-        full_html = full_html.replace(
-            "../static/fonts/EBGaramond-Regular.ttf",
-            (fonts_dir / "EBGaramond-Regular.ttf").as_uri()
-        )
-        full_html = full_html.replace(
-            "../static/fonts/EBGaramond-SemiBold.ttf",
-            (fonts_dir / "EBGaramond-SemiBold.ttf").as_uri()
-        )
-        full_html = full_html.replace(
-            "../static/fonts/FiraCode-Regular.ttf",
-            (fonts_dir / "FiraCode-Regular.ttf").as_uri()
-        )
-        full_html = full_html.replace(
-            "../static/fonts/NotoSansSC-Regular.otf",
-            (fonts_dir / "NotoSansSC-Regular.otf").as_uri()
-        )
+        if tikzjax_js_path.exists():
+            with open(tikzjax_js_path, 'r', encoding='utf-8') as f:
+                tikzjax_js_content = f.read()
+            full_html = full_html.replace(
+                '<script src="../static/tikzjax/tikzjax.js"></script>',
+                f'<script>\n{tikzjax_js_content}\n</script>'
+            )
 
         return full_html
 
@@ -197,9 +167,11 @@ class MathJaxRenderer:
             html_content = self._convert_markdown_to_html(content)
             logger.debug("[MathJax2Image] Markdown 转 HTML 完成")
 
+            has_tikz_script = '<script type="text/tikz">' in html_content
+            logger.info(f"[MathJax2Image] HTML 中包含 TikZ script: {has_tikz_script}")
+
             output_dir = StarTools.get_data_dir('astrbot_plugin_mathjax2image')
             output_path = output_dir / f"render_{uuid.uuid4().hex[:8]}.png"
-            logger.debug(f"[MathJax2Image] 输出路径: {output_path}")
 
             await self._render_html_to_image(html_content, output_path)
             return output_path
@@ -211,11 +183,30 @@ class MathJaxRenderer:
 
     async def _render_html_to_image(self, html: str, output: Path) -> None:
         """使用 Playwright 渲染 HTML 并截图"""
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.html', delete=False, encoding='utf-8'
-        ) as tmp:
-            tmp.write(html)
-            tmp_path = tmp.name
+        plugin_dir = Path("/AstrBot/data/plugins/astrbot_plugin_mathjax2image")
+        temp_dir = plugin_dir / "temp"
+        temp_dir.mkdir(exist_ok=True)
+        tmp_path = temp_dir / f"temp_{uuid.uuid4().hex[:8]}.html"
+
+        logger.info(f"[MathJax2Image] HTML 临时文件: {tmp_path}")
+
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        # 新版 tikzjax.js 是自包含的，不需要外部 wasm/gz 文件
+        # 只需要 SVG 样式修复脚本
+        inject_script = """
+        // 修复 TikZ SVG 显示问题
+        setInterval(function() {
+            document.querySelectorAll('.tikz-diagram svg').forEach(function(svg) {
+                svg.style.position = 'relative';
+                svg.style.display = 'block';
+                svg.style.margin = '20px auto';
+                svg.style.border = 'none';
+                svg.style.padding = '0';
+            });
+        }, 500);
+        """
 
         try:
             logger.debug("[MathJax2Image] 获取浏览器实例...")
@@ -223,6 +214,38 @@ class MathJaxRenderer:
 
             logger.debug("[MathJax2Image] 创建新页面...")
             page = await browser.new_page(viewport={'width': 1150, 'height': 2000})
+
+            await page.add_init_script(inject_script)
+            logger.info("[MathJax2Image] SVG 样式修复脚本已注入")
+
+            # 添加字体文件路由拦截
+            static_dir = self._plugin_dir / "static"
+
+            async def handle_font_route(route):
+                url = route.request.url
+                logger.info(f"[MathJax2Image] 字体请求: {url}")
+                # 处理 bakoma 字体请求
+                if '/bakoma/ttf/' in url:
+                    font_name = url.split('/bakoma/ttf/')[-1]
+                    font_path = static_dir / "bakoma" / "ttf" / font_name
+                    logger.info(f"[MathJax2Image] 字体路径: {font_path}, 存在: {font_path.exists()}")
+                    if font_path.exists():
+                        # 直接读取文件内容并返回
+                        with open(font_path, 'rb') as f:
+                            font_data = f.read()
+                        logger.info(f"[MathJax2Image] 字体大小: {len(font_data)} bytes")
+                        await route.fulfill(
+                            body=font_data,
+                            content_type='font/ttf'
+                        )
+                        return
+                await route.continue_()
+
+            await page.route("**/*.ttf", handle_font_route)
+            logger.info("[MathJax2Image] 字体路由已设置")
+
+            page.on("console", lambda msg: logger.info(f"[Browser Console] {msg.type}: {msg.text}"))
+            page.on("pageerror", lambda err: logger.error(f"[Browser Error] {err}"))
 
             try:
                 logger.debug(f"[MathJax2Image] 加载 HTML: {tmp_path}")
@@ -241,10 +264,55 @@ class MathJaxRenderer:
                 except Exception as e:
                     logger.warning(f"[MathJax2Image] MathJax 等待超时: {e}")
 
+                # 检查 TikZ 渲染状态
+                try:
+                    # 检测 .tikz-diagram 容器（我们生成的）
+                    tikz_container_count = await page.evaluate(
+                        "() => document.querySelectorAll('.tikz-diagram').length"
+                    )
+                    logger.info(f"[MathJax2Image] TikZ 容器数量: {tikz_container_count}")
+
+                    if tikz_container_count > 0:
+                        logger.info("[MathJax2Image] 等待 TikZ 渲染...")
+
+                        # 等待 TikZ SVG 完全渲染（检测 SVG 内部有 path 或 text 元素）
+                        try:
+                            await page.wait_for_function(
+                                """() => {
+                                    const svg = document.querySelector('.tikz-diagram svg');
+                                    if (!svg) return false;
+                                    // 检查 SVG 内部是否有实际内容
+                                    const hasContent = svg.querySelectorAll('path, line, rect, text, circle').length > 0;
+                                    return hasContent;
+                                }""",
+                                timeout=30000
+                            )
+                            logger.info("[MathJax2Image] TikZ SVG 渲染完成")
+                        except Exception as e:
+                            logger.warning(f"[MathJax2Image] 等待 TikZ SVG 超时: {e}")
+
+                        # 额外等待确保字体加载完成
+                        await asyncio.sleep(2)
+
+                        # 调试信息
+                        svg_info = await page.evaluate('''
+                            () => {
+                                const svg = document.querySelector('.tikz-diagram svg');
+                                if (!svg) return 'No SVG in .tikz-diagram';
+                                const paths = svg.querySelectorAll('path').length;
+                                const texts = svg.querySelectorAll('text').length;
+                                const lines = svg.querySelectorAll('line').length;
+                                return `SVG found: ${paths} paths, ${texts} texts, ${lines} lines`;
+                            }
+                        ''')
+                        logger.info(f"[MathJax2Image] TikZ SVG 信息: {svg_info}")
+                except Exception as e:
+                    logger.warning(f"[MathJax2Image] TikZJax 检查异常: {e}")
+
                 height = await page.evaluate("document.body.scrollHeight")
                 await page.set_viewport_size({'width': 1150, 'height': height})
 
-                logger.debug(f"[MathJax2Image] 截图中，高度: {height}px")
+                logger.info(f"[MathJax2Image] 截图中，高度: {height}px")
                 await page.screenshot(
                     path=str(output),
                     full_page=True,
