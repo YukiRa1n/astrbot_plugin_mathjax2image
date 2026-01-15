@@ -38,10 +38,73 @@
             tex: {
                 inlineMath: [['$', '$'], ['\\(', '\\)']],
                 displayMath: [['$$', '$$'], ['\\[', '\\]']],
-                packages: {'[+]': ['ams']}
+                packages: {'[+]': ['ams', 'newcommand', 'physics']},
+                macros: {
+                    // 群论/代数
+                    Stab: '\\operatorname{Stab}',
+                    Aut: '\\operatorname{Aut}',
+                    End: '\\operatorname{End}',
+                    Hom: '\\operatorname{Hom}',
+                    Ker: '\\operatorname{Ker}',
+                    Gal: '\\operatorname{Gal}',
+                    Orb: '\\operatorname{Orb}',
+                    Fix: '\\operatorname{Fix}',
+                    Sym: '\\operatorname{Sym}',
+                    Alt: '\\operatorname{Alt}',
+                    GL: '\\operatorname{GL}',
+                    SL: '\\operatorname{SL}',
+                    SO: '\\operatorname{SO}',
+                    SU: '\\operatorname{SU}',
+                    Tr: '\\operatorname{Tr}',
+                    tr: '\\operatorname{tr}',
+                    rank: '\\operatorname{rank}',
+                    Ann: '\\operatorname{Ann}',
+                    Rad: '\\operatorname{Rad}',
+                    Nil: '\\operatorname{Nil}',
+                    Soc: '\\operatorname{Soc}',
+                    char: '\\operatorname{char}',
+                    ord: '\\operatorname{ord}',
+                    lcm: '\\operatorname{lcm}',
+                    // 代数几何
+                    Spec: '\\operatorname{Spec}',
+                    Proj: '\\operatorname{Proj}',
+                    Pic: '\\operatorname{Pic}',
+                    Div: '\\operatorname{Div}',
+                    Cl: '\\operatorname{Cl}',
+                    Jac: '\\operatorname{Jac}',
+                    Sing: '\\operatorname{Sing}',
+                    // 范畴论
+                    Ob: '\\operatorname{Ob}',
+                    Mor: '\\operatorname{Mor}',
+                    id: '\\operatorname{id}',
+                    op: '\\operatorname{op}',
+                    colim: '\\operatorname{colim}',
+                    // 分析
+                    supp: '\\operatorname{supp}',
+                    sgn: '\\operatorname{sgn}',
+                    Re: '\\operatorname{Re}',
+                    Im: '\\operatorname{Im}',
+                    Res: '\\operatorname{Res}',
+                    // 线性代数
+                    diag: '\\operatorname{diag}',
+                    span: '\\operatorname{span}',
+                    codim: '\\operatorname{codim}',
+                    // 常用集合
+                    N: '\\mathbb{N}',
+                    Z: '\\mathbb{Z}',
+                    Q: '\\mathbb{Q}',
+                    R: '\\mathbb{R}',
+                    C: '\\mathbb{C}',
+                    F: '\\mathbb{F}',
+                    P: '\\mathbb{P}',
+                    A: '\\mathbb{A}',
+                    // 常用符号
+                    eps: '\\varepsilon',
+                    vphi: '\\varphi'
+                }
             },
             loader: {
-                load: ['[tex]/ams']
+                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/physics']
             },
             chtml: {
                 fontCache: 'none',
