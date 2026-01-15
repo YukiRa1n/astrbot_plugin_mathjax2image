@@ -207,11 +207,14 @@ class MathJax2ImagePlugin(Star):
     def _preprocess_latex_text(self, text: str) -> str:
         """将 LaTeX 文本命令转换为 Markdown 格式"""
         # \textbf{...} -> **...** (支持跨行)
-        text = re.sub(r'\\textbf\{([\s\S]*?)\}', r'**\1**', text)
+        text = re.sub(r'\\textbf\{([\s\S]*?)\}', lambda m: f"**{m.group(1)}**", text)
         # \textit{...} -> *...* (支持跨行)
-        text = re.sub(r'\\textit\{([\s\S]*?)\}', r'*\1*', text)
+        text = re.sub(r'\\textit\{([\s\S]*?)\}', lambda m: f"*{m.group(1)}*", text)
         # \emph{...} -> *...* (支持跨行)
-        text = re.sub(r'\\emph\{([\s\S]*?)\}', r'*\1*', text)
+        text = re.sub(r'\\emph\{([\s\S]*?)\}', lambda m: f"*{m.group(1)}*", text)
+        # \{ -> \lbrace, \} -> \rbrace (修复MathJax大括号渲染问题)
+        text = text.replace(r'\{', r'\lbrace ')
+        text = text.replace(r'\}', r'\rbrace ')
         return text
 
     async def terminate(self):
