@@ -265,6 +265,11 @@ class MathJax2ImagePlugin(Star):
             x_max = float(domain_match.group(2))
             samples = int(samples_match.group(1)) if samples_match else 50
 
+            # TikZJax 处理能力有限，限制最大采样点数
+            if samples > 60:
+                logger.info(f"[MathJax2Image] 采样点数 {samples} 超过限制，降为 60")
+                samples = 60
+
             # 移除 domain 和 samples 选项，保留其他样式选项
             style_options = re.sub(r',?\s*domain\s*=\s*[-\d.]+\s*:\s*[-\d.]+', '', options)
             style_options = re.sub(r',?\s*samples\s*=\s*\d+', '', style_options)
