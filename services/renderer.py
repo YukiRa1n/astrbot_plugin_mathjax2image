@@ -282,21 +282,44 @@ class MathJaxRenderer:
                     if tikz_container_count > 0:
                         logger.info("[MathJax2Image] 等待 TikZ 渲染...")
 
-                        # 等待 TikZ SVG 完全渲染（检测 SVG 内部有 path 或 text 元素）
+                        # 等待 TikZ 渲染完成（成功生成 SVG 或编译失败）
                         try:
-                            await page.wait_for_function(
+                            result = await page.wait_for_function(
                                 """() => {
-                                    const svg = document.querySelector('.tikz-diagram svg');
-                                    if (!svg) return false;
-                                    // 检查 SVG 内部是否有实际内容
-                                    const hasContent = svg.querySelectorAll('path, line, rect, text, circle').length > 0;
-                                    return hasContent;
+                                    const container = document.querySelector('.tikz-diagram');
+                                    if (!container) return null;
+
+                                    // 检查是否有 SVG 且有实际内容
+                                    const svg = container.querySelector('svg');
+                                    if (svg) {
+                                        const hasContent = svg.querySelectorAll('path, line, rect, text, circle').length > 0;
+                                        if (hasContent) return { success: true };
+                                    }
+
+                                    // 检查是否有错误信息（TikZJax 编译失败）
+                                    const errorText = container.textContent || '';
+                                    if (errorText.includes('Error') || errorText.includes('error')) {
+                                        return { success: false, error: errorText.substring(0, 200) };
+                                    }
+
+                                    // 检查 script 标签是否还存在（未开始编译）
+                                    const script = container.querySelector('script[type="text/tikz"]');
+                                    if (!script) {
+                                        // script 已被处理但没有 SVG，可能编译失败
+                                        return { success: false, error: 'TikZ compilation may have failed' };
+                                    }
+
+                                    return null; // 继续等待
                                 }""",
                                 timeout=30000
                             )
-                            logger.info("[MathJax2Image] TikZ SVG 渲染完成")
+                            tikz_result = await result.json_value()
+                            if tikz_result and tikz_result.get('success'):
+                                logger.info("[MathJax2Image] TikZ SVG 渲染完成")
+                            elif tikz_result:
+                                logger.warning(f"[MathJax2Image] TikZ 编译失败: {tikz_result.get('error', 'Unknown error')}")
                         except Exception as e:
-                            logger.warning(f"[MathJax2Image] 等待 TikZ SVG 超时: {e}")
+                            logger.warning(f"[MathJax2Image] 等待 TikZ 渲染超时: {e}")
 
                         # 额外等待确保字体加载完成
                         await asyncio.sleep(2)
