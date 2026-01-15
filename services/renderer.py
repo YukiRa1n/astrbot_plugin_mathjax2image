@@ -3,6 +3,7 @@ MathJax 渲染器模块
 支持浏览器实例复用和并发安全
 """
 import asyncio
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -17,11 +18,12 @@ from astrbot.api.star import StarTools
 class MathJaxRenderer:
     """MathJax 渲染器，支持浏览器复用"""
 
-    def __init__(self):
+    def __init__(self, bg_color: str = "#FDFBF0"):
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self._lock = asyncio.Lock()
         self._plugin_dir = Path(__file__).resolve().parent.parent
+        self._bg_color = bg_color
 
     async def _get_browser(self) -> Browser:
         """获取或创建浏览器实例（线程安全）"""
@@ -44,8 +46,59 @@ class MathJaxRenderer:
                 self._playwright = None
             logger.info("渲染器资源已释放")
 
+    def _preprocess_markdown(self, text: str) -> str:
+        """预处理Markdown，自动修复常见格式问题"""
+        lines = text.split('\n')
+        result = []
+        in_code_block = False
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+
+            # 检测代码块边界（``` 或 ~~~）
+            if stripped.startswith('```') or stripped.startswith('~~~'):
+                in_code_block = not in_code_block
+                result.append(line)
+                continue
+
+            # 代码块内部不做任何处理
+            if in_code_block:
+                result.append(line)
+                continue
+
+            # 修复标题语法：##标题 -> ## 标题
+            heading_match = re.match(r'^(#{1,6})([^#\s])', stripped)
+            if heading_match:
+                stripped = heading_match.group(1) + ' ' + stripped[len(heading_match.group(1)):]
+                line = stripped
+
+            # 检查是否是标题
+            is_heading = bool(re.match(r'^#{1,6}\s+', stripped))
+
+            # 检查是否是列表项（无序: - 或 *，有序: 1. 2. 等）
+            is_unordered = bool(re.match(r'^[-*]\s+', stripped))
+            is_ordered = bool(re.match(r'^\d+\.\s+', stripped))
+            is_list_item = is_unordered or is_ordered
+
+            # 如果是标题或列表项，且前一行不是空行，则添加空行
+            if (is_heading or is_list_item) and result:
+                prev_line = result[-1].strip()
+                prev_is_unordered = bool(re.match(r'^[-*]\s+', prev_line))
+                prev_is_ordered = bool(re.match(r'^\d+\.\s+', prev_line))
+                prev_is_list = prev_is_unordered or prev_is_ordered
+                # 标题前必须空行，列表项前如果不是列表也要空行
+                if prev_line and (is_heading or not prev_is_list):
+                    result.append('')
+
+            result.append(line)
+
+        return '\n'.join(result)
+
     def _convert_markdown_to_html(self, md_text: str) -> str:
         """将 Markdown 转换为完整 HTML"""
+        # 预处理Markdown，修复格式问题
+        md_text = self._preprocess_markdown(md_text)
+
         html_body = markdown.markdown(
             md_text,
             extensions=['fenced_code', 'tables']
@@ -58,6 +111,9 @@ class MathJaxRenderer:
             html_template = f.read()
 
         full_html = html_template.replace("{{CONTENT}}", html_body)
+
+        # 替换背景颜色
+        full_html = full_html.replace("--bg-color: #FDFBF0;", f"--bg-color: {self._bg_color};")
 
         # 替换所有静态资源路径为绝对路径
         mathjax_url = (static_dir / "mathjax" / "tex-chtml.js").as_uri()

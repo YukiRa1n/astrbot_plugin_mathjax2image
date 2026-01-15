@@ -65,7 +65,10 @@
             --bg-color: #FDFBF0;
             --text-color: #2c2c2c;
             --accent-color: #555;
-            --code-bg: #EAEAEA;
+            --code-bg: #F5F0E6;
+            --code-border: #D8D0C0;
+            --line-num-color: #998F7D;
+            --line-num-border: #D8D0C0;
             --font-main: 'EB Garamond', 'Georgia', 'Times New Roman', 'Microsoft YaHei', serif;
             --font-code: 'Fira Code', 'Courier New', monospace;
         }
@@ -82,18 +85,13 @@
             color: var(--text-color);
             font-family: var(--font-main);
             line-height: 1.8;
-            padding: 40px;
-            font-size: 32px;
+            padding: 150px 60px 40px 60px;
+            font-size: 40px;
         }
 
         /* --- 头部样式 --- */
         .header-line {
-            border-top: 3px solid #333;
-            margin-bottom: 4px;
-        }
-
-        .header-line-thin {
-            border-top: 1px solid #999;
+            border-top: 2px solid #333;
             margin-bottom: 30px;
         }
 
@@ -192,19 +190,49 @@
         /* --- 代码块样式 --- */
         pre {
             background-color: var(--code-bg);
-            border: 1px solid #ccc;
+            border: 1px solid var(--code-border);
             border-radius: 8px;
-            padding: 20px;
+            padding: 16px 0;
             font-family: var(--font-code);
-            font-size: 0.75em;
-            overflow-x: auto;
+            font-size: 0.65em;
             margin: 25px 0;
-            box-shadow: 2px 2px 8px rgba(0,0,0,0.08);
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.06);
+            overflow: hidden;
+        }
+
+        /* 每行代码容器 */
+        .code-line {
+            display: flex;
+            align-items: flex-start;
+        }
+
+        /* 行号 */
+        .line-num {
+            min-width: 50px;
+            text-align: right;
+            padding-right: 12px;
+            color: var(--line-num-color);
+            line-height: 1.6;
+            user-select: none;
+            flex-shrink: 0;
+            border-right: 1px solid var(--line-num-border);
+            background-color: rgba(0,0,0,0.02);
+        }
+
+        /* 代码内容 */
+        .line-content {
+            flex: 1;
+            padding-left: 16px;
+            padding-right: 16px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         code {
             font-family: var(--font-code);
-            background-color: rgba(0,0,0,0.06);
+            background-color: rgba(0,0,0,0.04);
             padding: 2px 6px;
             border-radius: 4px;
             font-size: 0.85em;
@@ -280,7 +308,6 @@
 </head>
 <body>
     <div class="header-line"></div>
-    <div class="header-line-thin"></div>
 
     {{CONTENT}}
 
@@ -288,5 +315,43 @@
 
     <!-- MathJax 脚本 -->
     <script src="../static/mathjax/tex-chtml.js"></script>
+
+    <!-- 代码块行号处理 -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('pre code').forEach(function(codeBlock) {
+                const pre = codeBlock.parentElement;
+                const lines = codeBlock.textContent.split('\n');
+
+                // 移除最后的空行
+                if (lines[lines.length - 1] === '') {
+                    lines.pop();
+                }
+
+                // 清空 pre
+                pre.innerHTML = '';
+
+                // 为每行创建独立容器
+                lines.forEach(function(lineText, index) {
+                    const lineDiv = document.createElement('div');
+                    lineDiv.className = 'code-line';
+
+                    // 行号
+                    const lineNum = document.createElement('span');
+                    lineNum.className = 'line-num';
+                    lineNum.textContent = index + 1;
+
+                    // 代码内容
+                    const lineContent = document.createElement('span');
+                    lineContent.className = 'line-content';
+                    lineContent.textContent = lineText || ' ';
+
+                    lineDiv.appendChild(lineNum);
+                    lineDiv.appendChild(lineContent);
+                    pre.appendChild(lineDiv);
+                });
+            });
+        });
+    </script>
 </body>
 </html>

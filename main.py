@@ -28,18 +28,14 @@ class MathJax2ImagePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.renderer = MathJaxRenderer()
 
-        # 加载配置
-        self.math_prompt = config.get(
-            "math_system_prompt",
-            "写一篇文章，用 markdown 格式。数学公式用 MathJax 格式，"
-            "反斜杠需要转义为双反斜杠，美元符号之间不要有中文字符。"
-        )
-        self.article_prompt = config.get(
-            "article_system_prompt",
-            "请生成一篇文章，使用 markdown 格式。"
-        )
+        # 加载背景颜色配置
+        self.bg_color = config.get("background_color", "#FDFBF0")
+        self.renderer = MathJaxRenderer(bg_color=self.bg_color)
+
+        # 加载提示词配置（默认值与 _conf_schema.json 保持一致）
+        self.math_prompt = config.get("math_system_prompt", "")
+        self.article_prompt = config.get("article_system_prompt", "")
 
         # 确保 MathJax 已安装
         self._ensure_mathjax_installed()
@@ -110,11 +106,11 @@ class MathJax2ImagePlugin(Star):
             logger.error(f"渲染失败: {e}")
             yield event.plain_result(f"渲染失败: {e}")
 
-    @filter.command("mj2i")
+    @filter.command("math")
     async def cmd_math_article(self, event: AstrMessageEvent, content: str = ""):
         """生成数学文章并渲染为图片"""
         if not content.strip():
-            yield event.plain_result("请提供文章主题，例如: /mj2i 勾股定理")
+            yield event.plain_result("请提供文章主题，例如: /math 勾股定理")
             return
 
         yield event.plain_result("正在生成数学文章...")
@@ -127,11 +123,11 @@ class MathJax2ImagePlugin(Star):
         async for result in self._render_and_send(event, llm_result):
             yield result
 
-    @filter.command("wz")
+    @filter.command("art")
     async def cmd_article(self, event: AstrMessageEvent, content: str = ""):
         """生成普通文章并渲染为图片"""
         if not content.strip():
-            yield event.plain_result("请提供文章主题，例如: /wz 人工智能")
+            yield event.plain_result("请提供文章主题，例如: /art 人工智能")
             return
 
         llm_result = await self._call_llm(content, self.article_prompt)
@@ -142,11 +138,11 @@ class MathJax2ImagePlugin(Star):
         async for result in self._render_and_send(event, llm_result):
             yield result
 
-    @filter.command("m2i")
+    @filter.command("render")
     async def cmd_render_direct(self, event: AstrMessageEvent, content: str = ""):
         """直接渲染 Markdown/MathJax 内容为图片"""
         if not content.strip():
-            yield event.plain_result("请提供要渲染的内容，例如: /m2i $E=mc^2$")
+            yield event.plain_result("请提供要渲染的内容，例如: /render $E=mc^2$")
             return
 
         # 转义反斜杠以正确渲染 LaTeX

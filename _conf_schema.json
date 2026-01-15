@@ -1,14 +1,20 @@
 {
+    "background_color": {
+        "description": "模板背景颜色",
+        "type": "string",
+        "hint": "支持十六进制颜色值，如 #FDFBF0（米黄）、#FFFFFF（白色）、#F5F5F5（浅灰）",
+        "default": "#FDFBF0"
+    },
     "math_system_prompt": {
-        "description": "数学文章系统提示词",
+        "description": "数学文章提示词（/math）",
         "type": "text",
-        "hint": "用于指导 LLM 生成包含数学公式的文章",
-        "default": "写一篇文章，用 markdown 格式。数学公式用 MathJax 格式，反斜杠需要转义为双反斜杠，美元符号之间不要有中文字符。"
+        "hint": "指导 LLM 生成数学文章的系统提示词",
+        "default": "你是一位专业的数学科普作者。请用 Markdown 格式撰写一篇结构清晰的数学文章，数学公式使用 LaTeX 语法（行内 $...$，独立 $$...$$）。"
     },
     "article_system_prompt": {
-        "description": "普通文章系统提示词",
+        "description": "普通文章提示词（/art）",
         "type": "text",
-        "hint": "用于指导 LLM 生成普通文章",
-        "default": "请生成一篇文章，使用 markdown 格式。"
+        "hint": "指导 LLM 生成普通文章的系统提示词",
+        "default": "你是一位专业的文章作者。请用 Markdown 格式撰写一篇结构清晰、内容丰富的文章。"
     }
 }
