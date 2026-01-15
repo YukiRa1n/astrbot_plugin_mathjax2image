@@ -224,21 +224,28 @@ class MathJaxRenderer:
             async def handle_font_route(route):
                 url = route.request.url
                 logger.info(f"[MathJax2Image] 字体请求: {url}")
+
+                font_path = None
                 # 处理 bakoma 字体请求
                 if '/bakoma/ttf/' in url:
                     font_name = url.split('/bakoma/ttf/')[-1]
                     font_path = static_dir / "bakoma" / "ttf" / font_name
-                    logger.info(f"[MathJax2Image] 字体路径: {font_path}, 存在: {font_path.exists()}")
-                    if font_path.exists():
-                        # 直接读取文件内容并返回
-                        with open(font_path, 'rb') as f:
-                            font_data = f.read()
-                        logger.info(f"[MathJax2Image] 字体大小: {len(font_data)} bytes")
-                        await route.fulfill(
-                            body=font_data,
-                            content_type='font/ttf'
-                        )
-                        return
+                # 处理 fonts 目录字体请求 (EBGaramond, FiraCode 等)
+                elif '/fonts/' in url:
+                    font_name = url.split('/fonts/')[-1]
+                    font_path = static_dir / "fonts" / font_name
+
+                if font_path and font_path.exists():
+                    logger.info(f"[MathJax2Image] 字体路径: {font_path}, 存在: True")
+                    with open(font_path, 'rb') as f:
+                        font_data = f.read()
+                    logger.info(f"[MathJax2Image] 字体大小: {len(font_data)} bytes")
+                    await route.fulfill(
+                        body=font_data,
+                        content_type='font/ttf'
+                    )
+                    return
+
                 await route.continue_()
 
             await page.route("**/*.ttf", handle_font_route)
