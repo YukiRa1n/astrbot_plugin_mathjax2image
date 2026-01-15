@@ -40,6 +40,16 @@ playwright install chromium
 - **可配置背景色** - 支持自定义模板背景颜色
 - **离线渲染** - MathJax 本地运行，无需外部 CDN
 
+## 效果展示
+
+### 数学公式
+
+![数学公式示例](examples/math_example.png)
+
+### 代码块
+
+![代码块示例](examples/code_example.png)
+
 ## 配置
 
 在 AstrBot 插件配置中可设置：

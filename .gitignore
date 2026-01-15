@@ -14,3 +14,6 @@ test_*.png
 # IDE
 .vscode/
 .idea/
+
+# 示例生成脚本
+render_examples.py
