@@ -132,16 +132,33 @@ class MathJax2ImagePlugin(Star):
             logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染失败: {e}")
 
+    def _extract_command_content(self, event: AstrMessageEvent, cmd_name: str) -> str:
+        """从完整消息中提取命令后的内容（避免空格截断问题）"""
+        full_msg = event.get_message_str()
+        content = ""
+
+        # 支持 /cmd 和 cmd 两种格式
+        for prefix in [f"/{cmd_name} ", f"{cmd_name} "]:
+            if prefix in full_msg:
+                content = full_msg.split(prefix, 1)[1]
+                break
+
+        return content.strip()
+
     @filter.command("math")
     async def cmd_math_article(self, event: AstrMessageEvent, content: str = ""):
         """生成数学文章并渲染为图片"""
-        if not content.strip():
+        # 从完整消息中提取内容
+        math_content = self._extract_command_content(event, "math")
+
+        if not math_content:
             yield event.plain_result("请提供文章主题，例如: /math 勾股定理")
             return
 
         yield event.plain_result("正在生成数学文章...")
+        logger.info(f"[MathJax2Image] /math 内容长度: {len(math_content)}")
 
-        llm_result = await self._call_llm(content, self.math_prompt)
+        llm_result = await self._call_llm(math_content, self.math_prompt)
         if not llm_result:
             yield event.plain_result("文章生成失败")
             return
@@ -152,11 +169,16 @@ class MathJax2ImagePlugin(Star):
     @filter.command("art")
     async def cmd_article(self, event: AstrMessageEvent, content: str = ""):
         """生成普通文章并渲染为图片"""
-        if not content.strip():
+        # 从完整消息中提取内容
+        art_content = self._extract_command_content(event, "art")
+
+        if not art_content:
             yield event.plain_result("请提供文章主题，例如: /art 人工智能")
             return
 
-        llm_result = await self._call_llm(content, self.article_prompt)
+        logger.info(f"[MathJax2Image] /art 内容长度: {len(art_content)}")
+
+        llm_result = await self._call_llm(art_content, self.article_prompt)
         if not llm_result:
             yield event.plain_result("文章生成失败")
             return
@@ -167,15 +189,30 @@ class MathJax2ImagePlugin(Star):
     @filter.command("render")
     async def cmd_render_direct(self, event: AstrMessageEvent, content: str = ""):
         """直接渲染 Markdown/MathJax 内容为图片"""
-        if not content.strip():
+        # 从完整消息中提取内容
+        render_content = self._extract_command_content(event, "render")
+
+        if not render_content:
             yield event.plain_result("请提供要渲染的内容，例如: /render $E=mc^2$")
             return
 
-        # 转义反斜杠以正确渲染 LaTeX
-        escaped_content = content.replace('\\', '\\\\')
+        logger.info(f"[MathJax2Image] /render 内容长度: {len(render_content)}")
 
-        async for result in self._render_and_send(event, escaped_content):
+        # 预处理：将 LaTeX 文本命令转换为 Markdown
+        processed = self._preprocess_latex_text(render_content)
+
+        async for result in self._render_and_send(event, processed):
             yield result
+
+    def _preprocess_latex_text(self, text: str) -> str:
+        """将 LaTeX 文本命令转换为 Markdown 格式"""
+        # \textbf{...} -> **...** (支持跨行)
+        text = re.sub(r'\\textbf\{([\s\S]*?)\}', r'**\1**', text)
+        # \textit{...} -> *...* (支持跨行)
+        text = re.sub(r'\\textit\{([\s\S]*?)\}', r'*\1*', text)
+        # \emph{...} -> *...* (支持跨行)
+        text = re.sub(r'\\emph\{([\s\S]*?)\}', r'*\1*', text)
+        return text
 
     async def terminate(self):
         """插件卸载时清理资源"""
