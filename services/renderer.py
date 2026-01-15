@@ -63,13 +63,12 @@ class MathJaxRenderer:
         for i, line in enumerate(lines):
             stripped = line.strip()
 
-            # 检测代码块边界（``` 或 ~~~）
+            # 检测代码块边界
             if stripped.startswith('```') or stripped.startswith('~~~'):
                 in_code_block = not in_code_block
                 result.append(line)
                 continue
 
-            # 代码块内部不做任何处理
             if in_code_block:
                 result.append(line)
                 continue
@@ -83,7 +82,7 @@ class MathJaxRenderer:
             # 检查是否是标题
             is_heading = bool(re.match(r'^#{1,6}\s+', stripped))
 
-            # 检查是否是列表项（无序: - 或 *，有序: 1. 2. 等）
+            # 检查是否是列表项
             is_unordered = bool(re.match(r'^[-*]\s+', stripped))
             is_ordered = bool(re.match(r'^\d+\.\s+', stripped))
             is_list_item = is_unordered or is_ordered
@@ -94,7 +93,6 @@ class MathJaxRenderer:
                 prev_is_unordered = bool(re.match(r'^[-*]\s+', prev_line))
                 prev_is_ordered = bool(re.match(r'^\d+\.\s+', prev_line))
                 prev_is_list = prev_is_unordered or prev_is_ordered
-                # 标题前必须空行，列表项前如果不是列表也要空行
                 if prev_line and (is_heading or not prev_is_list):
                     result.append('')
 
@@ -104,13 +102,44 @@ class MathJaxRenderer:
 
     def _convert_markdown_to_html(self, md_text: str) -> str:
         """将 Markdown 转换为完整 HTML"""
-        # 预处理Markdown，修复格式问题
+        # 预处理Markdown
         md_text = self._preprocess_markdown(md_text)
+
+        # 保护数学公式，防止被 Markdown 渲染器解析（如 _ 变斜体）
+        math_blocks = []
+        def substitute_math(match):
+            placeholder = f"MATHBLOCK{len(math_blocks)}MATHBLOCK"
+            math_blocks.append(match.group(0))
+            return placeholder
+
+        # 1. 先保护代码块，避免代码块内的 $ 被误识别
+        code_blocks = []
+        def substitute_code(match):
+            placeholder = f"CODEBLOCK{len(code_blocks)}CODEBLOCK"
+            code_blocks.append(match.group(0))
+            return placeholder
+        md_text = re.sub(r'```[\s\S]*?```', substitute_code, md_text)
+
+        # 2. 保护数学公式
+        # 匹配 $$...$$ (多行) - 必须先匹配多行，再匹配单行
+        md_text = re.sub(r'\$\$.*?\$\$', substitute_math, md_text, flags=re.DOTALL)
+        # 匹配 $...$ (行内)
+        md_text = re.sub(r'\$.*?\$', substitute_math, md_text)
 
         html_body = markdown.markdown(
             md_text,
-            extensions=['fenced_code', 'tables']
+            extensions=['fenced_code', 'tables', 'nl2br']
         )
+
+        # 3. 还原数学公式
+        for i, block in enumerate(math_blocks):
+            placeholder = f"MATHBLOCK{i}MATHBLOCK"
+            html_body = html_body.replace(placeholder, block)
+
+        # 4. 还原代码块
+        for i, block in enumerate(code_blocks):
+            placeholder = f"CODEBLOCK{i}CODEBLOCK"
+            html_body = html_body.replace(placeholder, block)
 
         template_path = self._plugin_dir / "templates" / "template.html"
         static_dir = self._plugin_dir / "static"
@@ -127,6 +156,18 @@ class MathJaxRenderer:
         mathjax_url = (static_dir / "mathjax" / "tex-chtml.js").as_uri()
         full_html = full_html.replace("../static/mathjax/tex-chtml.js", mathjax_url)
 
+        # 为 MathJax 动态加载组件提供本地路径前缀
+        # 注意：MathJax 内部通过 relative_path 查找，这里需要确保 page 加载的是正确的 file:// 路径
+        mathjax_base_url = (static_dir / "mathjax").as_uri()
+        if not mathjax_base_url.endswith('/'):
+            mathjax_base_url += '/'
+
+        # 显式配置 MathJax 路径映射
+        full_html = full_html.replace(
+            "paths: {mathjax: '../static/mathjax'}",
+            f"paths: {{mathjax: '{mathjax_base_url}'}}"
+        )
+
         # 替换字体路径
         fonts_dir = static_dir / "fonts"
         full_html = full_html.replace(
@@ -140,6 +181,10 @@ class MathJaxRenderer:
         full_html = full_html.replace(
             "../static/fonts/FiraCode-Regular.ttf",
             (fonts_dir / "FiraCode-Regular.ttf").as_uri()
+        )
+        full_html = full_html.replace(
+            "../static/fonts/NotoSansSC-Regular.otf",
+            (fonts_dir / "NotoSansSC-Regular.otf").as_uri()
         )
 
         return full_html

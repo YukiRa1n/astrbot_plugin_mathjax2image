@@ -30,6 +30,14 @@
             font-style: normal;
             font-display: swap;
         }
+        /* Noto Sans SC - 中文字体 */
+        @font-face {
+            font-family: 'Noto Sans SC';
+            src: url('../static/fonts/NotoSansSC-Regular.otf') format('opentype');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
     </style>
 
     <!-- MathJax 配置 -->
@@ -104,10 +112,10 @@
                 }
             },
             loader: {
-                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/physics']
+                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/physics'],
+                paths: {mathjax: '../static/mathjax'}
             },
             chtml: {
-                fontCache: 'none',
                 scale: 1.0
             },
             startup: {
@@ -132,7 +140,7 @@
             --code-border: #D8D0C0;
             --line-num-color: #998F7D;
             --line-num-border: #D8D0C0;
-            --font-main: 'EB Garamond', 'Georgia', 'Times New Roman', 'Microsoft YaHei', serif;
+            --font-main: 'EB Garamond', 'Noto Sans SC', 'Georgia', 'Times New Roman', 'Microsoft YaHei', serif;
             --font-code: 'Fira Code', 'Courier New', monospace;
         }
 
