@@ -223,6 +223,12 @@ class MathJax2ImagePlugin(Star):
     def _convert_tikz_plot(self, tikz_code: str) -> str:
         """将 TikZ plot 命令转换为坐标点序列（TikZJax 不支持 plot 函数）"""
 
+        # 预处理：清理 HTML 实体和特殊字符
+        tikz_code = tikz_code.replace('&nbsp;', ' ')
+        tikz_code = tikz_code.replace('&amp;', '&')
+        tikz_code = tikz_code.replace('&lt;', '<')
+        tikz_code = tikz_code.replace('&gt;', '>')
+
         def eval_tikz_expr(expr: str, x: float) -> float:
             """计算 TikZ 数学表达式"""
             # 替换 \x 为实际值
@@ -264,11 +270,6 @@ class MathJax2ImagePlugin(Star):
             x_min = float(domain_match.group(1))
             x_max = float(domain_match.group(2))
             samples = int(samples_match.group(1)) if samples_match else 50
-
-            # TikZJax 处理能力有限，限制最大采样点数
-            if samples > 60:
-                logger.info(f"[MathJax2Image] 采样点数 {samples} 超过限制，降为 60")
-                samples = 60
 
             # 移除 domain 和 samples 选项，保留其他样式选项
             style_options = re.sub(r',?\s*domain\s*=\s*[-\d.]+\s*:\s*[-\d.]+', '', options)
