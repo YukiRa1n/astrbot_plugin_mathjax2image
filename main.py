@@ -477,6 +477,45 @@ class MathJax2ImagePlugin(Star):
         )
         return text
 
+    # ==================== LLM 工具支持 ====================
+
+    @filter.llm_tool(name="render_math")
+    async def llm_render_math(self, event: AstrMessageEvent, content: str, bg_color: str = "#FDFBF0") -> str:
+        """渲染数学内容为图片，供其他插件的 LLM 调用。
+
+        Args:
+            content(string): Required. 要渲染的内容，支持 Markdown 和 MathJax 公式
+            bg_color(string): Optional. 背景颜色，如 #FDFBF0（米黄）、#FFFFFF（白色）
+
+        Returns:
+            string: 渲染结果，成功返回图片路径，失败返回错误信息
+        """
+        if not content:
+            return "错误: content 参数不能为空"
+
+        try:
+            # 预处理 LaTeX 内容
+            processed = self._preprocess_latex_text(content)
+
+            # 如果指定了不同背景色，临时创建渲染器
+            if bg_color != self.bg_color:
+                temp_renderer = MathJaxRenderer(bg_color=bg_color)
+                image_path = await temp_renderer.render(processed)
+                await temp_renderer.close()
+            else:
+                image_path = await self.renderer.render(processed)
+
+            if image_path and image_path.exists():
+                logger.info(f"[MathJax2Image] LLM 工具渲染成功: {image_path}")
+                # 返回图片路径供调用方使用
+                return f"渲染成功，图片路径: {image_path}"
+            else:
+                return "渲染失败: 图片未生成"
+
+        except Exception as e:
+            logger.error(f"[MathJax2Image] LLM 工具渲染失败: {e}")
+            return f"渲染失败: {str(e)}"
+
     async def terminate(self):
         """插件卸载时清理资源"""
         await self.renderer.close()
