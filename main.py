@@ -210,13 +210,6 @@ class MathJax2ImagePlugin(Star):
 
         logger.info(f"[MathJax2Image] /render 内容长度: {len(render_content)}")
 
-        # 验证 LaTeX 语法
-        is_valid, error_msg = self._validate_latex_syntax(render_content)
-        if not is_valid:
-            logger.warning(f"[MathJax2Image] LaTeX 语法验证失败:\n{error_msg}")
-            yield event.plain_result(f"⚠️ LaTeX 语法错误:\n{error_msg}\n\n请修正后重试")
-            return
-
         # 预处理：将 LaTeX 文本命令转换为 Markdown
         processed = self._preprocess_latex_text(render_content)
 
@@ -593,22 +586,11 @@ class MathJax2ImagePlugin(Star):
 
         try:
             # 先处理双重转义（LLM 可能发送 \\frac 而不是 \frac）
-            # 将 \\\\ 替换为 \\，但保留正确的 \\ 转义
             import codecs
-            # 使用 codecs.decode 处理转义序列
             try:
                 content = codecs.decode(content, 'unicode_escape')
             except:
                 pass  # 如果解码失败，使用原始内容
-
-            # 验证 LaTeX 语法
-            is_valid, error_msg = self._validate_latex_syntax(content)
-            if not is_valid:
-                logger.warning(f"[MathJax2Image] LLM 工具 LaTeX 语法验证失败:\n{error_msg}")
-                # 渲染失败，清空旧的图片引用
-                self._last_rendered_image = None
-                self._render_success = False
-                return f"⚠️ LaTeX 语法错误:\n{error_msg}\n\n请检查公式后重试"
 
             # 预处理 LaTeX 内容
             processed = self._preprocess_latex_text(content)
