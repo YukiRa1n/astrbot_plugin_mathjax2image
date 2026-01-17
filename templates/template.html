@@ -30,10 +30,10 @@
             font-style: normal;
             font-display: swap;
         }
-        /* Noto Sans SC - 中文字体 */
+        /* Noto Serif SC - 中文衬线字体 */
         @font-face {
-            font-family: 'Noto Sans SC';
-            src: url('../static/fonts/NotoSansSC-Regular.otf') format('opentype');
+            font-family: 'Noto Serif SC';
+            src: url('../static/fonts/NotoSerifSC-Regular.otf') format('opentype');
             font-weight: 400;
             font-style: normal;
             font-display: swap;
@@ -137,19 +137,25 @@
 
     <style>
         :root {
-            --bg-color: #FDFBF0;
-            --text-color: #2c2c2c;
-            --accent-color: #555;
-            --code-bg: #F5F0E6;
-            --code-border: #D8D0C0;
-            --line-num-color: #998F7D;
-            --line-num-border: #D8D0C0;
-            --font-main: 'EB Garamond', 'Noto Sans SC', 'Georgia', 'Times New Roman', 'Microsoft YaHei', serif;
-            --font-code: 'Fira Code', 'Courier New', monospace;
+            /* LaTeX 学术论文风格配色 */
+            --bg-color: #fdfbf7;        /* 暖白/米色羊皮纸 */
+            --text-color: #2c2c2c;      /* 深炭灰（不用纯黑） */
+            --heading-color: #000000;   /* 标题用纯黑 */
+            --code-bg: #f5f2f0;         /* 代码块背景 */
+            --code-border: #e0e0e0;     /* 细边框 */
+            --line-num-color: #999999;
+            --line-num-border: #e0e0e0;
+
+            /* LaTeX 风格字体栈 */
+            /* 英文优先 EB Garamond，中文后备 Noto Serif SC */
+            --font-main: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
+
+            /* 代码：打字机风格 */
+            --font-code: "Fira Mono", "Fira Code", "Courier New", monospace;
         }
 
         html, body {
-            width: 1100px !important;
+            width: 2200px !important;
             margin: 0;
             padding: 0;
             overflow: hidden;
@@ -160,8 +166,8 @@
             color: var(--text-color);
             font-family: var(--font-main);
             line-height: 1.8;
-            padding: 150px 60px 40px 60px;
-            font-size: 40px;
+            padding: 160px 200px 80px 200px;
+            font-size: 80px;
         }
 
         /* --- 头部样式 --- */
@@ -170,40 +176,45 @@
             margin-bottom: 30px;
         }
 
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 700;
+            color: var(--heading-color);
+            line-height: 1.3;
+            /* LaTeX 排版：标题字间距收紧 */
+            letter-spacing: -0.01em;
+            /* LaTeX 排版：标题上方留白要大，体现层级 */
+            margin-top: 2.5em;
+            margin-bottom: 1em;
+        }
+
         h1 {
             font-size: 2.2em;
-            font-weight: 600;
-            margin: 20px 0 10px 0;
-            color: #000;
             border-bottom: none;
         }
 
         h2 {
             font-size: 1.6em;
-            font-weight: 600;
-            margin: 30px 0 15px 0;
-            color: #111;
             border-bottom: 1px solid #ccc;
             padding-bottom: 8px;
         }
 
         h3 {
             font-size: 1.3em;
-            font-weight: 600;
-            margin: 25px 0 10px 0;
-            color: #222;
         }
 
         h4, h5, h6 {
             font-size: 1.1em;
-            font-weight: 600;
-            margin: 20px 0 8px 0;
-            color: #333;
         }
 
         p {
-            margin: 15px 0;
+            /* LaTeX 排版：字间距微调，增加空气感 */
+            letter-spacing: 0.02em;
+            line-height: 1.8;
+            /* LaTeX 灵魂：两端对齐 */
             text-align: justify;
+            text-justify: inter-ideograph;
+            /* 段落间距 */
+            margin: 0 0 1.5em 0;
         }
 
         hr {
@@ -257,13 +268,19 @@
         pre {
             background-color: var(--code-bg);
             border: 1px solid var(--code-border);
-            border-radius: 8px;
+            border-radius: 4px;
             padding: 16px 0;
             font-family: var(--font-code);
             font-size: 0.65em;
             margin: 25px 0;
             box-shadow: 2px 2px 8px rgba(0,0,0,0.06);
             overflow: hidden;
+            /* LaTeX 排版：代码块不两端对齐 */
+            text-align: left;
+            /* LaTeX 排版：视觉缩进，像嵌入在纸张里 */
+            margin-left: 1em;
+            margin-right: 1em;
+            border-left: 3px solid #ddd;
         }
 
         /* 每行代码容器 */
@@ -300,7 +317,7 @@
             font-family: var(--font-code);
             background-color: rgba(0,0,0,0.04);
             padding: 2px 6px;
-            border-radius: 4px;
+            border-radius: 3px;
             font-size: 0.85em;
         }
 

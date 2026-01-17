@@ -259,7 +259,7 @@ class MathJaxRenderer:
             browser = await self._get_browser()
 
             logger.debug("[MathJax2Image] 创建新页面...")
-            page = await browser.new_page(viewport={'width': 1150, 'height': 2000})
+            page = await browser.new_page(viewport={'width': 2300, 'height': 4000}, device_scale_factor=2)
 
             await page.add_init_script(inject_script)
             logger.info("[MathJax2Image] SVG 样式修复脚本已注入")
@@ -422,13 +422,12 @@ class MathJaxRenderer:
                     logger.warning(f"[MathJax2Image] TikZJax 检查异常: {e}")
 
                 height = await page.evaluate("document.body.scrollHeight")
-                await page.set_viewport_size({'width': 1150, 'height': height})
+                await page.set_viewport_size({'width': 2300, 'height': height})
 
                 logger.info(f"[MathJax2Image] 截图中，高度: {height}px")
                 await page.screenshot(
                     path=str(output),
                     full_page=True,
-                    scale='device',
                     timeout=60000
                 )
                 logger.info(f"[MathJax2Image] 截图已保存: {output}")
