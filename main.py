@@ -519,13 +519,40 @@ class MathJax2ImagePlugin(Star):
 
             if image_path and image_path.exists():
                 logger.info(f"[MathJax2Image] LLM 工具渲染成功: {image_path}")
-                return f"渲染成功，图片路径: {image_path}"
+                # 保存最近渲染的图片路径，供 send_image 工具使用
+                self._last_rendered_image = image_path
+                return f"渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
                 return "渲染失败: 图片未生成"
 
         except Exception as e:
             logger.error(f"[MathJax2Image] LLM 工具渲染失败: {e}")
             return f"渲染失败: {str(e)}"
+
+    @filter.llm_tool(name="send_image")
+    async def llm_send_image(self, event: AstrMessageEvent) -> str:
+        """发送最近渲染的数学图片给用户。
+
+        在使用 render_math 渲染数学内容后，调用此工具将图片发送给用户。
+
+        Returns:
+            string: 发送结果
+        """
+        if not hasattr(self, '_last_rendered_image') or self._last_rendered_image is None:
+            return "没有可发送的图片，请先使用 render_math 渲染内容"
+
+        if not self._last_rendered_image.exists():
+            return f"图片文件不存在: {self._last_rendered_image}"
+
+        try:
+            from astrbot.api.event import MessageChain
+            chain = [Comp.Image.fromFileSystem(str(self._last_rendered_image))]
+            # 使用 context.send_message 发送图片
+            await self.context.send_message(event.unified_msg_origin, MessageChain(chain))
+            return f"图片已发送: {self._last_rendered_image.name}"
+        except Exception as e:
+            logger.error(f"[MathJax2Image] 发送图片失败: {e}")
+            return f"发送图片失败: {str(e)}"
 
     async def terminate(self):
         """插件卸载时清理资源"""
