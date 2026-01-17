@@ -561,25 +561,26 @@ class MathJax2ImagePlugin(Star):
     async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
         """【数学公式渲染工具】将数学公式渲染为图片。
 
-        ⚠️ 使用流程：
-        1. 先调用 render_math(content="公式") 渲染公式图片
-        2. 再调用 send_image() 发送图片给用户
-        3. 最后用简洁文字讲解概念（不要重复公式）
+        使用方法：
+        1. 在回答中需要展示公式时调用此工具
+        2. 可以多次调用，穿插在讲解过程中
+        3. 每次调用后用 send_image() 发送图片
 
-        ⚠️ 重要提示：
-        - content 只放公式，不要放大量文字讲解
-        - 公式已渲染成图片，回复时不要再写公式
-        - 用简洁的文字解释概念即可
+        公式格式要求：
+        - 行内公式：两边加 $，如 $E=mc^2$
+        - 独立公式：两边加 $$ 居中展示，如 $$f(x)=x^2$$
+        - 调用时 content 必须包含带 $ 或 $$ 的公式
 
         Args:
-            content(string): Required. 要渲染的数学公式
+            content(string): Required. 要渲染的数学公式（必须包含 $ 或 $$）
 
         Returns:
             string: 渲染结果
 
         示例：
-        - render_math(content="麦克劳林级数：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(0)}{n!}x^n$$")
-        - render_math(content="泰勒公式：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
+        - render_math(content="质能方程：$E=mc^2$")
+        - render_math(content="$$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$")
+        - render_math(content="泰勒展开：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
         """
         if not content:
             return "错误：content 参数不能为空"
@@ -613,8 +614,8 @@ class MathJax2ImagePlugin(Star):
     async def llm_send_image(self, event: AstrMessageEvent) -> str:
         """发送最近渲染的数学图片给用户。
 
-        在 render_math 渲染完成后调用此工具发送图片。
-        发送后用简洁文字讲解概念即可，不要重复公式内容。
+        在每次 render_math 渲染完成后调用此工具发送图片。
+        发送后可以继续用文字讲解，或继续渲染下一个公式。
 
         Returns:
             string: 发送结果
