@@ -480,52 +480,45 @@ class MathJax2ImagePlugin(Star):
     # ==================== LLM 工具支持 ====================
 
     @filter.llm_tool(name="render_math")
-    async def llm_render_math(self, event: AstrMessageEvent, content: str, bg_color: str = "#FDFBF0") -> str:
+    async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
         """【数学内容渲染工具】将数学公式、符号或概念讲解渲染为精美图片。
 
         ⚠️ 重要：以下情况必须调用此工具！
         1. 讲解数学概念、定理、公式时
-        2. 内容包含 LaTeX 符号（如 $x^2$、\\alpha、\\sum 等）
+        2. 内容包含 LaTeX 符号（如 x^2、alpha、sum、int、frac 等）
         3. 内容包含数学公式（如 E=mc^2、a^2+b^2=c^2）
         4. 需要展示数学推导过程或证明
-        5. 用户问"画图"、"render"、"渲染"数学相关内容
+        5. 用户要求画图、渲染数学内容
 
         支持的格式：
         - 行内公式：$...$（如 $x^2 + y^2 = r^2$）
-        - 独立公式：$$...$$（如 $$\\int_0^1 x dx$$）
-        - LaTeX 符号：\\alpha, \\beta, \\sum, \\int, \\frac{a}{b} 等
-        - Markdown 格式：# 标题、**加粗**、列表等
+        - 独立公式：$$...$$（如 $$\int_0^1 x dx$$）
+        - LaTeX 符号：用反斜杠表示（如 \alpha、\beta、\sum、\int）
+        - Markdown 格式：标题、列表等也可以使用
 
         Args:
-            content(string): Required. 要渲染的数学内容，包含 LaTeX 公式或数学讲解
-            bg_color(string): Optional. 背景颜色，#FDFBF0(米黄)、#FFFFFF(白)、#F5F5F5(浅灰)
+            content(string): Required. 要渲染的数学内容，包含公式或讲解文字
 
         Returns:
-            string: 渲染结果，成功返回图片路径供用户查看
+            string: 渲染结果
 
-        示例调用：
-        - 用户问"勾股定理" → 调用 render_math(content="勾股定理：$$a^2+b^2=c^2$$")
-        - 用户问"积分怎么算" → 调用 render_math(content="定积分：$$\\int_a^b f(x)dx$$")
-        - 用户说"画个正态分布" → 调用 render_math(content="正态分布密度函数：$$f(x)=\\frac{1}{\\sigma\\sqrt{2\\pi}}e^{-\\frac{(x-\\mu)^2}{2\\sigma^2}}$$")
+        示例：
+        - render_math(content="勾股定理：$$a^2+b^2=c^2$$")
+        - render_math(content="定积分：$$\int_a^b f(x)dx$$")
+        - render_math(content="正态分布：$$f(x)=\frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{(x-\mu)^2}{2\sigma^2}}$$")
         """
         if not content:
-            return "错误: content 参数不能为空"
+            return "错误：content 参数不能为空"
 
         try:
             # 预处理 LaTeX 内容
             processed = self._preprocess_latex_text(content)
 
-            # 如果指定了不同背景色，临时创建渲染器
-            if bg_color != self.bg_color:
-                temp_renderer = MathJaxRenderer(bg_color=bg_color)
-                image_path = await temp_renderer.render(processed)
-                await temp_renderer.close()
-            else:
-                image_path = await self.renderer.render(processed)
+            # 使用默认背景色渲染
+            image_path = await self.renderer.render(processed)
 
             if image_path and image_path.exists():
                 logger.info(f"[MathJax2Image] LLM 工具渲染成功: {image_path}")
-                # 返回图片路径供调用方使用
                 return f"渲染成功，图片路径: {image_path}"
             else:
                 return "渲染失败: 图片未生成"
