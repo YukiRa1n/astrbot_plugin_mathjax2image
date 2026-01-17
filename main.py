@@ -481,14 +481,32 @@ class MathJax2ImagePlugin(Star):
 
     @filter.llm_tool(name="render_math")
     async def llm_render_math(self, event: AstrMessageEvent, content: str, bg_color: str = "#FDFBF0") -> str:
-        """渲染数学内容为图片，供其他插件的 LLM 调用。
+        """【数学内容渲染工具】将数学公式、符号或概念讲解渲染为精美图片。
+
+        ⚠️ 重要：以下情况必须调用此工具！
+        1. 讲解数学概念、定理、公式时
+        2. 内容包含 LaTeX 符号（如 $x^2$、\\alpha、\\sum 等）
+        3. 内容包含数学公式（如 E=mc^2、a^2+b^2=c^2）
+        4. 需要展示数学推导过程或证明
+        5. 用户问"画图"、"render"、"渲染"数学相关内容
+
+        支持的格式：
+        - 行内公式：$...$（如 $x^2 + y^2 = r^2$）
+        - 独立公式：$$...$$（如 $$\\int_0^1 x dx$$）
+        - LaTeX 符号：\\alpha, \\beta, \\sum, \\int, \\frac{a}{b} 等
+        - Markdown 格式：# 标题、**加粗**、列表等
 
         Args:
-            content(string): Required. 要渲染的内容，支持 Markdown 和 MathJax 公式
-            bg_color(string): Optional. 背景颜色，如 #FDFBF0（米黄）、#FFFFFF（白色）
+            content(string): Required. 要渲染的数学内容，包含 LaTeX 公式或数学讲解
+            bg_color(string): Optional. 背景颜色，#FDFBF0(米黄)、#FFFFFF(白)、#F5F5F5(浅灰)
 
         Returns:
-            string: 渲染结果，成功返回图片路径，失败返回错误信息
+            string: 渲染结果，成功返回图片路径供用户查看
+
+        示例调用：
+        - 用户问"勾股定理" → 调用 render_math(content="勾股定理：$$a^2+b^2=c^2$$")
+        - 用户问"积分怎么算" → 调用 render_math(content="定积分：$$\\int_a^b f(x)dx$$")
+        - 用户说"画个正态分布" → 调用 render_math(content="正态分布密度函数：$$f(x)=\\frac{1}{\\sigma\\sqrt{2\\pi}}e^{-\\frac{(x-\\mu)^2}{2\\sigma^2}}$$")
         """
         if not content:
             return "错误: content 参数不能为空"
