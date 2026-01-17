@@ -1,4 +1,18 @@
 {
+    "llm_settings": {
+        "description": "LLM 模型设置",
+        "type": "object",
+        "hint": "配置用于生成文章的 LLM 模型",
+        "items": {
+            "provider_id": {
+                "description": "文章生成模型提供商",
+                "type": "string",
+                "hint": "从 AstrBot 提供商列表中选择用于生成文章的模型。留空则使用当前会话的提供商",
+                "default": "",
+                "_special": "select_provider"
+            }
+        }
+    },
     "background_color": {
         "description": "模板背景颜色",
         "type": "string",

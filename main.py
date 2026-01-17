@@ -21,7 +21,7 @@ from .services.renderer import MathJaxRenderer
     "astrbot_plugin_mathjax2image",
     "Willixrain",
     "调用 LLM 生成支持 MathJax 渲染的文章图片",
-    "2.2.0"
+    "2.3.0"
 )
 class MathJax2ImagePlugin(Star):
     """MathJax 转图片插件"""
@@ -37,6 +37,10 @@ class MathJax2ImagePlugin(Star):
         # 加载提示词配置（默认值与 _conf_schema.json 保持一致）
         self.math_prompt = config.get("math_system_prompt", "")
         self.article_prompt = config.get("article_system_prompt", "")
+
+        # 加载 LLM 提供商配置
+        llm_settings = config.get("llm_settings", {}) or {}
+        self.provider_id = llm_settings.get("provider_id", "")
 
         # 确保 MathJax 已安装
         self._ensure_mathjax_installed()
@@ -60,7 +64,22 @@ class MathJax2ImagePlugin(Star):
         logger.info(f"[MathJax2Image] 开始调用 LLM，主题: {user_input[:50]}...")
 
         try:
-            provider = self.context.get_using_provider()
+            # 优先使用配置的提供商，否则使用当前会话的提供商
+            provider = None
+            if self.provider_id:
+                # 从提供商管理器获取指定提供商
+                provider_mgr = getattr(self.context, "provider_manager", None)
+                if provider_mgr and hasattr(provider_mgr, "inst_map"):
+                    provider = provider_mgr.inst_map.get(self.provider_id)
+                    if provider:
+                        logger.info(f"[MathJax2Image] 使用配置的提供商: {self.provider_id}")
+                    else:
+                        logger.warning(f"[MathJax2Image] 配置的提供商 {self.provider_id} 未找到，使用当前会话提供商")
+
+            # 如果没有配置提供商或获取失败，使用当前会话的提供商
+            if provider is None:
+                provider = self.context.get_using_provider()
+
             if provider is None:
                 logger.error("[MathJax2Image] LLM provider 未配置或不可用")
                 return None

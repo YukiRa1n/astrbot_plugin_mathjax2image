@@ -1,5 +1,5 @@
 name: astrbot_plugin_mathjax2image
 desc: 调用 LLM 生成数学文章，支持 MathJax 公式渲染为图片
-version: v2.2.0
+version: v2.3.0
 author: Willixrain
 repo: https://github.com/YukiRa1n/astrbot_plugin_mathjax2image
