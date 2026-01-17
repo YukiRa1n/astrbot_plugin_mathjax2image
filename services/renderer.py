@@ -152,10 +152,14 @@ class MathJaxRenderer:
         if tikzjax_js_path.exists():
             with open(tikzjax_js_path, 'r', encoding='utf-8') as f:
                 tikzjax_js_content = f.read()
+            # 替换模板中的相对路径引用为内联脚本
             full_html = full_html.replace(
                 '<script src="../static/tikzjax/tikzjax.js"></script>',
                 f'<script>\n{tikzjax_js_content}\n</script>'
             )
+            logger.info(f"[MathJax2Image] TikZJax 内联注入完成，脚本长度: {len(tikzjax_js_content)}")
+        else:
+            logger.warning(f"[MathJax2Image] TikZJax 文件不存在: {tikzjax_js_path}")
 
         return full_html
 
@@ -249,6 +253,12 @@ class MathJaxRenderer:
 
             await page.route("**/*.ttf", handle_font_route)
             logger.info("[MathJax2Image] 字体路由已设置")
+
+            # 监听所有网络请求，记录失败的请求
+            page.on("request", lambda req: logger.debug(f"[Request] {req.url}"))
+            page.on("response", lambda resp: (
+                logger.error(f"[Failed Response] {resp.status} {resp.url}") if resp.status >= 400 else None
+            ))
 
             page.on("console", lambda msg: logger.info(f"[Browser Console] {msg.type}: {msg.text}"))
             page.on("pageerror", lambda err: logger.error(f"[Browser Error] {err}"))
