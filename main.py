@@ -401,25 +401,31 @@ class MathJax2ImagePlugin(Star):
             # 预处理 plot 命令（TikZJax 不支持 plot 函数）
             tikz_code = self._convert_tikz_plot(tikz_code)
 
-            # 自动检测需要的包
-            packages = ['amsfonts', 'amssymb']
+            # 默认加载基础数学包（obsidian-tikzjax 支持）
+            packages = ['amsmath', 'amsfonts', 'amssymb']
             tikzlibraries = []
 
-            # 检测 tikz-3dplot
-            if 'tdplot' in tikz_code or '3d' in tikz_code.lower():
-                packages.append('tikz-3dplot')
+            # 按需检测并加载其他宏包
+            if 'chemfig' in tikz_code or 'chemname' in tikz_code:
+                packages.append('chemfig')
 
-            # 检测 pgfplots
-            if 'axis' in tikz_code or 'addplot' in tikz_code:
-                packages.append('pgfplots')
+            if 'tikzcd' in tikz_code or '\\arrow' in tikz_code:
+                packages.append('tikz-cd')
 
-            # 检测 circuitikz
             if 'circuitikz' in tikz_code or 'to[' in tikz_code:
                 packages.append('circuitikz')
 
-            # 检测 tikz-cd (交换图)
-            if 'tikzcd' in tikz_code or 'arrow' in tikz_code:
-                packages.append('tikz-cd')
+            if 'axis' in tikz_code or 'addplot' in tikz_code:
+                packages.append('pgfplots')
+                # pgfplots 可能需要的 TikZ 库
+                if 'calc' not in tikzlibraries:
+                    tikzlibraries.append('calc')
+
+            if 'tdplot' in tikz_code or '3d' in tikz_code.lower():
+                packages.append('tikz-3dplot')
+
+            if 'array' in tikz_code or 'tabular' in tikz_code:
+                packages.append('array')
 
             # 检测 arrows.meta (Stealth 箭头)
             if 'Stealth' in tikz_code or 'Latex' in tikz_code:
@@ -456,12 +462,21 @@ class MathJax2ImagePlugin(Star):
             if tikzlibraries:
                 usetikzlibs = f"\\usetikzlibrary{{{','.join(tikzlibraries)}}}"
 
+            # pgfplots 需要额外配置
+            pgfplots_config = ''
+            if 'pgfplots' in packages:
+                pgfplots_config = '\\pgfplotsset{compat=1.16}'
+
             # 构建完整的 TikZ 文档
             full_tikz = f"""{usepackages}
+{pgfplots_config}
 {usetikzlibs}
 \\begin{{document}}
 {tikz_code}
 \\end{{document}}"""
+
+            # 调试：输出完整的 TikZ 文档
+            logger.info(f"[MathJax2Image] 完整 TikZ 文档:\n{full_tikz}")
 
             # 用 div 包装以便 CSS 精确选择
             return f'<div class="tikz-diagram"><script type="text/tikz">\n{full_tikz}\n</script></div>'
@@ -600,6 +615,9 @@ class MathJax2ImagePlugin(Star):
 
             if image_path and image_path.exists():
                 logger.info(f"[MathJax2Image] LLM 工具渲染成功: {image_path}")
+                # 等待文件系统同步
+                import asyncio
+                await asyncio.sleep(0.5)
                 # 保存最近渲染的图片路径，供 send_image 工具使用
                 self._last_rendered_image = image_path
                 self._render_success = True
