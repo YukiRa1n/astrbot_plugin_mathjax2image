@@ -561,27 +561,29 @@ class MathJax2ImagePlugin(Star):
     async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
         """【数学公式渲染工具】将 Markdown 格式的数学内容渲染为图片。
 
-        这是 Markdown + MathJax 渲染，请遵循 Markdown 数学公式语法：
+        这是 Markdown + MathJax 渲染，遵循 Markdown 数学公式语法。
 
-        ⚠️ 关键规则：
-        1. 文字正常写，不要用 $$ 包裹
-        2. 只有数学公式用 $ 或 $$ 包裹
-        3. $...$ 是行内公式，$$...$$ 是独立居中公式
+        ⚠️ 使用规则：
+        1. 每次只渲染一个主题或概念，内容要精简
+        2. 文字正常写，不要用 $$ 包裹
+        3. 只有数学公式用 $ 或 $$ 包裹
+        4. 可以多次调用此工具来渲染不同的内容
 
-        Markdown 数学语法示例：
-        - 行内公式：质能方程 $E=mc^2$ 描述了质量与能量的关系
-        - 独立公式：$$f(x)=x^2$$
+        公式格式：
+        - 行内公式：$E=mc^2$，如 "质能方程 $E=mc^2$ 很著名"
+        - 独立公式：$$f(x)=x^2$$，单独一行居中显示
 
-        正确用法：
+        正确示例：
         - render_math(content="泰勒公式：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
-        - render_math(content="当 $x \\to 0$ 时，$$\\lim_{x\\to 0} \\frac{\\sin x}{x} = 1$$")
+        - render_math(content="当 $x \\to 0$ 时，极限为 $$\\lim_{x\\to 0} \\frac{\\sin x}{x} = 1$$")
 
-        错误用法（不要这样做）：
-        - render_math(content="$$\\text{说明文字} 公式$$") ❌ 不要用$$包裹普通文字
-        - render_math(content="$$第1点...$$\\n$$第2点...$$") ❌ 不要一次渲染多个主题
+        ❌ 错误示例：
+        - 一次渲染多个主题（如第1点...第2点...第3点...）→ 请分开调用
+        - 用 $$ 包裹普通文字说明
+        - 内容过长超过500字
 
         Args:
-            content(string): Required. Markdown 格式内容（公式用 $ 或 $$ 标记）
+            content(string): Required. Markdown 格式内容（精简，单个主题）
 
         Returns:
             string: 渲染结果
