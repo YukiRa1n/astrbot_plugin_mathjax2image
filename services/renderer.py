@@ -62,6 +62,27 @@ class MathJaxRenderer:
                 self._playwright = None
             logger.info("渲染器资源已释放")
 
+    def _fix_tikz_comments(self, text: str) -> str:
+        """修复 TikZ 代码中注释与 \end{tikzpicture} 同行导致的渲染失败
+
+        问题：当注释与 \end{tikzpicture} 在同一行时，TikZJax 可能无法正确解析结束标记
+        解决：强制在 \end{tikzpicture} 前添加换行符
+        """
+        # 处理 \end{tikzpicture} 前有注释的情况
+        # 例如：% 注释\end{tikzpicture} -> % 注释\n\end{tikzpicture}
+        text = re.sub(
+            r'(%[^\n]*?)\\end\{tikzpicture\}',
+            r'\1\n\\end{tikzpicture}',
+            text
+        )
+        # 处理 \end{tikzcd} 的情况
+        text = re.sub(
+            r'(%[^\n]*?)\\end\{tikzcd\}',
+            r'\1\n\\end{tikzcd}',
+            text
+        )
+        return text
+
     def _preprocess_markdown(self, text: str) -> str:
         """预处理Markdown，自动修复常见格式问题"""
         lines = text.split('\n')
@@ -104,6 +125,7 @@ class MathJaxRenderer:
 
     def _convert_markdown_to_html(self, md_text: str) -> str:
         """将 Markdown 转换为完整 HTML"""
+        md_text = self._fix_tikz_comments(md_text)
         md_text = self._preprocess_markdown(md_text)
 
         math_blocks = []
