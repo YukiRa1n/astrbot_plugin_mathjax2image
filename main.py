@@ -590,10 +590,22 @@ class MathJax2ImagePlugin(Star):
             return "错误：content 参数不能为空"
 
         try:
+            # 先处理双重转义（LLM 可能发送 \\frac 而不是 \frac）
+            # 将 \\\\ 替换为 \\，但保留正确的 \\ 转义
+            import codecs
+            # 使用 codecs.decode 处理转义序列
+            try:
+                content = codecs.decode(content, 'unicode_escape')
+            except:
+                pass  # 如果解码失败，使用原始内容
+
             # 验证 LaTeX 语法
             is_valid, error_msg = self._validate_latex_syntax(content)
             if not is_valid:
                 logger.warning(f"[MathJax2Image] LLM 工具 LaTeX 语法验证失败:\n{error_msg}")
+                # 渲染失败，清空旧的图片引用
+                self._last_rendered_image = None
+                self._render_success = False
                 return f"⚠️ LaTeX 语法错误:\n{error_msg}\n\n请检查公式后重试"
 
             # 预处理 LaTeX 内容
@@ -606,12 +618,19 @@ class MathJax2ImagePlugin(Star):
                 logger.info(f"[MathJax2Image] LLM 工具渲染成功: {image_path}")
                 # 保存最近渲染的图片路径，供 send_image 工具使用
                 self._last_rendered_image = image_path
+                self._render_success = True
                 return f"渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
+                # 渲染失败，清空旧的图片引用
+                self._last_rendered_image = None
+                self._render_success = False
                 return "渲染失败: 图片未生成"
 
         except Exception as e:
             logger.error(f"[MathJax2Image] LLM 工具渲染失败: {e}")
+            # 渲染失败，清空旧的图片引用
+            self._last_rendered_image = None
+            self._render_success = False
             return f"渲染失败: {str(e)}"
 
     @filter.llm_tool(name="send_image")
@@ -624,6 +643,10 @@ class MathJax2ImagePlugin(Star):
         Returns:
             string: 发送结果
         """
+        # 检查是否有最近成功渲染的图片
+        if not getattr(self, '_render_success', False):
+            return "没有可发送的图片，请先使用 render_math 成功渲染内容"
+
         if not hasattr(self, '_last_rendered_image') or self._last_rendered_image is None:
             return "没有可发送的图片，请先使用 render_math 渲染内容"
 
@@ -635,6 +658,8 @@ class MathJax2ImagePlugin(Star):
             chain = [Comp.Image.fromFileSystem(str(self._last_rendered_image))]
             # 使用 context.send_message 发送图片
             await self.context.send_message(event.unified_msg_origin, MessageChain(chain))
+            # 发送后重置标记，防止重复发送
+            self._render_success = False
             return f"图片已发送: {self._last_rendered_image.name}"
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
