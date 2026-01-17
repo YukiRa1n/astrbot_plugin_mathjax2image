@@ -559,28 +559,32 @@ class MathJax2ImagePlugin(Star):
 
     @filter.llm_tool(name="render_math")
     async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
-        """【数学公式渲染工具】将数学公式渲染为图片。
+        """【数学公式渲染工具】将 Markdown 格式的数学内容渲染为图片。
 
-        使用方法：
-        1. 在回答中需要展示公式时调用此工具
-        2. 可以多次调用，穿插在讲解过程中
-        3. 每次调用后用 send_image() 发送图片
+        这是 Markdown + MathJax 渲染，请遵循 Markdown 数学公式语法：
 
-        公式格式要求：
-        - 行内公式：两边加 $，如 $E=mc^2$
-        - 独立公式：两边加 $$ 居中展示，如 $$f(x)=x^2$$
-        - 调用时 content 必须包含带 $ 或 $$ 的公式
+        ⚠️ 关键规则：
+        1. 文字正常写，不要用 $$ 包裹
+        2. 只有数学公式用 $ 或 $$ 包裹
+        3. $...$ 是行内公式，$$...$$ 是独立居中公式
+
+        Markdown 数学语法示例：
+        - 行内公式：质能方程 $E=mc^2$ 描述了质量与能量的关系
+        - 独立公式：$$f(x)=x^2$$
+
+        正确用法：
+        - render_math(content="泰勒公式：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
+        - render_math(content="当 $x \\to 0$ 时，$$\\lim_{x\\to 0} \\frac{\\sin x}{x} = 1$$")
+
+        错误用法（不要这样做）：
+        - render_math(content="$$\\text{说明文字} 公式$$") ❌ 不要用$$包裹普通文字
+        - render_math(content="$$第1点...$$\\n$$第2点...$$") ❌ 不要一次渲染多个主题
 
         Args:
-            content(string): Required. 要渲染的数学公式（必须包含 $ 或 $$）
+            content(string): Required. Markdown 格式内容（公式用 $ 或 $$ 标记）
 
         Returns:
             string: 渲染结果
-
-        示例：
-        - render_math(content="质能方程：$E=mc^2$")
-        - render_math(content="$$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$")
-        - render_math(content="泰勒展开：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
         """
         if not content:
             return "错误：content 参数不能为空"
