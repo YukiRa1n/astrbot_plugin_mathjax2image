@@ -183,8 +183,7 @@ class MathJaxRenderer:
 
     async def _render_html_to_image(self, html: str, output: Path) -> None:
         """使用 Playwright 渲染 HTML 并截图"""
-        plugin_dir = Path("/AstrBot/data/plugins/astrbot_plugin_mathjax2image")
-        temp_dir = plugin_dir / "temp"
+        temp_dir = self._plugin_dir / "temp"
         temp_dir.mkdir(exist_ok=True)
         tmp_path = temp_dir / f"temp_{uuid.uuid4().hex[:8]}.html"
 
