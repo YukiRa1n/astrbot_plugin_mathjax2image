@@ -134,13 +134,20 @@ class MathJaxRenderer:
             math_blocks.append(match.group(0))
             return placeholder
 
-        # 先提取数学公式（避免被 Markdown 处理）
+        code_blocks = []
+        def substitute_code(match):
+            placeholder = f"CODEBLOCK{len(code_blocks)}CODEBLOCK"
+            code_blocks.append(match.group(0))
+            return placeholder
+
+        # 先提取代码块和数学公式
+        md_text = re.sub(r'```[\s\S]*?```', substitute_code, md_text)
         md_text = re.sub(r'\\\[[\s\S]*?\\\]', substitute_math, md_text)
         md_text = re.sub(r'\\\([\s\S]*?\\\)', substitute_math, md_text)
         md_text = re.sub(r'\$\$.*?\$\$', substitute_math, md_text, flags=re.DOTALL)
         md_text = re.sub(r'\$.*?\$', substitute_math, md_text)
 
-        # 不提取代码块，让 Markdown 正常处理
+        # Markdown 转换
         html_body = markdown.markdown(
             md_text,
             extensions=['fenced_code', 'tables', 'nl2br']
@@ -150,6 +157,28 @@ class MathJaxRenderer:
         for i, block in enumerate(math_blocks):
             placeholder = f"MATHBLOCK{i}MATHBLOCK"
             html_body = html_body.replace(placeholder, block)
+
+        # 替换回代码块（手动转换为 HTML）
+        for i, block in enumerate(code_blocks):
+            placeholder = f"CODEBLOCK{i}CODEBLOCK"
+            # 去掉前后的 ```
+            content = block.strip('`')
+
+            # 尝试解析语言标识：```language\ncode 或 ```code
+            if '\n' in content:
+                # 多行格式：language\ncode
+                parts = content.split('\n', 1)
+                language = parts[0].strip()
+                code_content = parts[1] if len(parts) > 1 else ''
+            else:
+                # 单行格式：直接是代码内容
+                language = ''
+                code_content = content
+
+            # 生成 HTML
+            lang_class = f' class="language-{language}"' if language else ''
+            code_html = f'<pre><code{lang_class}>{code_content}</code></pre>'
+            html_body = html_body.replace(placeholder, code_html)
 
         template_path = self._plugin_dir / "templates" / "template.html"
         static_dir = self._plugin_dir / "static"
@@ -257,16 +286,19 @@ class MathJaxRenderer:
                     with open(font_path, 'rb') as f:
                         font_data = f.read()
                     logger.info(f"[MathJax2Image] 字体大小: {len(font_data)} bytes")
+                    # 根据文件扩展名设置 content_type
+                    content_type = 'font/otf' if font_path.suffix == '.otf' else 'font/ttf'
                     await route.fulfill(
                         body=font_data,
-                        content_type='font/ttf'
+                        content_type=content_type
                     )
                     return
 
                 await route.continue_()
 
             await page.route("**/*.ttf", handle_font_route)
-            logger.info("[MathJax2Image] 字体路由已设置")
+            await page.route("**/*.otf", handle_font_route)
+            logger.info("[MathJax2Image] 字体路由已设置（ttf + otf）")
 
             # 监听所有网络请求，记录失败的请求
             page.on("request", lambda req: logger.debug(f"[Request] {req.url}"))
