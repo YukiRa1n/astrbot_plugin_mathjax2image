@@ -481,31 +481,27 @@ class MathJax2ImagePlugin(Star):
 
     @filter.llm_tool(name="render_math")
     async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
-        """【数学内容渲染工具】将数学公式、符号或概念讲解渲染为精美图片。
+        """【数学公式渲染工具】将数学公式渲染为图片。
 
-        ⚠️ 重要：以下情况必须调用此工具！
-        1. 讲解数学概念、定理、公式时
-        2. 内容包含 LaTeX 符号（如 x^2、alpha、sum、int、frac 等）
-        3. 内容包含数学公式（如 E=mc^2、a^2+b^2=c^2）
-        4. 需要展示数学推导过程或证明
-        5. 用户要求画图、渲染数学内容
+        ⚠️ 使用流程：
+        1. 先调用 render_math(content="公式") 渲染公式图片
+        2. 再调用 send_image() 发送图片给用户
+        3. 最后用简洁文字讲解概念（不要重复公式）
 
-        支持的格式：
-        - 行内公式：$...$（如 $x^2 + y^2 = r^2$）
-        - 独立公式：$$...$$（如 $$\int_0^1 x dx$$）
-        - LaTeX 符号：用反斜杠表示（如 \alpha、\beta、\sum、\int）
-        - Markdown 格式：标题、列表等也可以使用
+        ⚠️ 重要提示：
+        - content 只放公式，不要放大量文字讲解
+        - 公式已渲染成图片，回复时不要再写公式
+        - 用简洁的文字解释概念即可
 
         Args:
-            content(string): Required. 要渲染的数学内容，包含公式或讲解文字
+            content(string): Required. 要渲染的数学公式
 
         Returns:
             string: 渲染结果
 
         示例：
-        - render_math(content="勾股定理：$$a^2+b^2=c^2$$")
-        - render_math(content="定积分：$$\int_a^b f(x)dx$$")
-        - render_math(content="正态分布：$$f(x)=\frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{(x-\mu)^2}{2\sigma^2}}$$")
+        - render_math(content="麦克劳林级数：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(0)}{n!}x^n$$")
+        - render_math(content="泰勒公式：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
         """
         if not content:
             return "错误：content 参数不能为空"
@@ -533,7 +529,8 @@ class MathJax2ImagePlugin(Star):
     async def llm_send_image(self, event: AstrMessageEvent) -> str:
         """发送最近渲染的数学图片给用户。
 
-        在使用 render_math 渲染数学内容后，调用此工具将图片发送给用户。
+        在 render_math 渲染完成后调用此工具发送图片。
+        发送后用简洁文字讲解概念即可，不要重复公式内容。
 
         Returns:
             string: 发送结果
