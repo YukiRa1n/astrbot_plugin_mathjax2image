@@ -21,7 +21,7 @@ from .services.renderer import MathJaxRenderer
     "astrbot_plugin_mathjax2image",
     "Willixrain",
     "调用 LLM 生成支持 MathJax 渲染的文章图片",
-    "2.0.0"
+    "2.2.0"
 )
 class MathJax2ImagePlugin(Star):
     """MathJax 转图片插件"""
@@ -193,11 +193,72 @@ class MathJax2ImagePlugin(Star):
 
         logger.info(f"[MathJax2Image] /render 内容长度: {len(render_content)}")
 
+        # 验证 LaTeX 语法
+        is_valid, error_msg = self._validate_latex_syntax(render_content)
+        if not is_valid:
+            logger.warning(f"[MathJax2Image] LaTeX 语法验证失败:\n{error_msg}")
+            yield event.plain_result(f"⚠️ LaTeX 语法错误:\n{error_msg}\n\n请修正后重试")
+            return
+
         # 预处理：将 LaTeX 文本命令转换为 Markdown
         processed = self._preprocess_latex_text(render_content)
 
         async for result in self._render_and_send(event, processed):
             yield result
+
+    def _validate_latex_syntax(self, text: str) -> tuple[bool, str]:
+        """验证LaTeX语法，返回 (是否有效, 错误信息)"""
+        errors = []
+
+        # 检查常见的 LaTeX 语法错误
+
+        # 1. 检查括号匹配（排除转义的大括号）
+        # 先移除已转义的大括号
+        clean_text = text.replace(r'\{', '').replace(r'\}', '')
+        open_braces = clean_text.count('{')
+        close_braces = clean_text.count('}')
+        if open_braces != close_braces:
+            errors.append(f"大括号不匹配: {{ 有 {open_braces} 个，}} 有 {close_braces} 个")
+
+        # 2. 检查常见命令的参数数量
+        # \frac 必须有两个参数
+        fracs = re.findall(r'\\frac\{([^}]*)\}(?:\{([^}]*)\})?', text)
+        for frac in fracs:
+            if not frac[1]:  # 第二个参数为空
+                errors.append(f"\\frac 命令缺少第二个参数: \\frac{{{frac[0]}}}")
+
+        # 3. 检查常见的错误嵌套模式
+        # 检测 \int_{...}^{...} 中的语法问题
+        integral_pattern = r'\\int_\{([^}]*)\}\^\{([^}]*)\}'
+        for match in re.finditer(integral_pattern, text):
+            lower = match.group(1)
+            upper = match.group(2)
+            # 检查上下限中是否有未闭合的 \frac
+            if r'\frac' in lower and lower.count('{') > lower.count('}'):
+                errors.append(f"积分下限中有未闭合的 \\frac: {lower[:30]}...")
+            if r'\frac' in upper and upper.count('{') > upper.count('}'):
+                errors.append(f"积分上限中有未闭合的 \\frac: {upper[:30]}...")
+
+        # 4. 检查 $ 和 $$ 配对
+        dollar_count = text.count('$') - text.count(r'\$')  # 排除转义的 $
+        if dollar_count % 2 != 0:
+            errors.append("数学公式分隔符 $ 数量为奇数，可能未闭合")
+
+        # 5. 检查未配对的环境
+        environments = [r'\\begin\{tikzpicture\}', r'\\end\{tikzpicture\}',
+                       r'\\begin\{tikzcd\}', r'\\end\{tikzcd\}',
+                       r'\\begin\{equation\}', r'\\end\{equation\}',
+                       r'\\begin\{align\}', r'\\end\{align\}']
+        for i in range(0, len(environments), 2):
+            begin_count = len(re.findall(environments[i], text))
+            end_count = len(re.findall(environments[i+1], text))
+            if begin_count != end_count:
+                env_name = environments[i].split('{')[1].split('}')[0]
+                errors.append(f"环境 {env_name} 不匹配: begin 有 {begin_count} 个，end 有 {end_count} 个")
+
+        if errors:
+            return False, "\n".join(errors)
+        return True, ""
 
     def _preprocess_latex_text(self, text: str) -> str:
         """将 LaTeX 文本命令转换为 Markdown 格式"""
@@ -507,6 +568,12 @@ class MathJax2ImagePlugin(Star):
             return "错误：content 参数不能为空"
 
         try:
+            # 验证 LaTeX 语法
+            is_valid, error_msg = self._validate_latex_syntax(content)
+            if not is_valid:
+                logger.warning(f"[MathJax2Image] LLM 工具 LaTeX 语法验证失败:\n{error_msg}")
+                return f"⚠️ LaTeX 语法错误:\n{error_msg}\n\n请检查公式后重试"
+
             # 预处理 LaTeX 内容
             processed = self._preprocess_latex_text(content)
 
