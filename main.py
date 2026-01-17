@@ -64,21 +64,19 @@ class MathJax2ImagePlugin(Star):
         logger.info(f"[MathJax2Image] 开始调用 LLM，主题: {user_input[:50]}...")
 
         try:
-            # 优先使用配置的提供商，否则使用当前会话的提供商
+            # 获取提供商
+            provider_mgr = getattr(self.context, "provider_manager", None)
             provider = None
-            if self.provider_id:
-                # 从提供商管理器获取指定提供商
-                provider_mgr = getattr(self.context, "provider_manager", None)
-                if provider_mgr and hasattr(provider_mgr, "inst_map"):
+
+            if provider_mgr:
+                # 优先使用配置的提供商
+                if self.provider_id and hasattr(provider_mgr, "inst_map"):
                     provider = provider_mgr.inst_map.get(self.provider_id)
                     if provider:
                         logger.info(f"[MathJax2Image] 使用配置的提供商: {self.provider_id}")
-                    else:
-                        logger.warning(f"[MathJax2Image] 配置的提供商 {self.provider_id} 未找到，使用当前会话提供商")
-
-            # 如果没有配置提供商或获取失败，使用当前会话的提供商
-            if provider is None:
-                provider = self.context.get_using_provider()
+                # 如果没有配置或未找到，使用当前会话的提供商
+                if not provider:
+                    provider = provider_mgr.get_using_provider(None, None)
 
             if provider is None:
                 logger.error("[MathJax2Image] LLM provider 未配置或不可用")
