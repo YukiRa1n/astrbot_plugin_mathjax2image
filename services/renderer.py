@@ -134,29 +134,21 @@ class MathJaxRenderer:
             math_blocks.append(match.group(0))
             return placeholder
 
-        code_blocks = []
-        def substitute_code(match):
-            placeholder = f"CODEBLOCK{len(code_blocks)}CODEBLOCK"
-            code_blocks.append(match.group(0))
-            return placeholder
-        md_text = re.sub(r'```[\s\S]*?```', substitute_code, md_text)
-
+        # 先提取数学公式（避免被 Markdown 处理）
         md_text = re.sub(r'\\\[[\s\S]*?\\\]', substitute_math, md_text)
         md_text = re.sub(r'\\\([\s\S]*?\\\)', substitute_math, md_text)
         md_text = re.sub(r'\$\$.*?\$\$', substitute_math, md_text, flags=re.DOTALL)
         md_text = re.sub(r'\$.*?\$', substitute_math, md_text)
 
+        # 不提取代码块，让 Markdown 正常处理
         html_body = markdown.markdown(
             md_text,
             extensions=['fenced_code', 'tables', 'nl2br']
         )
 
+        # 替换回数学公式
         for i, block in enumerate(math_blocks):
             placeholder = f"MATHBLOCK{i}MATHBLOCK"
-            html_body = html_body.replace(placeholder, block)
-
-        for i, block in enumerate(code_blocks):
-            placeholder = f"CODEBLOCK{i}CODEBLOCK"
             html_body = html_body.replace(placeholder, block)
 
         template_path = self._plugin_dir / "templates" / "template.html"
