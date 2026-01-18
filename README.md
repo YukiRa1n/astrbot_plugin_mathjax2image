@@ -23,12 +23,8 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. MathJax 自动安装
-插件首次加载时会自动下载 MathJax 离线包（约 1.1MB），无需手动操作。
-
-如果自动下载失败，可手动下载：
-1. 访问 https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js
-2. 保存到 `static/mathjax/tex-chtml.js`
+### 2. CDN 资源
+插件使用阿里云 OSS CDN 加载 MathJax、TikZJax 和字体资源，无需额外下载。
 
 ## 特性
 
@@ -37,52 +33,37 @@ playwright install chromium
 - **Markdown 智能预处理** - 自动修复格式问题，确保正确渲染
 - **代码块行号** - 代码块自动显示行号，长代码自动换行
 - **可配置背景色** - 支持自定义模板背景颜色
-- **离线渲染** - MathJax 和 TikZJax 本地运行，无需外部 CDN
+- **CDN 渲染** - 使用阿里云 OSS CDN，插件体积小（约 400KB）
 
 ## 效果展示
 
-### 数学公式
-
-![数学公式示例](examples/math_example.png)
-
-### 代码块
-
-![代码块示例](examples/code_example.png)
-
-### TikZ 图形
+### TikZ 自然变换图
 
 ![TikZ 示例](examples/tikz_example.png)
 
 **TikZ 示例代码：**
 ```latex
-/render
-\begin{tikzpicture}[scale=1.8]
-  % 左侧范畴 C
+/render \begin{tikzpicture}[scale=1.8]
   \draw[gray, rounded corners] (-0.8,-1.2) rectangle (0.8,1.2);
   \node at (0,1.5) {$\mathcal{C}$};
   \node (X) at (0,0.5) {$X$};
   \node (Y) at (0,-0.5) {$Y$};
   \draw[->] (X) -- (Y) node[midway,left] {$f$};
 
-  % 右侧范畴 D
   \draw[gray, rounded corners] (3,-1.5) rectangle (6,1.5);
   \node at (4.5,1.8) {$\mathcal{D}$};
 
-  % F 映射的对象
   \node (FX) at (3.5,0.7) {$F(X)$};
   \node (FY) at (3.5,-0.7) {$F(Y)$};
 
-  % G 映射的对象
   \node (GX) at (5.5,0.7) {$G(X)$};
   \node (GY) at (5.5,-0.7) {$G(Y)$};
 
-  % 态射
   \draw[->] (FX) -- (FY) node[midway,left] {$F(f)$};
   \draw[->] (GX) -- (GY) node[midway,right] {$G(f)$};
   \draw[->, blue, dashed] (FX) -- (GX) node[midway,above] {$\alpha_X$};
   \draw[->, blue, dashed] (FY) -- (GY) node[midway,below] {$\alpha_Y$};
 
-  % 函子箭头
   \draw[->, red, bend left=20] (0.9,0.3) to node[above] {$F$} (3.4,0.5);
   \draw[->, orange, bend right=20] (0.9,-0.3) to node[below] {$G$} (3.4,-0.5);
 \end{tikzpicture}
