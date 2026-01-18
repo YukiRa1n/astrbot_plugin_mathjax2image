@@ -21,7 +21,7 @@ from .services.renderer import MathJaxRenderer
     "astrbot_plugin_mathjax2image",
     "Willixrain",
     "调用 LLM 生成支持 MathJax 渲染的文章图片",
-    "2.3.0"
+    "2.4.1"
 )
 class MathJax2ImagePlugin(Star):
     """MathJax 转图片插件"""
@@ -42,18 +42,7 @@ class MathJax2ImagePlugin(Star):
         llm_settings = config.get("llm_settings", {}) or {}
         self.provider_id = llm_settings.get("provider_id", "")
 
-        # 确保 MathJax 已安装
-        self._ensure_mathjax_installed()
-
-    def _ensure_mathjax_installed(self) -> None:
-        """检查 MathJax 是否已安装"""
-        plugin_dir = Path(__file__).resolve().parent
-        mathjax_file = plugin_dir / "static" / "mathjax" / "tex-chtml.js"
-
-        if mathjax_file.exists():
-            logger.info(f"MathJax 已安装: {mathjax_file}")
-        else:
-            logger.error("MathJax 未安装，请确保 static/mathjax/tex-chtml.js 存在")
+        logger.info("[MathJax2Image] 插件已加载，使用 CDN 资源")
 
     async def _call_llm(
         self,

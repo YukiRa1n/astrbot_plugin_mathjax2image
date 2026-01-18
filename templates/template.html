@@ -5,19 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Markdown Render</title>
 
-    <!-- 本地字体定义 -->
+    <!-- CDN 字体定义 -->
     <style>
         /* EB Garamond - 主要衬线字体 */
         @font-face {
             font-family: 'EB Garamond';
-            src: url('../static/fonts/EBGaramond-Regular.ttf') format('truetype');
+            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/EBGaramond-Regular.ttf') format('truetype');
             font-weight: 400;
             font-style: normal;
             font-display: swap;
         }
         @font-face {
             font-family: 'EB Garamond';
-            src: url('../static/fonts/EBGaramond-SemiBold.ttf') format('truetype');
+            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/EBGaramond-SemiBold.ttf') format('truetype');
             font-weight: 600;
             font-style: normal;
             font-display: swap;
@@ -25,7 +25,7 @@
         /* Fira Code - 代码字体 */
         @font-face {
             font-family: 'Fira Code';
-            src: url('../static/fonts/FiraCode-Regular.ttf') format('truetype');
+            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/FiraCode-Regular.ttf') format('truetype');
             font-weight: 400;
             font-style: normal;
             font-display: swap;
@@ -33,7 +33,7 @@
         /* Noto Serif SC - 中文衬线字体 */
         @font-face {
             font-family: 'Noto Serif SC';
-            src: url('../static/fonts/NotoSerifSC-Regular.otf') format('opentype');
+            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/NotoSerifSC-Regular.otf') format('opentype');
             font-weight: 400;
             font-style: normal;
             font-display: swap;
@@ -117,7 +117,7 @@
             },
             loader: {
                 load: ['[tex]/ams', '[tex]/newcommand'],
-                paths: {mathjax: '../static/mathjax'}
+                paths: {mathjax: 'https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/mathjax'}
             },
             chtml: {
                 scale: 1.0
@@ -420,12 +420,12 @@
 
     <div class="footer-line"></div>
 
-    <!-- MathJax 脚本 -->
-    <script src="../static/mathjax/tex-chtml.js"></script>
+    <!-- MathJax 脚本 (CDN) -->
+    <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/mathjax/tex-chtml.js"></script>
 
-    <!-- TikZJax 脚本 -->
-    <link rel="stylesheet" type="text/css" href="../static/tikzjax/fonts.css">
-    <script src="../static/tikzjax/tikzjax.js"></script>
+    <!-- TikZJax 脚本 (CDN) -->
+    <link rel="stylesheet" type="text/css" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/fonts.css">
+    <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/tikzjax.js"></script>
 
     <!-- 代码块行号处理 -->
     <script>
