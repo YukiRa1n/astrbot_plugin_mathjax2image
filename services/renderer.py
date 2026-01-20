@@ -368,7 +368,7 @@ class MathJaxRenderer:
                                 logger.info(f"[MathJax2Image] 元素详情: {tikz_result.get('details', {})}")
                             else:
                                 logger.error("[MathJax2Image] TikZ 渲染结果异常，没有生成有效内容")
-                                raise Exception("TikZ 渲染失败：SVG 中没有实际图形元素")
+                                raise Exception("TikZ 渲染失败：SVG 中没有实际图形元素（可能是绘图太复杂或使用了不支持的特性）")
                         except Exception as e:
                             logger.error(f"[MathJax2Image] 等待 TikZ 渲染超时或失败: {e}")
                             # 检查是否真的有内容
@@ -385,7 +385,15 @@ class MathJaxRenderer:
                             ''')
                             logger.error(f"[MathJax2Image] SVG 内容检查: {svg_check}")
                             if not svg_check.get('hasContent'):
-                                raise Exception(f"TikZ 渲染失败：{svg_check.get('reason', 'SVG 为空')}")
+                                error_msg = (
+                                    f"TikZ 渲染失败：{svg_check.get('reason', 'SVG 为空')}。\n"
+                                    f"可能原因：\n"
+                                    f"1. 绘图太复杂（建议降低 samples 值，如 samples=15）\n"
+                                    f"2. 使用了 TikZJax 不支持的特性（如复杂的 3D 图形、某些 pgfplots 选项）\n"
+                                    f"3. TikZ 代码中包含中文字符（TikZJax 不支持）\n"
+                                    f"4. 代码语法错误"
+                                )
+                                raise Exception(error_msg)
 
                         # 额外等待确保字体加载完成
                         await asyncio.sleep(2)
