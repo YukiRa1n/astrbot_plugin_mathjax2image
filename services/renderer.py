@@ -189,21 +189,6 @@ class MathJaxRenderer:
         full_html = html_template.replace("{{CONTENT}}", html_body)
         full_html = full_html.replace("--bg-color: #FDFBF0;", f"--bg-color: {self._bg_color};")
 
-        tikzjax_dir = static_dir / "tikzjax"
-        tikzjax_js_path = tikzjax_dir / "tikzjax.js"
-
-        if tikzjax_js_path.exists():
-            with open(tikzjax_js_path, 'r', encoding='utf-8') as f:
-                tikzjax_js_content = f.read()
-            # 替换模板中的相对路径引用为内联脚本
-            full_html = full_html.replace(
-                '<script src="../static/tikzjax/tikzjax.js"></script>',
-                f'<script>\n{tikzjax_js_content}\n</script>'
-            )
-            logger.info(f"[MathJax2Image] TikZJax 内联注入完成，脚本长度: {len(tikzjax_js_content)}")
-        else:
-            logger.warning(f"[MathJax2Image] TikZJax 文件不存在: {tikzjax_js_path}")
-
         return full_html
 
     async def render(self, content: str) -> Path:
