@@ -322,22 +322,55 @@ class MathJaxRenderer:
                     if tikz_container_count > 0:
                         logger.info("[MathJax2Image] 等待 TikZ 渲染...")
 
-                        # 等待 TikZ 渲染完成
-                        # 策略：等待 script 标签消失（表示编译完成）
+                        # 等待 TikZ 渲染完成（成功生成 SVG 或编译失败）
+                        # TikZJax 编译需要时间，必须等到有实际内容才算成功
                         try:
-                            await page.wait_for_function(
+                            result = await page.wait_for_function(
                                 """() => {
                                     const container = document.querySelector('.tikz-diagram');
-                                    if (!container) return false;
-                                    // 等待 script 标签消失，表示 TikZJax 编译完成
+                                    if (!container) return null;
+
+                                    const svg = container.querySelector('svg');
+                                    if (!svg) return null;
+
+                                    // 只检查真正的图形内容元素（排除加载占位符）
+                                    const paths = svg.querySelectorAll('path').length;
+                                    const lines = svg.querySelectorAll('line').length;
+                                    const texts = svg.querySelectorAll('text').length;
+                                    const polygons = svg.querySelectorAll('polygon').length;
+                                    const polylines = svg.querySelectorAll('polyline').length;
+
+                                    const totalElements = paths + lines + texts + polygons + polylines;
+
+                                    // 至少要有 1 个实际图形元素（不包括 rect 和 circle，它们可能是占位符）
+                                    if (totalElements >= 1) {
+                                        return {
+                                            success: true,
+                                            count: totalElements,
+                                            details: { paths, lines, texts, polygons, polylines }
+                                        };
+                                    }
+
+                                    // 检查 script 标签是否还在（还在编译中）
                                     const script = container.querySelector('script[type="text/tikz"]');
-                                    return !script;
+                                    if (script) {
+                                        return null; // 继续等待
+                                    }
+
+                                    // script 已移除但没有内容，可能编译失败
+                                    return null;
                                 }""",
-                                timeout=30000  # 30 秒超时
+                                timeout=90000  # 90 秒超时
                             )
-                            logger.info("[MathJax2Image] TikZ 编译完成（script 标签已移除）")
+                            tikz_result = await result.json_value()
+                            if tikz_result and tikz_result.get('success'):
+                                logger.info(f"[MathJax2Image] TikZ SVG 渲染完成，元素数: {tikz_result.get('count', 0)}")
+                                logger.info(f"[MathJax2Image] 元素详情: {tikz_result.get('details', {})}")
+                            else:
+                                logger.error("[MathJax2Image] TikZ 渲染结果异常，没有生成有效内容")
+                                raise Exception("TikZ 渲染失败：SVG 中没有实际图形元素")
                         except Exception as e:
-                            logger.warning(f"[MathJax2Image] 等待 TikZ 编译超时: {e}")
+                            logger.error(f"[MathJax2Image] 等待 TikZ 渲染超时或失败: {e}")
                             # 检查是否真的有内容
                             svg_check = await page.evaluate('''
                                 () => {
@@ -350,7 +383,7 @@ class MathJaxRenderer:
                                     return { hasContent: total > 0, total, paths, lines, texts };
                                 }
                             ''')
-                            logger.info(f"[MathJax2Image] SVG 内容检查: {svg_check}")
+                            logger.error(f"[MathJax2Image] SVG 内容检查: {svg_check}")
                             if not svg_check.get('hasContent'):
                                 raise Exception(f"TikZ 渲染失败：{svg_check.get('reason', 'SVG 为空')}")
 
