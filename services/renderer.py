@@ -360,7 +360,7 @@ class MathJaxRenderer:
                                     // script 已移除但没有内容，可能编译失败
                                     return null;
                                 }""",
-                                timeout=90000  # 90 秒超时
+                                timeout=300000  # 300 秒超时（5分钟）
                             )
                             tikz_result = await result.json_value()
                             if tikz_result and tikz_result.get('success'):
