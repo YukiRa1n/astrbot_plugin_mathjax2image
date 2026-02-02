@@ -473,7 +473,9 @@ class MathJax2ImagePlugin(Star):
         # 调试：检查是否有 tikz 环境
         has_tikzpicture = r'\begin{tikzpicture}' in text
         has_tikzcd = r'\begin{tikzcd}' in text
-        logger.info(f"[MathJax2Image] _convert_tikz: tikzpicture={has_tikzpicture}, tikzcd={has_tikzcd}")
+        has_circuitikz = r'\begin{circuitikz}' in text
+        has_chemfig = r'\chemfig{' in text
+        logger.info(f"[MathJax2Image] _convert_tikz: tikzpicture={has_tikzpicture}, tikzcd={has_tikzcd}, circuitikz={has_circuitikz}, chemfig={has_chemfig}")
 
         # 匹配 tikzpicture 环境
         text = re.sub(
@@ -486,6 +488,35 @@ class MathJax2ImagePlugin(Star):
             r'\\begin\{tikzcd\}[\s\S]*?\\end\{tikzcd\}',
             convert_tikz_block, text
         )
+
+        # 匹配 circuitikz 环境
+        text = re.sub(
+            r'\\begin\{circuitikz\}[\s\S]*?\\end\{circuitikz\}',
+            convert_tikz_block, text
+        )
+
+        # 匹配独立的 chemfig 命令（不在 tikzpicture 内的）
+        # 格式：\chemfig{...} 可能跨多行，需要匹配嵌套大括号
+        def convert_chemfig_block(match):
+            chemfig_cmd = match.group(0)
+            # 包装成完整的 TikZ 文档
+            full_tikz = f"""\\usepackage{{amsmath}}
+\\usepackage{{amsfonts}}
+\\usepackage{{amssymb}}
+\\usepackage{{chemfig}}
+\\begin{{document}}
+{chemfig_cmd}
+\\end{{document}}"""
+            logger.info(f"[MathJax2Image] chemfig 独立命令: {chemfig_cmd[:100]}...")
+            return f'<div class="tikz-diagram"><script type="text/tikz">\n{full_tikz}\n</script></div>'
+
+        # 只匹配不在 tikz-diagram 内的 chemfig（避免重复处理）
+        if r'\chemfig{' in text and '<script type="text/tikz">' not in text:
+            # 匹配 \chemfig{...}，支持嵌套大括号
+            text = re.sub(
+                r'\\chemfig\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}',
+                convert_chemfig_block, text
+            )
 
         # 调试：检查转换结果
         has_script = '<script type="text/tikz">' in text
@@ -556,23 +587,28 @@ class MathJax2ImagePlugin(Star):
 
     @filter.llm_tool(name="render_math")
     async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
-        """【数学公式渲染工具】将 Markdown 格式的数学内容渲染为图片。
+        """【数学与图形渲染工具】将 Markdown/LaTeX/TikZ 内容渲染为图片。
 
-        这是 Markdown + MathJax 渲染，遵循 Markdown 数学公式语法。
+        支持内容类型：
+        1. 数学公式（MathJax）：行内公式 $...$ 和独立公式 $$...$$
+        2. TikZ 绘图：基础图形、节点、箭头等
+        3. circuitikz：电路图
+        4. chemfig：化学分子结构
+        5. tikz-cd：交换图
+        6. pgfplots：函数图表
 
         ⚠️ 使用规则：
         1. 每次只渲染一个主题或概念，内容要精简
         2. 文字正常写，不要用 $$ 包裹
         3. 只有数学公式用 $ 或 $$ 包裹
-        4. 可以多次调用此工具来渲染不同的内容
-
-        公式格式：
-        - 行内公式：$E=mc^2$，如 "质能方程 $E=mc^2$ 很著名"
-        - 独立公式：$$f(x)=x^2$$，单独一行居中显示
+        4. TikZ代码直接使用 \\begin{tikzpicture}...\\end{tikzpicture}
+        5. 可以多次调用此工具来渲染不同的内容
 
         正确示例：
-        - render_math(content="泰勒公式：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
-        - render_math(content="当 $x \\to 0$ 时，极限为 $$\\lim_{x\\to 0} \\frac{\\sin x}{x} = 1$$")
+        - 数学公式：render_math(content="泰勒公式：$$f(x)=\\sum_{n=0}^{\\infty}\\frac{f^{(n)}(a)}{n!}(x-a)^n$$")
+        - TikZ绘图：render_math(content="\\begin{tikzpicture}\\draw[red,thick] (0,0) circle (2cm);\\end{tikzpicture}")
+        - 电路图：render_math(content="\\begin{circuitikz}\\draw (0,0) to[R] (2,0);\\end{circuitikz}")
+        - 化学式：render_math(content="\\chemfig{*6(-=-=-=)}")
 
         ❌ 错误示例：
         - 一次渲染多个主题（如第1点...第2点...第3点...）→ 请分开调用
@@ -580,7 +616,7 @@ class MathJax2ImagePlugin(Star):
         - 内容过长超过500字
 
         Args:
-            content(string): Required. Markdown 格式内容（精简，单个主题）
+            content(string): Required. Markdown/LaTeX/TikZ 格式内容（精简，单个主题）
 
         Returns:
             string: 渲染结果
