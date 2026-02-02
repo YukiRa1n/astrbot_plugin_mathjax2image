@@ -589,12 +589,9 @@ class MathJax2ImagePlugin(Star):
             return "错误：content 参数不能为空"
 
         try:
-            # 先处理双重转义（LLM 可能发送 \\frac 而不是 \frac）
-            import codecs
-            try:
-                content = codecs.decode(content, 'unicode_escape')
-            except:
-                pass  # 如果解码失败，使用原始内容
+            # 注意: 不要使用 codecs.decode(content, 'unicode_escape')
+            # 因为它会破坏UTF-8编码的中文字符
+            # LLM传递的参数已经是正确格式的Python字符串
 
             # 预处理 LaTeX 内容
             processed = self._preprocess_latex_text(content)

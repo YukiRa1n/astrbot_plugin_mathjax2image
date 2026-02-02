@@ -85,6 +85,8 @@ class MathJaxRenderer:
 
     def _preprocess_markdown(self, text: str) -> str:
         """预处理Markdown，自动修复常见格式问题"""
+        # 处理转义字符：将字面的\n转换为真实换行符
+        text = text.replace('\\n', '\n')
         lines = text.split('\n')
         result = []
         in_code_block = False
