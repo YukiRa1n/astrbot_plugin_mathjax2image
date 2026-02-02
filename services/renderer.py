@@ -83,10 +83,23 @@ class MathJaxRenderer:
         )
         return text
 
+    def _convert_literal_newlines(self, text: str) -> str:
+        """将字面的\\n转换为真实换行符，但保护LaTeX命令
+
+        问题：简单的 replace('\\n', '\n') 会破坏 \neq, \nabla 等LaTeX命令
+        解决：使用负向前瞻，只替换后面不跟字母的 \n
+
+        Input: "a\\nb" 或 "\\lambda_i \\neq \\lambda_j"
+        Output: "a\nb" 或 "\\lambda_i \\neq \\lambda_j" (LaTeX命令保持不变)
+        """
+        # \n 后面不跟字母时才替换为真实换行符
+        # (?![a-zA-Z]) 是负向前瞻，确保 \n 后面不是字母
+        return re.sub(r'\\n(?![a-zA-Z])', '\n', text)
+
     def _preprocess_markdown(self, text: str) -> str:
         """预处理Markdown，自动修复常见格式问题"""
-        # 处理转义字符：将字面的\n转换为真实换行符
-        text = text.replace('\\n', '\n')
+        # 处理转义字符：将字面的\n转换为真实换行符（保护LaTeX命令）
+        text = self._convert_literal_newlines(text)
         lines = text.split('\n')
         result = []
         in_code_block = False
