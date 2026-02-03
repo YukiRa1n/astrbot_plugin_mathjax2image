@@ -1,5 +1,6 @@
 # MathJax2Image
 > 喜欢的话可以给个 Star 喵，有问题欢迎提 Issue/PR
+> 
 将 Markdown/MathJax 内容渲染为精美图片的 AstrBot 插件。
 
 ## 命令
