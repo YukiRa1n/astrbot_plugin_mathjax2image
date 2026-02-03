@@ -267,9 +267,8 @@ class MathJax2ImagePlugin(Star):
         text = re.sub(r'\\textit\{([\s\S]*?)\}', lambda m: f"*{m.group(1)}*", text)
         # \emph{...} -> *...* (支持跨行)
         text = re.sub(r'\\emph\{([\s\S]*?)\}', lambda m: f"*{m.group(1)}*", text)
-        # \{ -> \lbrace, \} -> \rbrace (修复MathJax大括号渲染问题)
-        text = text.replace(r'\{', r'\lbrace ')
-        text = text.replace(r'\}', r'\rbrace ')
+        # 注意：不再替换 \{ 和 \}，MathJax 本身支持这些命令
+        # 之前的替换会破坏 LLM 错误传递的 \{...\} 格式
         # 自动检测集合表示法 {... \mid ...} 并添加大括号
         text = re.sub(r'(?<!\\)\{([^{}]*\\mid[^{}]*)\}', r'\\lbrace \1\\rbrace ', text)
         # 处理 LaTeX enumerate/itemize 环境
