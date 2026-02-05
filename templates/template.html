@@ -112,11 +112,18 @@
                     coloneqq: '\\mathrel{:=}',
                     eqqcolon: '\\mathrel{=:}',
                     // 加粗数学符号
-                    bm: ['\\boldsymbol{#1}', 1]
+                    bm: ['\\boldsymbol{#1}', 1],
+                    // 扩展箭头（extpfeil 替代）
+                    xleftrightarrow: ['\\overset{#1}{\\longleftrightarrow}', 1],
+                    xrightarrow: ['\\overset{#1}{\\longrightarrow}', 1],
+                    xleftarrow: ['\\overset{#1}{\\longleftarrow}', 1],
+                    xRightarrow: ['\\overset{#1}{\\Longrightarrow}', 1],
+                    xLeftarrow: ['\\overset{#1}{\\Longleftarrow}', 1],
+                    xLeftrightarrow: ['\\overset{#1}{\\Longleftrightarrow}', 1]
                 }
             },
             loader: {
-                load: ['[tex]/ams', '[tex]/newcommand'],
+                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/extpfeil'],
                 paths: {mathjax: 'https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/mathjax'}
             },
             chtml: {
@@ -411,6 +418,20 @@
         mjx-container svg {
             transform: none !important;
         }
+
+        /* --- Mermaid 图表样式 --- */
+        pre.mermaid {
+            background: transparent !important;
+            border: none !important;
+            text-align: center;
+            margin: 40px 0;
+            padding: 20px;
+        }
+
+        .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
     </style>
 </head>
 <body>
@@ -426,6 +447,42 @@
     <!-- TikZJax 脚本 (CDN) -->
     <link rel="stylesheet" type="text/css" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/fonts.css">
     <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/tikzjax.js"></script>
+
+    <!-- Mermaid 脚本 (暂时禁用，jsdelivr CDN 国内访问不稳定) -->
+    <!--
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'base',
+                themeVariables: {
+                    // 匹配 LaTeX 学术风格
+                    primaryColor: '#fdfbf7',
+                    primaryTextColor: '#2c2c2c',
+                    primaryBorderColor: '#333',
+                    lineColor: '#333',
+                    secondaryColor: '#f5f2f0',
+                    tertiaryColor: '#fdfbf7',
+                    fontFamily: '"EB Garamond", "Noto Serif SC", serif',
+                    fontSize: '18px',
+                    // 流程图特定
+                    nodeBorder: '#333',
+                    clusterBkg: '#f5f2f0',
+                    clusterBorder: '#999',
+                    edgeLabelBackground: '#fdfbf7'
+                },
+                flowchart: {
+                    curve: 'basis',
+                    padding: 20,
+                    nodeSpacing: 50,
+                    rankSpacing: 50,
+                    htmlLabels: true
+                }
+            });
+        });
+    </script>
+    -->
 
     <!-- 代码块行号处理 -->
     <script>
