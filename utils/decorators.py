@@ -2,10 +2,11 @@
 工具层 - AOP装饰器
 日志、超时、重试等横切关注点
 """
+
 import asyncio
 import functools
 import time
-from typing import Callable, TypeVar, Any
+from typing import Callable, TypeVar
 
 from astrbot.api import logger
 
@@ -27,7 +28,9 @@ def log_execution(func: Callable[..., T]) -> Callable[..., T]:
             return result
         except Exception as e:
             elapsed = time.time() - start_time
-            logger.error(f"[MathJax2Image] {func_name} 执行失败，耗时: {elapsed:.2f}s, 错误: {e}")
+            logger.error(
+                f"[MathJax2Image] {func_name} 执行失败，耗时: {elapsed:.2f}s, 错误: {e}"
+            )
             raise
 
     @functools.wraps(func)
@@ -42,7 +45,9 @@ def log_execution(func: Callable[..., T]) -> Callable[..., T]:
             return result
         except Exception as e:
             elapsed = time.time() - start_time
-            logger.error(f"[MathJax2Image] {func_name} 执行失败，耗时: {elapsed:.2f}s, 错误: {e}")
+            logger.error(
+                f"[MathJax2Image] {func_name} 执行失败，耗时: {elapsed:.2f}s, 错误: {e}"
+            )
             raise
 
     if asyncio.iscoroutinefunction(func):
@@ -58,12 +63,13 @@ def with_timeout(timeout_ms: int):
         async def wrapper(*args, **kwargs) -> T:
             try:
                 return await asyncio.wait_for(
-                    func(*args, **kwargs),
-                    timeout=timeout_ms / 1000
+                    func(*args, **kwargs), timeout=timeout_ms / 1000
                 )
             except asyncio.TimeoutError:
                 raise TimeoutError(f"{func.__name__} 超时 ({timeout_ms}ms)")
+
         return wrapper
+
     return decorator
 
 
@@ -86,5 +92,7 @@ def retry(max_attempts: int = 3, delay_ms: int = 1000):
                         )
                         await asyncio.sleep(delay_ms / 1000)
             raise last_error
+
         return wrapper
+
     return decorator

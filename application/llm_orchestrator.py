@@ -2,6 +2,7 @@
 LLM编排器
 管理与LLM的交互
 """
+
 import re
 import traceback
 from typing import Optional, Any
@@ -23,11 +24,7 @@ class LLMOrchestrator:
         self._context = context
         self._provider_id = provider_id
 
-    async def call_llm(
-        self,
-        user_input: str,
-        system_prompt: str
-    ) -> Optional[str]:
+    async def call_llm(self, user_input: str, system_prompt: str) -> Optional[str]:
         """调用LLM生成内容
 
         Args:
@@ -62,7 +59,9 @@ class LLMOrchestrator:
                 logger.error("[MathJax2Image] LLM 返回内容为空")
                 return None
 
-            logger.info(f"[MathJax2Image] LLM调用成功，响应长度: {len(response.completion_text)}")
+            logger.info(
+                f"[MathJax2Image] LLM调用成功，响应长度: {len(response.completion_text)}"
+            )
             return self._filter_think_tags(response.completion_text)
 
         except Exception as e:
@@ -94,7 +93,7 @@ class LLMOrchestrator:
         """过滤LLM响应中的<think>标签"""
         if not text:
             return None
-        return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)
+        return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
 
     def set_provider_id(self, provider_id: str) -> None:
         """设置提供商ID"""

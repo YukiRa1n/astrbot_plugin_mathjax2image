@@ -2,6 +2,7 @@
 Mermaid图表转换器
 将Markdown中的mermaid代码块转换为Mermaid.js可渲染的格式
 """
+
 import re
 
 from astrbot.api import logger
@@ -16,10 +17,23 @@ class MermaidConverter:
 
     # Mermaid 支持的图表类型
     DIAGRAM_TYPES = [
-        'graph', 'flowchart', 'sequenceDiagram', 'classDiagram',
-        'stateDiagram', 'erDiagram', 'journey', 'gantt', 'pie',
-        'quadrantChart', 'requirementDiagram', 'gitGraph',
-        'mindmap', 'timeline', 'zenuml', 'sankey', 'xychart'
+        "graph",
+        "flowchart",
+        "sequenceDiagram",
+        "classDiagram",
+        "stateDiagram",
+        "erDiagram",
+        "journey",
+        "gantt",
+        "pie",
+        "quadrantChart",
+        "requirementDiagram",
+        "gitGraph",
+        "mindmap",
+        "timeline",
+        "zenuml",
+        "sankey",
+        "xychart",
     ]
 
     def convert(self, text: str) -> str:
@@ -32,7 +46,7 @@ class MermaidConverter:
             转换后的文本，mermaid代码块被替换为HTML格式
         """
         # 匹配 ```mermaid ... ``` 代码块
-        pattern = r'```mermaid\s*\n([\s\S]*?)```'
+        pattern = r"```mermaid\s*\n([\s\S]*?)```"
 
         converted = re.sub(pattern, self._convert_mermaid_block, text)
 
@@ -44,7 +58,7 @@ class MermaidConverter:
 
         if not mermaid_code:
             logger.warning("[MathJax2Image] 空的Mermaid代码块")
-            return ''
+            return ""
 
         # 检测图表类型
         diagram_type = self._detect_diagram_type(mermaid_code)
@@ -58,15 +72,15 @@ class MermaidConverter:
 
     def _detect_diagram_type(self, code: str) -> str:
         """检测Mermaid图表类型"""
-        first_line = code.split('\n')[0].strip().lower()
+        first_line = code.split("\n")[0].strip().lower()
 
         for dtype in self.DIAGRAM_TYPES:
             if first_line.startswith(dtype.lower()):
                 return dtype
 
         # 默认为flowchart
-        return 'unknown'
+        return "unknown"
 
     def has_mermaid(self, text: str) -> bool:
         """检查文本是否包含Mermaid代码块"""
-        return bool(re.search(r'```mermaid\s*\n', text))
+        return bool(re.search(r"```mermaid\s*\n", text))

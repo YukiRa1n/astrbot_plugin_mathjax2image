@@ -2,10 +2,10 @@
 Playwright依赖安装器
 解决 libnspr4.so 等系统库缺失问题
 """
+
 import asyncio
 import ctypes
 import platform
-import subprocess
 from typing import Optional
 
 from astrbot.api import logger
@@ -24,21 +24,21 @@ class PlaywrightDependencyInstaller:
     """
 
     REQUIRED_LIBS = [
-        'libnspr4.so',
-        'libnss3.so',
-        'libatk-1.0.so.0',
-        'libatk-bridge-2.0.so.0',
-        'libdrm.so.2',
-        'libxkbcommon.so.0',
-        'libatspi.so.0',
-        'libXcomposite.so.1',
-        'libXdamage.so.1',
-        'libXfixes.so.3',
-        'libXrandr.so.2',
-        'libgbm.so.1',
-        'libpango-1.0.so.0',
-        'libcairo.so.2',
-        'libasound.so.2',
+        "libnspr4.so",
+        "libnss3.so",
+        "libatk-1.0.so.0",
+        "libatk-bridge-2.0.so.0",
+        "libdrm.so.2",
+        "libxkbcommon.so.0",
+        "libatspi.so.0",
+        "libXcomposite.so.1",
+        "libXdamage.so.1",
+        "libXfixes.so.3",
+        "libXrandr.so.2",
+        "libgbm.so.1",
+        "libpango-1.0.so.0",
+        "libcairo.so.2",
+        "libasound.so.2",
     ]
 
     def __init__(self):
@@ -63,9 +63,7 @@ class PlaywrightDependencyInstaller:
         # Linux: 检查关键库
         missing_libs = self._check_missing_libs()
         if missing_libs:
-            logger.warning(
-                f"[MathJax2Image] 检测到缺失的系统库: {missing_libs[:3]}..."
-            )
+            logger.warning(f"[MathJax2Image] 检测到缺失的系统库: {missing_libs[:3]}...")
             self._installed = False
             return False
 
@@ -125,13 +123,15 @@ class PlaywrightDependencyInstaller:
         try:
             # 方法1: 使用 playwright install-deps
             process = await asyncio.create_subprocess_exec(
-                "playwright", "install-deps", "chromium",
+                "playwright",
+                "install-deps",
+                "chromium",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(),
-                timeout=300  # 5分钟超时
+                timeout=300,  # 5分钟超时
             )
 
             if process.returncode == 0:
@@ -157,16 +157,29 @@ class PlaywrightDependencyInstaller:
     async def _try_apt_install(self) -> bool:
         """尝试使用apt安装依赖"""
         packages = [
-            "libnss3", "libnspr4", "libatk1.0-0", "libatk-bridge2.0-0",
-            "libdrm2", "libxkbcommon0", "libatspi2.0-0", "libxcomposite1",
-            "libxdamage1", "libxfixes3", "libxrandr2", "libgbm1",
-            "libpango-1.0-0", "libcairo2", "libasound2",
+            "libnss3",
+            "libnspr4",
+            "libatk1.0-0",
+            "libatk-bridge2.0-0",
+            "libdrm2",
+            "libxkbcommon0",
+            "libatspi2.0-0",
+            "libxcomposite1",
+            "libxdamage1",
+            "libxfixes3",
+            "libxrandr2",
+            "libgbm1",
+            "libpango-1.0-0",
+            "libcairo2",
+            "libasound2",
         ]
 
         try:
             # 更新包索引
             update_proc = await asyncio.create_subprocess_exec(
-                "apt-get", "update", "-qq",
+                "apt-get",
+                "update",
+                "-qq",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -174,14 +187,15 @@ class PlaywrightDependencyInstaller:
 
             # 安装包
             install_proc = await asyncio.create_subprocess_exec(
-                "apt-get", "install", "-y", "-qq", *packages,
+                "apt-get",
+                "install",
+                "-y",
+                "-qq",
+                *packages,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await asyncio.wait_for(
-                install_proc.communicate(),
-                timeout=300
-            )
+            _, stderr = await asyncio.wait_for(install_proc.communicate(), timeout=300)
 
             if install_proc.returncode == 0:
                 return True

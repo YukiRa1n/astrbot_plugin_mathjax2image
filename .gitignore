@@ -15,5 +15,8 @@ test_*.png
 .vscode/
 .idea/
 
+# 运行时数据
+data/
+
 # 示例生成脚本
 render_examples.py

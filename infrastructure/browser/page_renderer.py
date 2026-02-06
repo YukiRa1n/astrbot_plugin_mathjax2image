@@ -2,6 +2,7 @@
 页面渲染器
 将HTML渲染为图片
 """
+
 import asyncio
 import uuid
 import traceback
@@ -44,7 +45,7 @@ class PageRenderer:
 
         logger.info(f"[MathJax2Image] HTML 临时文件: {tmp_path}")
 
-        with open(tmp_path, 'w', encoding='utf-8') as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(html)
 
         try:
@@ -59,7 +60,10 @@ class PageRenderer:
         try:
             browser = await self._browser_manager.get_browser()
             page = await browser.new_page(
-                viewport={'width': self._viewport_width, 'height': self._viewport_height}
+                viewport={
+                    "width": self._viewport_width,
+                    "height": self._viewport_height,
+                }
             )
 
             await page.add_init_script(inject_script)
@@ -99,17 +103,17 @@ class PageRenderer:
             url = route.request.url
             font_path = None
 
-            if '/bakoma/ttf/' in url:
-                font_name = url.split('/bakoma/ttf/')[-1]
+            if "/bakoma/ttf/" in url:
+                font_name = url.split("/bakoma/ttf/")[-1]
                 font_path = static_dir / "bakoma" / "ttf" / font_name
-            elif '/fonts/' in url:
-                font_name = url.split('/fonts/')[-1]
+            elif "/fonts/" in url:
+                font_name = url.split("/fonts/")[-1]
                 font_path = static_dir / "fonts" / font_name
 
             if font_path and font_path.exists():
-                with open(font_path, 'rb') as f:
+                with open(font_path, "rb") as f:
                     font_data = f.read()
-                content_type = 'font/otf' if font_path.suffix == '.otf' else 'font/ttf'
+                content_type = "font/otf" if font_path.suffix == ".otf" else "font/ttf"
                 await route.fulfill(body=font_data, content_type=content_type)
                 return
 
@@ -120,22 +124,21 @@ class PageRenderer:
 
     def _setup_logging(self, page) -> None:
         """设置页面日志"""
-        page.on("console", lambda msg: logger.debug(f"[Browser] {msg.type}: {msg.text}"))
+        page.on(
+            "console", lambda msg: logger.debug(f"[Browser] {msg.type}: {msg.text}")
+        )
         page.on("pageerror", lambda err: logger.error(f"[Browser Error] {err}"))
 
     async def _load_and_wait(self, page, html_path: Path) -> None:
         """加载页面并等待渲染完成"""
         await page.goto(
-            f"file://{html_path}",
-            wait_until='domcontentloaded',
-            timeout=60000
+            f"file://{html_path}", wait_until="domcontentloaded", timeout=60000
         )
 
         # 等待MathJax
         try:
             await page.wait_for_function(
-                "() => window.mathJaxReady === true",
-                timeout=self._mathjax_timeout
+                "() => window.mathJaxReady === true", timeout=self._mathjax_timeout
             )
             logger.debug("[MathJax2Image] MathJax 渲染完成")
         except Exception as e:
@@ -181,11 +184,13 @@ class PageRenderer:
 
                     return null;
                 }""",
-                timeout=self._tikz_timeout
+                timeout=self._tikz_timeout,
             )
             tikz_result = await result.json_value()
-            if tikz_result and tikz_result.get('success'):
-                logger.info(f"[MathJax2Image] TikZ渲染完成，元素数: {tikz_result.get('count', 0)}")
+            if tikz_result and tikz_result.get("success"):
+                logger.info(
+                    f"[MathJax2Image] TikZ渲染完成，元素数: {tikz_result.get('count', 0)}"
+                )
             else:
                 raise RenderError("TikZ渲染失败：SVG中没有有效图形元素")
 
@@ -198,12 +203,10 @@ class PageRenderer:
     async def _take_screenshot(self, page, output: Path) -> None:
         """截取页面截图"""
         height = await page.evaluate("document.body.scrollHeight")
-        await page.set_viewport_size({'width': self._viewport_width, 'height': height})
+        await page.set_viewport_size({"width": self._viewport_width, "height": height})
 
         logger.info(f"[MathJax2Image] 截图中，高度: {height}px")
         await page.screenshot(
-            path=str(output),
-            full_page=True,
-            timeout=self._screenshot_timeout
+            path=str(output), full_page=True, timeout=self._screenshot_timeout
         )
         logger.info(f"[MathJax2Image] 截图已保存: {output}")

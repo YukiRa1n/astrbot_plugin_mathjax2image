@@ -2,6 +2,7 @@
 渲染编排器
 编排完整的渲染流程
 """
+
 import uuid
 import traceback
 from pathlib import Path
@@ -94,7 +95,7 @@ class RenderOrchestrator:
             if not await self._dependency_installer.check_and_install():
                 raise DependencyError(
                     "Playwright系统依赖未安装",
-                    install_command="playwright install-deps chromium"
+                    install_command="playwright install-deps chromium",
                 )
 
             # 2. LaTeX预处理（如果需要）
@@ -111,7 +112,7 @@ class RenderOrchestrator:
             logger.debug("[MathJax2Image] Markdown转HTML完成")
 
             # 4. 生成输出路径
-            output_dir = StarTools.get_data_dir('astrbot_plugin_mathjax2image')
+            output_dir = StarTools.get_data_dir("astrbot_plugin_mathjax2image")
             output_path = output_dir / f"render_{uuid.uuid4().hex[:8]}.png"
 
             # 5. 渲染为图片

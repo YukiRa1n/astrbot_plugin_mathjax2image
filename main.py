@@ -4,6 +4,7 @@ AstrBot MathJax2Image 插件
 
 洋葱架构重构版本 v3.0
 """
+
 from pathlib import Path
 
 from astrbot.api.event import filter, AstrMessageEvent
@@ -26,7 +27,7 @@ from .handlers import CommandHandler, LLMToolHandler
     "astrbot_plugin_mathjax2image",
     "Willixrain",
     "调用 LLM 生成支持 MathJax 渲染的文章图片",
-    "3.0.0"
+    "3.0.0",
 )
 class MathJax2ImagePlugin(Star):
     """MathJax 转图片插件 - 洋葱架构版本"""

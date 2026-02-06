@@ -2,6 +2,7 @@
 LaTeX验证器
 验证LaTeX语法正确性
 """
+
 import re
 
 from ...types import ValidationResult
@@ -44,9 +45,9 @@ class LatexValidator:
 
     def _check_braces(self, text: str) -> str | None:
         """检查大括号匹配"""
-        clean_text = text.replace(r'\{', '').replace(r'\}', '')
-        open_count = clean_text.count('{')
-        close_count = clean_text.count('}')
+        clean_text = text.replace(r"\{", "").replace(r"\}", "")
+        open_count = clean_text.count("{")
+        close_count = clean_text.count("}")
         if open_count != close_count:
             return f"大括号不匹配: {{ 有 {open_count} 个，}} 有 {close_count} 个"
         return None
@@ -54,7 +55,7 @@ class LatexValidator:
     def _check_frac(self, text: str) -> list[str]:
         """检查\\frac参数"""
         errors = []
-        fracs = re.findall(r'\\frac\{([^}]*)\}(?:\{([^}]*)\})?', text)
+        fracs = re.findall(r"\\frac\{([^}]*)\}(?:\{([^}]*)\})?", text)
         for frac in fracs:
             if not frac[1]:
                 errors.append(f"\\frac 命令缺少第二个参数: \\frac{{{frac[0]}}}")
@@ -63,18 +64,18 @@ class LatexValidator:
     def _check_integral(self, text: str) -> list[str]:
         """检查积分语法"""
         errors = []
-        pattern = r'\\int_\{([^}]*)\}\^\{([^}]*)\}'
+        pattern = r"\\int_\{([^}]*)\}\^\{([^}]*)\}"
         for match in re.finditer(pattern, text):
             lower, upper = match.group(1), match.group(2)
-            if r'\frac' in lower and lower.count('{') > lower.count('}'):
+            if r"\frac" in lower and lower.count("{") > lower.count("}"):
                 errors.append(f"积分下限中有未闭合的 \\frac: {lower[:30]}...")
-            if r'\frac' in upper and upper.count('{') > upper.count('}'):
+            if r"\frac" in upper and upper.count("{") > upper.count("}"):
                 errors.append(f"积分上限中有未闭合的 \\frac: {upper[:30]}...")
         return errors
 
     def _check_dollar(self, text: str) -> str | None:
         """检查$配对"""
-        dollar_count = text.count('$') - text.count(r'\$')
+        dollar_count = text.count("$") - text.count(r"\$")
         if dollar_count % 2 != 0:
             return "数学公式分隔符 $ 数量为奇数，可能未闭合"
         return None
@@ -83,10 +84,10 @@ class LatexValidator:
         """检查环境配对"""
         errors = []
         environments = [
-            ('tikzpicture', r'\\begin\{tikzpicture\}', r'\\end\{tikzpicture\}'),
-            ('tikzcd', r'\\begin\{tikzcd\}', r'\\end\{tikzcd\}'),
-            ('equation', r'\\begin\{equation\}', r'\\end\{equation\}'),
-            ('align', r'\\begin\{align\}', r'\\end\{align\}'),
+            ("tikzpicture", r"\\begin\{tikzpicture\}", r"\\end\{tikzpicture\}"),
+            ("tikzcd", r"\\begin\{tikzcd\}", r"\\end\{tikzcd\}"),
+            ("equation", r"\\begin\{equation\}", r"\\end\{equation\}"),
+            ("align", r"\\begin\{align\}", r"\\end\{align\}"),
         ]
         for name, begin_pat, end_pat in environments:
             begin_count = len(re.findall(begin_pat, text))

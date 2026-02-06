@@ -2,8 +2,8 @@
 LLM工具处理器
 处理 render_math, send_image 等LLM工具调用
 """
+
 import asyncio
-import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -33,9 +33,7 @@ class LLMToolHandler:
         self._last_rendered_image: Optional[Path] = None
         self._render_success: bool = False
 
-    async def handle_render_math(
-        self, event: AstrMessageEvent, content: str
-    ) -> str:
+    async def handle_render_math(self, event: AstrMessageEvent, content: str) -> str:
         """处理 render_math 工具调用
 
         将Markdown/LaTeX/TikZ内容渲染为图片
@@ -83,8 +81,7 @@ class LLMToolHandler:
         try:
             chain = [Comp.Image.fromFileSystem(str(self._last_rendered_image))]
             await self._context.send_message(
-                event.unified_msg_origin,
-                MessageChain(chain)
+                event.unified_msg_origin, MessageChain(chain)
             )
             # 重置标记
             self._render_success = False

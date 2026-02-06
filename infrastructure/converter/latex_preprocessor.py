@@ -2,6 +2,7 @@
 LaTeX预处理器
 组合多个转换器，预处理LaTeX文本
 """
+
 import re
 from typing import TYPE_CHECKING
 
@@ -53,13 +54,13 @@ class LatexPreprocessor:
     def _convert_text_commands(self, text: str) -> str:
         """将LaTeX文本命令转换为Markdown格式"""
         # \\textbf{...} -> **...**
-        text = re.sub(r'\\textbf\{([\s\S]*?)\}', lambda m: f"**{m.group(1)}**", text)
+        text = re.sub(r"\\textbf\{([\s\S]*?)\}", lambda m: f"**{m.group(1)}**", text)
         # \\textit{...} -> *...*
-        text = re.sub(r'\\textit\{([\s\S]*?)\}', lambda m: f"*{m.group(1)}*", text)
+        text = re.sub(r"\\textit\{([\s\S]*?)\}", lambda m: f"*{m.group(1)}*", text)
         # \\emph{...} -> *...*
-        text = re.sub(r'\\emph\{([\s\S]*?)\}', lambda m: f"*{m.group(1)}*", text)
+        text = re.sub(r"\\emph\{([\s\S]*?)\}", lambda m: f"*{m.group(1)}*", text)
         return text
 
     def _fix_set_notation(self, text: str) -> str:
         """修复集合表示法 {... \\mid ...}"""
-        return re.sub(r'(?<!\\)\{([^{}]*\\mid[^{}]*)\}', r'\\lbrace \1\\rbrace ', text)
+        return re.sub(r"(?<!\\)\{([^{}]*\\mid[^{}]*)\}", r"\\lbrace \1\\rbrace ", text)

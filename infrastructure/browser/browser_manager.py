@@ -2,6 +2,7 @@
 浏览器管理器
 管理Playwright浏览器实例的生命周期
 """
+
 import asyncio
 import traceback
 from typing import Optional
@@ -33,10 +34,10 @@ class BrowserManager:
                     self._browser = await self._playwright.chromium.launch(
                         headless=True,
                         args=[
-                            '--disable-web-security',
-                            '--allow-file-access-from-files',
-                            '--disable-features=VizDisplayCompositor'
-                        ]
+                            "--disable-web-security",
+                            "--allow-file-access-from-files",
+                            "--disable-features=VizDisplayCompositor",
+                        ],
                     )
                     logger.info("[MathJax2Image] 浏览器实例已创建")
                 return self._browser

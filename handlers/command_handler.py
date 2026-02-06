@@ -2,8 +2,8 @@
 命令处理器
 处理 /math, /art, /render 命令
 """
+
 import traceback
-from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator
 
 from astrbot.api import logger
@@ -39,9 +39,7 @@ class CommandHandler:
         if article_prompt is not None:
             self._article_prompt = article_prompt
 
-    async def handle_math(
-        self, event: AstrMessageEvent, content: str
-    ) -> AsyncIterator:
+    async def handle_math(self, event: AstrMessageEvent, content: str) -> AsyncIterator:
         """处理 /math 命令"""
         math_content = self._extract_command_content(event, "math")
 
@@ -52,7 +50,9 @@ class CommandHandler:
         yield event.plain_result("正在生成数学文章...")
         logger.info(f"[MathJax2Image] /math 内容长度: {len(math_content)}")
 
-        llm_result = await self._llm_orchestrator.call_llm(math_content, self._math_prompt)
+        llm_result = await self._llm_orchestrator.call_llm(
+            math_content, self._math_prompt
+        )
         if not llm_result:
             yield event.plain_result("文章生成失败")
             return
@@ -71,9 +71,12 @@ class CommandHandler:
             yield event.plain_result("请提供文章主题，例如: /art 人工智能")
             return
 
+        yield event.plain_result("正在生成文章...")
         logger.info(f"[MathJax2Image] /art 内容长度: {len(art_content)}")
 
-        llm_result = await self._llm_orchestrator.call_llm(art_content, self._article_prompt)
+        llm_result = await self._llm_orchestrator.call_llm(
+            art_content, self._article_prompt
+        )
         if not llm_result:
             yield event.plain_result("文章生成失败")
             return

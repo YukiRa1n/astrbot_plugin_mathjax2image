@@ -1,6 +1,7 @@
 """
 领域层 - 核心接口和错误定义
 """
+
 from .interfaces import (
     IContentConverter,
     ILatexPreprocessor,
