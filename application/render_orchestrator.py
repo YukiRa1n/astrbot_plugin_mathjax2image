@@ -87,6 +87,12 @@ class RenderOrchestrator:
         Raises:
             DependencyError: 依赖安装失败
             RenderError: 渲染失败
+
+        Pipeline（逻辑顺序）：
+        1) 依赖检查与安装
+        2) LaTeX 预处理（文本命令、TikZ、表格、Mermaid）
+        3) Markdown → HTML
+        4) Playwright 渲染 → 截图
         """
         logger.info(f"[MathJax2Image] 开始渲染，内容长度: {len(content)}")
 

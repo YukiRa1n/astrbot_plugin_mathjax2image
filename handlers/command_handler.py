@@ -41,6 +41,7 @@ class CommandHandler:
 
     async def handle_math(self, event: AstrMessageEvent, content: str) -> AsyncIterator:
         """处理 /math 命令"""
+        # /math 与 /art 最终进入同一条渲染管道，仅提示词不同
         math_content = self._extract_command_content(event, "math")
 
         if not math_content:
@@ -65,6 +66,7 @@ class CommandHandler:
         self, event: AstrMessageEvent, content: str
     ) -> AsyncIterator:
         """处理 /art 命令"""
+        # /math 与 /art 最终进入同一条渲染管道，仅提示词不同
         art_content = self._extract_command_content(event, "art")
 
         if not art_content:

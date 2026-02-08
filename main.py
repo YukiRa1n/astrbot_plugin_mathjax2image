@@ -3,6 +3,13 @@ AstrBot MathJax2Image 插件
 将 Markdown/MathJax 内容渲染为图片
 
 洋葱架构重构版本 v3.0
+
+阅读提示（主流程一览）：
+命令(/math|/art|/render)
+  → CommandHandler 处理输入与提示词
+  → LLMOrchestrator 生成文本（/math、/art）
+  → RenderOrchestrator 统一预处理与渲染
+  → Playwright 截图输出图片
 """
 
 from pathlib import Path
@@ -27,7 +34,7 @@ from .handlers import CommandHandler, LLMToolHandler
     "astrbot_plugin_mathjax2image",
     "Willixrain",
     "调用 LLM 生成支持 MathJax 渲染的文章图片",
-    "3.0.0",
+    "3.1.0",
 )
 class MathJax2ImagePlugin(Star):
     """MathJax 转图片插件 - 洋葱架构版本"""

@@ -3,6 +3,7 @@ Markdown转换器
 将Markdown转换为完整HTML
 """
 
+import html as html_lib
 import re
 from pathlib import Path
 
@@ -142,7 +143,8 @@ class MarkdownConverter:
                 code_content = content
 
             lang_class = f' class="language-{language}"' if language else ""
-            code_html = f"<pre><code{lang_class}>{code_content}</code></pre>"
+            escaped_code = html_lib.escape(code_content)
+            code_html = f"<pre><code{lang_class}>{escaped_code}</code></pre>"
             html = html.replace(f"CODEBLOCK{i}CODEBLOCK", code_html)
         return html
 
