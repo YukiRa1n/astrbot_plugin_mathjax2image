@@ -198,7 +198,7 @@ class PageRenderer:
             logger.warning(f"[MathJax2Image] TikZ渲染检查: {e}")
 
         # 额外等待确保字体加载
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.15)
 
     async def _take_screenshot(self, page, output: Path) -> None:
         """截取页面截图"""
