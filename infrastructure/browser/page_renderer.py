@@ -56,30 +56,30 @@ class PageRenderer:
     async def _do_render(self, html_path: Path, output: Path) -> None:
         """执行实际的渲染操作"""
         inject_script = self._get_inject_script()
+        page = None
+        exception_occurred = False
 
         try:
-            browser = await self._browser_manager.get_browser()
-            page = await browser.new_page(
-                viewport={
-                    "width": self._viewport_width,
-                    "height": self._viewport_height,
-                }
+            page, has_been_setup = await self._browser_manager.acquire_page(
+                self._viewport_width, self._viewport_height
             )
 
-            await page.add_init_script(inject_script)
-            await self._setup_font_routes(page)
-            self._setup_logging(page)
+            if not has_been_setup:
+                await page.add_init_script(inject_script)
+                await self._setup_font_routes(page)
+                self._setup_logging(page)
 
-            try:
-                await self._load_and_wait(page, html_path)
-                await self._take_screenshot(page, output)
-            finally:
-                await page.close()
+            await self._load_and_wait(page, html_path)
+            await self._take_screenshot(page, output)
 
         except Exception as e:
+            exception_occurred = True
             logger.error(f"[MathJax2Image] 渲染失败: {type(e).__name__}: {e}")
             logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
             raise RenderError(f"渲染失败: {e}")
+        finally:
+            if page is not None:
+                await self._browser_manager.release_page(page, exception_occurred)
 
     def _get_inject_script(self) -> str:
         """获取注入脚本"""
@@ -198,7 +198,7 @@ class PageRenderer:
             logger.warning(f"[MathJax2Image] TikZ渲染检查: {e}")
 
         # 额外等待确保字体加载
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.15)
 
     async def _take_screenshot(self, page, output: Path) -> None:
         """截取页面截图"""

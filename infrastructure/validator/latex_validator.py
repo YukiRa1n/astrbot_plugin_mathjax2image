@@ -5,7 +5,7 @@ LaTeX验证器
 
 import re
 
-from ...types import ValidationResult
+from ...plugin_types import ValidationResult
 
 
 class LatexValidator:
