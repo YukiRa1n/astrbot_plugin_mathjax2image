@@ -7,7 +7,12 @@ import ast
 import math
 from typing import Any
 
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except ModuleNotFoundError:  # pragma: no cover - standalone test support
+    import logging
+
+    logger = logging.getLogger("astrbot")
 
 
 class SafeMathEvaluator(ast.NodeVisitor):
@@ -58,6 +63,24 @@ class SafeMathEvaluator(ast.NodeVisitor):
         ast.USub: lambda x: -x,
     }
 
+    def __init__(self, *, max_nodes: int = 100, max_depth: int = 20):
+        self._max_nodes = max_nodes
+        self._max_depth = max_depth
+        self._node_count = 0
+        self._depth = 0
+
+    def visit(self, node: ast.AST) -> Any:
+        self._node_count += 1
+        if self._node_count > self._max_nodes:
+            raise ValueError("Expression is too complex")
+        self._depth += 1
+        try:
+            if self._depth > self._max_depth:
+                raise ValueError("Expression nesting is too deep")
+            return super().visit(node)
+        finally:
+            self._depth -= 1
+
     def visit_Expression(self, node: ast.Expression) -> float:
         """访问表达式根节点"""
         logger.debug("[SafeEval] [ENTRY] visit_Expression")
@@ -66,6 +89,9 @@ class SafeMathEvaluator(ast.NodeVisitor):
     def visit_Constant(self, node: ast.Constant) -> float:
         """访问常量节点（数字）"""
         if isinstance(node.value, (int, float)):
+            # 超大 int（如 999**999）转 float 会抛 OverflowError，先检查位数
+            if isinstance(node.value, int) and node.value.bit_length() > 256:
+                raise ValueError("Numeric constant too large")
             logger.debug(f"[SafeEval] [PROCESS] Constant value={node.value}")
             return float(node.value)
         raise ValueError(f"Unsupported constant type: {type(node.value)}")
@@ -89,6 +115,21 @@ class SafeMathEvaluator(ast.NodeVisitor):
         op_type = type(node.op)
         if op_type not in self.ALLOWED_BINARY_OPS:
             raise ValueError(f"Unsupported binary operator: {op_type.__name__}")
+
+        if isinstance(node.op, ast.Pow):
+            right_val = self.visit(node.right)
+            if right_val > 1000:
+                raise ValueError(f"Power exponent too large: {right_val} > 1000")
+            left_val = self.visit(node.left)
+            if abs(left_val) > 1000 and right_val > 10:
+                raise ValueError(f"Power operation too large: {left_val}**{right_val}")
+            result = left_val ** right_val
+            if not math.isfinite(result) or abs(result) > 1e15:
+                raise ValueError("Power result too large")
+            logger.debug(
+                f"[SafeEval] [PROCESS] BinOp op=Pow left={left_val} right={right_val} result={result}"
+            )
+            return result
 
         left = self.visit(node.left)
         right = self.visit(node.right)
@@ -162,6 +203,9 @@ def safe_eval_math(expr: str) -> float:
         >>> safe_eval_math("__import__('os').system('ls')")
         nan
     """
+    if not isinstance(expr, str) or len(expr) > 500:
+        return float("nan")
+
     logger.debug(f"[SafeEval] [ENTRY] safe_eval_math expr={expr[:50]}")
 
     try:

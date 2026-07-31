@@ -8,7 +8,12 @@ import functools
 import time
 from typing import Callable, TypeVar
 
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except ModuleNotFoundError:  # pragma: no cover - standalone test support
+    import logging
+
+    logger = logging.getLogger("astrbot")
 
 T = TypeVar("T")
 

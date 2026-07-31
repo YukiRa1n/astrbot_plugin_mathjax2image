@@ -3,9 +3,18 @@ Mermaid图表转换器
 将Markdown中的mermaid代码块转换为Mermaid.js可渲染的格式
 """
 
+import html
 import re
 
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except ModuleNotFoundError:  # pragma: no cover - standalone test support
+    import logging
+
+    logger = logging.getLogger("astrbot")
+
+
+MAX_MERMAID_LENGTH = 50000  # 单个 mermaid 代码块最大长度（字符）
 
 
 class MermaidConverter:
@@ -54,7 +63,14 @@ class MermaidConverter:
 
     def _convert_mermaid_block(self, match: re.Match) -> str:
         """转换单个Mermaid代码块"""
-        mermaid_code = match.group(1).strip()
+        raw_code = match.group(1)
+        if len(raw_code) > MAX_MERMAID_LENGTH:
+            logger.warning(
+                f"[MathJax2Image] Mermaid代码过长: {len(raw_code)} > {MAX_MERMAID_LENGTH}"
+            )
+            return '<div class="error">Mermaid 代码过长，请简化后重试</div>'
+
+        mermaid_code = raw_code.strip()
 
         if not mermaid_code:
             logger.warning("[MathJax2Image] 空的Mermaid代码块")
@@ -66,9 +82,10 @@ class MermaidConverter:
 
         # 转换为Mermaid.js可识别的HTML格式
         # 使用 <pre class="mermaid"> 标签
-        html = f'<pre class="mermaid">\n{mermaid_code}\n</pre>'
+        escaped_code = html.escape(mermaid_code, quote=False)
+        html_block = f'<pre class="mermaid">\n{escaped_code}\n</pre>'
 
-        return html
+        return html_block
 
     def _detect_diagram_type(self, code: str) -> str:
         """检测Mermaid图表类型"""

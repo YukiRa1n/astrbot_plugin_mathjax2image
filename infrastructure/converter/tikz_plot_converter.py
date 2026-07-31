@@ -6,7 +6,12 @@ TikZ plot命令转换器
 import math
 import re
 
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except ModuleNotFoundError:  # pragma: no cover - standalone test support
+    import logging
+
+    logger = logging.getLogger("astrbot")
 from ...utils import safe_eval_math
 
 
@@ -79,7 +84,10 @@ class TikzPlotConverter:
     def _parse_samples(self, options: str) -> int:
         """解析samples参数"""
         match = re.search(r"samples\s*=\s*(\d+)", options)
-        return int(match.group(1)) if match else 50
+        samples = int(match.group(1)) if match else 50
+        # 上限 2000 点：每点约 15 字符，2000 点约 3 万字符，
+        # 避免生成的坐标串绕过 MAX_TIKZ_LENGTH 造成渲染放大
+        return min(samples, 2000)
 
     def _extract_style_options(self, options: str) -> str:
         """提取样式选项（移除domain和samples）"""
@@ -111,8 +119,8 @@ class TikzPlotConverter:
 
     def _eval_tikz_expr(self, expr: str, x: float) -> float:
         """计算TikZ数学表达式"""
-        # 替换\\x为实际值
-        expr = expr.replace("\\x", str(x))
+        # 替换\x为实际值（使用词边界避免误替换如\xi）
+        expr = re.sub(r'\\x(?![a-zA-Z])', str(x), expr)
 
         # 替换TikZ/LaTeX数学函数
         # 注意：必须先替换 \\pi，再替换其他内容，避免反斜杠问题

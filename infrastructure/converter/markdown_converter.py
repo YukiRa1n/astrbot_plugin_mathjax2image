@@ -9,6 +9,15 @@ from pathlib import Path
 
 import markdown
 
+TRUSTED_HTML_PLACEHOLDER = "TRUSTEDHTML{}TRUSTEDHTML"
+TRUSTED_HTML_PATTERN = re.compile(
+    r'<div class="tikz-diagram"><script type="text/tikz">\n[\s\S]*?\n</script></div>'
+    r'|<pre class="mermaid">\n[\s\S]*?\n</pre>'
+    r'|<div class="error">[^<>]*</div>'
+)
+LANGUAGE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+BG_COLOR_PATTERN = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
 
 class MarkdownConverter:
     """Markdown转换器"""
@@ -23,16 +32,31 @@ class MarkdownConverter:
         md_text = self._fix_tikz_comments(md_text)
         md_text = self._preprocess_markdown(md_text)
 
-        # 保护数学公式和代码块
-        md_text, math_blocks = self._extract_math_blocks(md_text)
+        # 保护插件内部生成的HTML、数学公式和代码块
         md_text, code_blocks = self._extract_code_blocks(md_text)
+        md_text, trusted_html_blocks = self._extract_trusted_html_blocks(md_text)
+        md_text, math_blocks = self._extract_math_blocks(md_text)
+
+        # Python-Markdown默认保留原始HTML，这里显式转义用户输入中的标签
+        md_text = self._escape_raw_html(md_text)
 
         # Markdown转换
         html_body = markdown.markdown(
-            md_text, extensions=["fenced_code", "tables", "nl2br"]
+            md_text,
+            extensions=[
+                "fenced_code",
+                "tables",
+                "nl2br",
+                "sane_lists",  # 更严格的列表解析
+            ],
+            extension_configs={
+                "fenced_code": {"lang_prefix": "language-"},
+            },
+            output_format="html",  # 使用标准 HTML5 输出
         )
 
-        # 还原数学公式和代码块
+        # 还原插件内部HTML、数学公式和代码块
+        html_body = self._restore_trusted_html_blocks(html_body, trusted_html_blocks)
         html_body = self._restore_math_blocks(html_body, math_blocks)
         html_body = self._restore_code_blocks(html_body, code_blocks)
 
@@ -124,10 +148,53 @@ class MarkdownConverter:
         text = re.sub(r"```[\s\S]*?```", substitute, text)
         return text, blocks
 
+    def _extract_trusted_html_blocks(self, text: str) -> tuple[str, list[str]]:
+        """提取插件转换器生成的受控HTML块"""
+        blocks = []
+
+        def substitute(match):
+            block = match.group(0)
+            if not self._is_trusted_html_block(block):
+                return self._escape_raw_html(block)
+
+            placeholder = TRUSTED_HTML_PLACEHOLDER.format(len(blocks))
+            blocks.append(block)
+            return placeholder
+
+        return TRUSTED_HTML_PATTERN.sub(substitute, text), blocks
+
+    def _is_trusted_html_block(self, block: str) -> bool:
+        """校验受控HTML块，避免用户闭合标签后注入脚本"""
+        tikz_match = re.fullmatch(
+            r'<div class="tikz-diagram"><script type="text/tikz">\n([\s\S]*?)\n</script></div>',
+            block,
+        )
+        if tikz_match:
+            return not re.search(r"</?script", tikz_match.group(1), re.IGNORECASE)
+
+        mermaid_match = re.fullmatch(r'<pre class="mermaid">\n([\s\S]*?)\n</pre>', block)
+        if mermaid_match:
+            return "<" not in mermaid_match.group(1) and ">" not in mermaid_match.group(1)
+
+        return bool(re.fullmatch(r'<div class="error">[^<>]*</div>', block))
+
+    def _escape_raw_html(self, text: str) -> str:
+        """转义用户输入中的HTML标签字符"""
+        return text.replace("<", "&lt;").replace(">", "&gt;")
+
+    def _restore_trusted_html_blocks(self, html: str, blocks: list[str]) -> str:
+        """还原插件内部HTML块，并移除Markdown自动生成的段落包裹"""
+        for i, block in enumerate(blocks):
+            placeholder = TRUSTED_HTML_PLACEHOLDER.format(i)
+            html = html.replace(f"<p>{placeholder}</p>", block)
+            html = html.replace(placeholder, block)
+        return html
+
     def _restore_math_blocks(self, html: str, blocks: list[str]) -> str:
         """还原数学公式块"""
         for i, block in enumerate(blocks):
-            html = html.replace(f"MATHBLOCK{i}MATHBLOCK", block)
+            escaped_block = html_lib.escape(block, quote=False)
+            html = html.replace(f"MATHBLOCK{i}MATHBLOCK", escaped_block)
         return html
 
     def _restore_code_blocks(self, html: str, blocks: list[str]) -> str:
@@ -142,11 +209,16 @@ class MarkdownConverter:
                 language = ""
                 code_content = content
 
+            language = self._sanitize_language(language)
             lang_class = f' class="language-{language}"' if language else ""
             escaped_code = html_lib.escape(code_content)
             code_html = f"<pre><code{lang_class}>{escaped_code}</code></pre>"
             html = html.replace(f"CODEBLOCK{i}CODEBLOCK", code_html)
         return html
+
+    def _sanitize_language(self, language: str) -> str:
+        """仅保留安全的代码语言标识"""
+        return language if LANGUAGE_PATTERN.fullmatch(language) else ""
 
     def _apply_template(self, html_body: str, bg_color: str) -> str:
         """应用HTML模板"""
@@ -154,8 +226,13 @@ class MarkdownConverter:
             with open(self._template_path, "r", encoding="utf-8") as f:
                 self._template_cache = f.read()
 
+        safe_bg_color = bg_color if BG_COLOR_PATTERN.fullmatch(bg_color) else "#FDFBF0"
         full_html = self._template_cache.replace("{{CONTENT}}", html_body)
-        full_html = full_html.replace(
-            "--bg-color: #FDFBF0;", f"--bg-color: {bg_color};"
+        # Match any existing --bg-color value (template default may differ in case)
+        full_html = re.sub(
+            r"--bg-color:\s*#[0-9a-fA-F]{3,8}\s*;",
+            f"--bg-color: {safe_bg_color};",
+            full_html,
+            count=1,
         )
         return full_html

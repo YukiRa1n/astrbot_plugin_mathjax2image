@@ -20,14 +20,8 @@ from astrbot.api import logger
 from astrbot.api import AstrBotConfig
 
 from .application import RenderOrchestrator, LLMOrchestrator
-from .infrastructure.converter import (
-    TikzPlotConverter,
-    TikzConverter,
-    ListConverter,
-    TableConverter,
-    LatexPreprocessor,
-)
 from .handlers import CommandHandler, LLMToolHandler
+from .utils.security import validate_cdp_url
 
 
 @register(
@@ -55,14 +49,53 @@ class MathJax2ImagePlugin(Star):
         # 依赖注入 - 创建组件
         self._init_components()
 
-        logger.info("[MathJax2Image] 插件已加载 v3.0 (洋葱架构)")
+        logger.info("[MathJax2Image] 插件已加载 v3.1.0")
 
     def _init_components(self):
         """初始化组件 - 依赖注入"""
-        # 渲染编排器
+        allow_remote_cdp = bool(self.config.get("allow_remote_cdp", False))
+        try:
+            browser_cdp_url = validate_cdp_url(
+                self.config.get("browser_cdp_url", ""),
+                allow_remote=allow_remote_cdp,
+            )
+        except ValueError as e:
+            logger.warning(f"[MathJax2Image] Invalid browser_cdp_url, ignoring: {e}")
+            browser_cdp_url = ""
+
+        # 渲染编排器（int 配置项安全转换，非法值回退默认，避免插件加载失败）
+        def _safe_int(value, default: int) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
         self._render_orchestrator = RenderOrchestrator(
             plugin_dir=self._plugin_dir,
             bg_color=self._bg_color,
+            browser_engine=self.config.get("browser_engine", "chromium"),
+            browser_cdp_url=browser_cdp_url,
+            browser_max_pages=_safe_int(self.config.get("browser_max_pages", 2), 2),
+            auto_install_browser=bool(self.config.get("auto_install_browser", False)),
+            max_screenshot_height=_safe_int(
+                self.config.get("max_screenshot_height", 16000), 16000
+            ),
+            max_screenshot_pixels=_safe_int(
+                self.config.get("max_screenshot_pixels", 40_000_000), 40_000_000
+            ),
+            tikz_timeout=_safe_int(self.config.get("tikz_timeout", 60000), 60000),
+            mathjax_timeout=_safe_int(
+                self.config.get("mathjax_timeout", 10000), 10000
+            ),
+            mermaid_timeout=_safe_int(
+                self.config.get("mermaid_timeout", 15000), 15000
+            ),
+            fail_on_mathjax_timeout=bool(
+                self.config.get("fail_on_mathjax_timeout", False)
+            ),
+            max_concurrent_renders=_safe_int(
+                self.config.get("max_concurrent_renders", 2), 2
+            ),
         )
 
         # LLM编排器
@@ -71,23 +104,10 @@ class MathJax2ImagePlugin(Star):
             provider_id=self._provider_id,
         )
 
-        # LaTeX预处理器 (复用渲染器内部的转换器)
-        plot_converter = TikzPlotConverter()
-        tikz_converter = TikzConverter(plot_converter)
-        list_converter = ListConverter()
-        table_converter = TableConverter()
-
-        self._latex_preprocessor = LatexPreprocessor(
-            tikz_converter=tikz_converter,
-            list_converter=list_converter,
-            table_converter=table_converter,
-        )
-
         # 命令处理器
         self._command_handler = CommandHandler(
             render_orchestrator=self._render_orchestrator,
             llm_orchestrator=self._llm_orchestrator,
-            latex_preprocessor=self._latex_preprocessor,
             math_prompt=self._math_prompt,
             article_prompt=self._article_prompt,
         )
@@ -95,7 +115,6 @@ class MathJax2ImagePlugin(Star):
         # LLM工具处理器
         self._llm_tool_handler = LLMToolHandler(
             render_orchestrator=self._render_orchestrator,
-            latex_preprocessor=self._latex_preprocessor,
             context=self.context,
         )
 
@@ -172,5 +191,6 @@ class MathJax2ImagePlugin(Star):
 
     async def terminate(self):
         """插件卸载时清理资源"""
+        await self._llm_tool_handler.close()
         await self._render_orchestrator.close()
         logger.info("[MathJax2Image] 插件已卸载")

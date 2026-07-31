@@ -145,7 +145,7 @@
     <style>
         :root {
             /* LaTeX 学术论文风格配色 */
-            --bg-color: #fdfbf7;        /* 暖白/米色羊皮纸 */
+            --bg-color: #FDFBF0;        /* 暖白/米色羊皮纸（可被配置覆盖） */
             --text-color: #2c2c2c;      /* 深炭灰（不用纯黑） */
             --heading-color: #000000;   /* 标题用纯黑 */
             --code-bg: #f5f2f0;         /* 代码块背景 */
@@ -454,41 +454,77 @@
     <link rel="stylesheet" type="text/css" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/fonts.css">
     <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/tikzjax.js"></script>
 
-    <!-- Mermaid 脚本 (暂时禁用，jsdelivr CDN 国内访问不稳定) -->
-    <!--
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <!-- Mermaid：优先 unpkg，失败回退 jsdelivr -->
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            mermaid.initialize({
-                startOnLoad: true,
-                theme: 'base',
-                themeVariables: {
-                    // 匹配 LaTeX 学术风格
-                    primaryColor: '#fdfbf7',
-                    primaryTextColor: '#2c2c2c',
-                    primaryBorderColor: '#333',
-                    lineColor: '#333',
-                    secondaryColor: '#f5f2f0',
-                    tertiaryColor: '#fdfbf7',
-                    fontFamily: '"EB Garamond", "Noto Serif SC", serif',
-                    fontSize: '18px',
-                    // 流程图特定
-                    nodeBorder: '#333',
-                    clusterBkg: '#f5f2f0',
-                    clusterBorder: '#999',
-                    edgeLabelBackground: '#fdfbf7'
-                },
-                flowchart: {
-                    curve: 'basis',
-                    padding: 20,
-                    nodeSpacing: 50,
-                    rankSpacing: 50,
-                    htmlLabels: true
+        window.mermaidReady = false;
+        (function loadMermaid() {
+            var sources = [
+                'https://unpkg.com/mermaid@10/dist/mermaid.min.js',
+                'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'
+            ];
+            var idx = 0;
+            function tryNext() {
+                if (idx >= sources.length) {
+                    console.warn('[MathJax2Image] Mermaid CDN unavailable');
+                    window.mermaidReady = true;
+                    return;
                 }
-            });
-        });
+                var s = document.createElement('script');
+                s.src = sources[idx++];
+                s.onload = function() {
+                    try {
+                        mermaid.initialize({
+                            startOnLoad: false,
+                            theme: 'base',
+                            securityLevel: 'strict',
+                            themeVariables: {
+                                primaryColor: '#FDFBF0',
+                                primaryTextColor: '#2c2c2c',
+                                primaryBorderColor: '#333',
+                                lineColor: '#333',
+                                secondaryColor: '#f5f2f0',
+                                tertiaryColor: '#FDFBF0',
+                                fontFamily: '"EB Garamond", "Noto Serif SC", serif',
+                                fontSize: '18px',
+                                nodeBorder: '#333',
+                                clusterBkg: '#f5f2f0',
+                                clusterBorder: '#999',
+                                edgeLabelBackground: '#FDFBF0'
+                            },
+                            flowchart: {
+                                curve: 'basis',
+                                padding: 20,
+                                nodeSpacing: 50,
+                                rankSpacing: 50,
+                                htmlLabels: true
+                            }
+                        });
+                        var nodes = document.querySelectorAll('pre.mermaid');
+                        if (!nodes.length) {
+                            window.mermaidReady = true;
+                            return;
+                        }
+                        mermaid.run({ nodes: nodes }).then(function() {
+                            window.mermaidReady = true;
+                        }).catch(function(err) {
+                            console.warn('[MathJax2Image] Mermaid run failed', err);
+                            window.mermaidReady = true;
+                        });
+                    } catch (e) {
+                        console.warn('[MathJax2Image] Mermaid init failed', e);
+                        window.mermaidReady = true;
+                    }
+                };
+                s.onerror = tryNext;
+                document.head.appendChild(s);
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', tryNext);
+            } else {
+                tryNext();
+            }
+        })();
     </script>
-    -->
 
     <!-- 代码块行号处理 -->
     <script>

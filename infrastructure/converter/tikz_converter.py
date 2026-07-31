@@ -6,10 +6,23 @@ TikZ环境转换器
 import re
 from typing import TYPE_CHECKING
 
-from astrbot.api import logger
+try:
+    from astrbot.api import logger
+except ModuleNotFoundError:  # pragma: no cover - standalone test support
+    import logging
+
+    logger = logging.getLogger("astrbot")
 
 if TYPE_CHECKING:
     from .tikz_plot_converter import TikzPlotConverter
+
+
+# TikZ 代码复杂度限制（防止资源耗尽攻击）
+MAX_TIKZ_LENGTH = 50000  # 最大代码长度（字符）
+MAX_TIKZ_NODES = 500  # 最大节点数量
+MAX_TIKZ_COMMANDS = 1000  # 最大命令数量
+MAX_TIKZ_FOREACH = 20  # 最大 \foreach 数量
+MAX_TIKZ_FOREACH_DEPTH = 2  # 最大 \foreach 嵌套深度
 
 
 class TikzConverter:
@@ -63,9 +76,18 @@ class TikzConverter:
         """转换TikZ代码块"""
         tikz_code = match.group(0)
 
-        # 应用简单宏替换
+        # 复杂度检查
+        if not self._validate_tikz_complexity(tikz_code):
+            logger.error("[MathJax2Image] TikZ代码过于复杂，已拒绝渲染")
+            return '<div class="error">TikZ 代码过于复杂，请简化后重试</div>'
+
+        # 应用简单宏替换（使用词边界避免误替换，如 \Z 不应影响 \Zeta）
         for macro, replacement in self.SIMPLE_MACROS.items():
-            tikz_code = tikz_code.replace(macro, replacement)
+            tikz_code = re.sub(
+                re.escape(macro) + r'(?![a-zA-Z])',
+                lambda m, r=replacement: r,
+                tikz_code,
+            )
 
         # 预处理plot命令
         tikz_code = self._plot_converter.convert(tikz_code)
@@ -80,20 +102,36 @@ class TikzConverter:
         full_tikz = self._build_tikz_document(tikz_code, packages, tikzlibraries)
 
         # 包装为HTML
-        return f'<div class="tikz-diagram"><script type="text/tikz">\n{full_tikz}\n</script></div>'
+        return self._wrap_tikz_html(full_tikz)
 
     def _convert_chemfig_block(self, match: re.Match) -> str:
         """转换chemfig命令"""
         chemfig_cmd = match.group(0)
+
+        if not self._validate_tikz_complexity(chemfig_cmd):
+            logger.error("[MathJax2Image] chemfig代码过于复杂，已拒绝渲染")
+            return '<div class="error">chemfig 代码过于复杂，请简化后重试</div>'
+
         full_tikz = f"""\\usepackage{{amsmath}}
 \\usepackage{{amsfonts}}
 \\usepackage{{amssymb}}
 \\usepackage{{chemfig}}
 \\begin{{document}}
-{chemfig_cmd}
+        {chemfig_cmd}
 \\end{{document}}"""
         logger.info(f"[MathJax2Image] chemfig独立命令: {chemfig_cmd[:100]}...")
-        return f'<div class="tikz-diagram"><script type="text/tikz">\n{full_tikz}\n</script></div>'
+        return self._wrap_tikz_html(full_tikz)
+
+    def _wrap_tikz_html(self, tikz_document: str) -> str:
+        """将TikZ文档包装为HTML，并阻止script标签被提前闭合"""
+        safe_document = re.sub(
+            r"</script", r"<\/script", tikz_document, flags=re.IGNORECASE
+        )
+        return (
+            '<div class="tikz-diagram"><script type="text/tikz">\n'
+            f"{safe_document}\n"
+            "</script></div>"
+        )
 
     def _has_chinese(self, text: str) -> bool:
         """检测文本是否包含中文字符"""
@@ -173,3 +211,73 @@ class TikzConverter:
 \\begin{{document}}
 {tikz_code}
 \\end{{document}}"""
+
+    def _validate_tikz_complexity(self, tikz_code: str) -> bool:
+        """验证 TikZ 代码复杂度，防止资源耗尽攻击
+
+        Returns:
+            True 如果代码复杂度在安全范围内
+        """
+        # 检查代码长度
+        if len(tikz_code) > MAX_TIKZ_LENGTH:
+            logger.warning(
+                f"[MathJax2Image] TikZ代码过长: {len(tikz_code)} > {MAX_TIKZ_LENGTH}"
+            )
+            return False
+
+        # 统计节点数量（\\node 命令）
+        node_count = len(re.findall(r"\\node", tikz_code))
+        if node_count > MAX_TIKZ_NODES:
+            logger.warning(
+                f"[MathJax2Image] TikZ节点过多: {node_count} > {MAX_TIKZ_NODES}"
+            )
+            return False
+
+        # 统计绘图命令数量（\\draw, \\path, \\fill 等）
+        command_patterns = [r"\\draw", r"\\path", r"\\fill", r"\\filldraw", r"\\shade"]
+        total_commands = sum(
+            len(re.findall(pattern, tikz_code)) for pattern in command_patterns
+        )
+        if total_commands > MAX_TIKZ_COMMANDS:
+            logger.warning(
+                f"[MathJax2Image] TikZ命令过多: {total_commands} > {MAX_TIKZ_COMMANDS}"
+            )
+            return False
+
+        # 限制 \\foreach 数量，防止宏展开指数级放大（DoS）
+        foreach_count = len(re.findall(r"\\foreach", tikz_code))
+        if foreach_count > MAX_TIKZ_FOREACH:
+            logger.warning(
+                f"[MathJax2Image] TikZ \\foreach 过多: {foreach_count} > {MAX_TIKZ_FOREACH}"
+            )
+            return False
+
+        # 限制 \\foreach 嵌套深度（逐字符扫描花括号嵌套）
+        depth = 0
+        max_depth = 0
+        i = 0
+        while i < len(tikz_code):
+            if tikz_code.startswith("\\foreach", i):
+                depth += 1
+                max_depth = max(max_depth, depth)
+                i += len("\\foreach")
+                continue
+            ch = tikz_code[i]
+            if ch == "{":
+                depth += 1
+                max_depth = max(max_depth, depth)
+            elif ch == "}":
+                depth = max(0, depth - 1)
+            i += 1
+        if max_depth > MAX_TIKZ_FOREACH_DEPTH and foreach_count > 0:
+            logger.warning(
+                f"[MathJax2Image] TikZ \\foreach 嵌套过深: {max_depth} > {MAX_TIKZ_FOREACH_DEPTH}"
+            )
+            return False
+
+        # 检测 \loop / 递归 \def（无限循环风险）
+        if re.search(r"\\loop(?![a-zA-Z])", tikz_code):
+            logger.warning("[MathJax2Image] TikZ 含 \\loop，已拒绝渲染")
+            return False
+
+        return True

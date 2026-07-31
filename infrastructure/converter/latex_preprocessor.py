@@ -62,5 +62,13 @@ class LatexPreprocessor:
         return text
 
     def _fix_set_notation(self, text: str) -> str:
-        """修复集合表示法 {... \\mid ...}"""
-        return re.sub(r"(?<!\\)\{([^{}]*\\mid[^{}]*)\}", r"\\lbrace \1\\rbrace ", text)
+        """修复集合表示法 {... \\mid ...}
+
+        使用限制长度的非贪婪匹配，防止灾难性回溯（ReDoS）
+        """
+        # 限制每个部分最多 200 字符，防止正则表达式引擎指数级回溯
+        return re.sub(
+            r"(?<!\\)\{([^{}]{0,200}?\\mid[^{}]{0,200}?)\}",
+            r"\\lbrace \1\\rbrace ",
+            text,
+        )

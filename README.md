@@ -24,6 +24,12 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+Linux 系统依赖应在部署阶段安装，插件运行时不会执行 `apt-get`：
+
+```bash
+playwright install-deps chromium
+```
+
 ### 2. CDN 资源
 插件使用阿里云 OSS CDN 加载 MathJax、TikZJax 和字体资源，无需额外下载。
 
@@ -77,6 +83,33 @@ playwright install chromium
 - `background_color` - 模板背景颜色（默认 `#FDFBF0`）
 - `math_system_prompt` - 数学文章提示词
 - `article_system_prompt` - 普通文章提示词
+- `browser_engine` - `chromium`、`firefox` 或 `webkit`，默认 Chromium
+- `browser_cdp_url` - 可选共享 Chromium CDP（默认仅本机）
+- `allow_remote_cdp` - 是否允许远程 CDP（默认关闭）
+- `browser_max_pages` / `max_concurrent_renders` - 并发控制，默认 2
+- `tikz_timeout` / `mathjax_timeout` / `mermaid_timeout` - 各引擎超时（毫秒）
+- `fail_on_mathjax_timeout` - MathJax 超时是否拒绝出图
+- `max_screenshot_height` / `max_screenshot_pixels` - 截图尺寸护栏
+
+### 浏览器选择与基准
+
+Chromium 是默认推荐。Firefox/WebKit 使用前需执行：
+
+```bash
+playwright install firefox webkit
+```
+
+可运行相同模板、视口和截图参数的可重复基准：
+
+```bash
+python scripts/benchmark_browsers.py --runs 5
+```
+
+若多个插件需要截图，建议连接同一个外部 Chromium，并将 `browser_cdp_url` 设置为 `http://127.0.0.1:9222`。CDP 端口不要暴露到公网；非本机地址需显式开启 `allow_remote_cdp`。
+
+### Mermaid
+
+支持 ```` ```mermaid ```` 代码块；CDN 优先 unpkg，失败回退 jsdelivr。离线环境需自行保证浏览器可访问 Mermaid 脚本。
 
 ## 支持
 

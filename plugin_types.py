@@ -24,7 +24,7 @@ class RenderConfig:
     viewport_width: int = 1150
     viewport_height: int = 2000
     mathjax_timeout: int = 10000
-    tikz_timeout: int = 300000
+    tikz_timeout: int = 60000
     screenshot_timeout: int = 60000
 
 

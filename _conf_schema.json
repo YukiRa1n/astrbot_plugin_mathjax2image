@@ -30,5 +30,78 @@
         "type": "text",
         "hint": "指导 LLM 生成普通文章的系统提示词",
         "default": "你是一位专业的文章作者。请用 Markdown 格式撰写一篇结构清晰、内容丰富的文章。\n\n## 格式要求\n- 使用标题层级：# ## ###\n- 适当使用列表、引用、代码块\n- 如需数学公式：行内 $...$，独立 $$...$$"
+    },
+    "browser_engine": {
+        "description": "浏览器引擎",
+        "type": "string",
+        "options": ["chromium", "firefox", "webkit"],
+        "hint": "Chromium 兼容性最好；Firefox/WebKit 为实验选项",
+        "default": "chromium"
+    },
+    "browser_cdp_url": {
+        "description": "共享 Chromium CDP 地址",
+        "type": "string",
+        "hint": "可选，例如 http://127.0.0.1:9222；默认仅允许本机；仅支持 Chromium",
+        "default": ""
+    },
+    "allow_remote_cdp": {
+        "description": "允许远程 CDP",
+        "type": "bool",
+        "hint": "仅在可信内网连接非本机 Chromium 时开启；CDP 无鉴权，勿暴露公网",
+        "default": false
+    },
+    "browser_max_pages": {
+        "description": "最大并发渲染页面数",
+        "type": "int",
+        "hint": "建议 1-2；较高值会显著增加内存占用",
+        "default": 2
+    },
+    "auto_install_browser": {
+        "description": "运行时自动安装浏览器",
+        "type": "bool",
+        "hint": "默认关闭。请在部署阶段执行 python -m playwright install chromium；开启后首次渲染会下载浏览器。",
+        "default": false
+    },
+    "max_concurrent_renders": {
+        "description": "最大并发渲染任务数",
+        "type": "int",
+        "hint": "业务层信号量，建议与 browser_max_pages 相同或略小",
+        "default": 2
+    },
+    "tikz_timeout": {
+        "description": "TikZ 渲染超时（毫秒）",
+        "type": "int",
+        "hint": "默认 60000；过长易被复杂图占满页面池",
+        "default": 60000
+    },
+    "mathjax_timeout": {
+        "description": "MathJax 渲染超时（毫秒）",
+        "type": "int",
+        "hint": "默认 10000",
+        "default": 10000
+    },
+    "mermaid_timeout": {
+        "description": "Mermaid 渲染超时（毫秒）",
+        "type": "int",
+        "hint": "默认 15000",
+        "default": 15000
+    },
+    "fail_on_mathjax_timeout": {
+        "description": "MathJax 超时则失败",
+        "type": "bool",
+        "hint": "开启后公式未渲染完成将拒绝出图，避免半成品截图",
+        "default": false
+    },
+    "max_screenshot_height": {
+        "description": "最大截图高度",
+        "type": "int",
+        "hint": "超过限制将拒绝渲染，防止超长页面耗尽内存",
+        "default": 16000
+    },
+    "max_screenshot_pixels": {
+        "description": "最大截图像素数",
+        "type": "int",
+        "hint": "宽度乘高度的上限，默认约 4000 万像素",
+        "default": 40000000
     }
 }
