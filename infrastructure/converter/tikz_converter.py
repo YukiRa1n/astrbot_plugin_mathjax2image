@@ -252,28 +252,58 @@ class TikzConverter:
             )
             return False
 
-        # 限制 \\foreach 嵌套深度（逐字符扫描花括号嵌套）
-        depth = 0
-        max_depth = 0
-        i = 0
-        while i < len(tikz_code):
-            if tikz_code.startswith("\\foreach", i):
-                depth += 1
-                max_depth = max(max_depth, depth)
-                i += len("\\foreach")
-                continue
-            ch = tikz_code[i]
-            if ch == "{":
-                depth += 1
-                max_depth = max(max_depth, depth)
-            elif ch == "}":
-                depth = max(0, depth - 1)
-            i += 1
-        if max_depth > MAX_TIKZ_FOREACH_DEPTH and foreach_count > 0:
-            logger.warning(
-                f"[MathJax2Image] TikZ \\foreach 嵌套过深: {max_depth} > {MAX_TIKZ_FOREACH_DEPTH}"
-            )
-            return False
+        # 限制 \\foreach 嵌套深度：只统计 foreach 之间的嵌套层级，
+        # 不把 foreach 体内的普通花括号（如 node {...}）计入。
+        def _foreach_depth(code: str) -> int:
+            """统计 \\foreach 块之间的嵌套层数（用简单括号配对近似）。
+
+            \\foreach 结构是 `\\foreach \\var in {list} {body}`：
+            第一个花括号是变量列表，第二个才是 body。只按 body 配对，
+            避免把 list 计入层级。
+            """
+            max_d = 0
+            for m in re.finditer(r"\\foreach(?![a-zA-Z])", code):
+                # 找到变量列表 {list} 并配对，其后的下一个 { 才是 body
+                list_start = code.find("{", m.end())
+                if list_start == -1:
+                    continue
+                depth = 0
+                i = list_start
+                while i < len(code):
+                    ch = code[i]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    i += 1
+                body_start = code.find("{", i)
+                if body_start == -1:
+                    continue
+                depth = 0
+                i = body_start
+                while i < len(code):
+                    ch = code[i]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    i += 1
+                body = code[body_start + 1 : i]
+                inner_d = _foreach_depth(body)
+                max_d = max(max_d, 1 + inner_d)
+            return max_d
+
+        if foreach_count > 0:
+            nested = _foreach_depth(tikz_code)
+            if nested > MAX_TIKZ_FOREACH_DEPTH:
+                logger.warning(
+                    f"[MathJax2Image] TikZ \\foreach 嵌套过深: {nested} > {MAX_TIKZ_FOREACH_DEPTH}"
+                )
+                return False
 
         # 检测 \loop / 递归 \def（无限循环风险）
         if re.search(r"\\loop(?![a-zA-Z])", tikz_code):
