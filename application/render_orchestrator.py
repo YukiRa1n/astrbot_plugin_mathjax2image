@@ -179,11 +179,10 @@ class RenderOrchestrator:
             logger.info(f"[MathJax2Image] 渲染成功: {output_path}")
             return output_path
 
-        except (DependencyError, RenderError):
-            remove_artifact(output_path)
-            raise
         except Exception as e:
             remove_artifact(output_path)
+            if isinstance(e, (DependencyError, RenderError)):
+                raise
             logger.error(f"[MathJax2Image] 渲染失败: {type(e).__name__}: {e}")
             logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
             raise RenderError(f"渲染失败: {e}")

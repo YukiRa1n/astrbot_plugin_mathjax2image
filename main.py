@@ -63,10 +63,10 @@ class MathJax2ImagePlugin(Star):
             logger.warning(f"[MathJax2Image] Invalid browser_cdp_url, ignoring: {e}")
             browser_cdp_url = ""
 
-        # 渲染编排器（int 配置项安全转换，非法值回退默认，避免插件加载失败）
-        def _safe_int(value, default: int) -> int:
+        def _cfg_int(key: str, default: int) -> int:
+            """int 配置项安全转换，非法值回退默认。"""
             try:
-                return int(value)
+                return int(self.config.get(key, default))
             except (TypeError, ValueError):
                 return default
 
@@ -75,27 +75,17 @@ class MathJax2ImagePlugin(Star):
             bg_color=self._bg_color,
             browser_engine=self.config.get("browser_engine", "chromium"),
             browser_cdp_url=browser_cdp_url,
-            browser_max_pages=_safe_int(self.config.get("browser_max_pages", 2), 2),
+            browser_max_pages=_cfg_int("browser_max_pages", 2),
             auto_install_browser=bool(self.config.get("auto_install_browser", False)),
-            max_screenshot_height=_safe_int(
-                self.config.get("max_screenshot_height", 16000), 16000
-            ),
-            max_screenshot_pixels=_safe_int(
-                self.config.get("max_screenshot_pixels", 40_000_000), 40_000_000
-            ),
-            tikz_timeout=_safe_int(self.config.get("tikz_timeout", 60000), 60000),
-            mathjax_timeout=_safe_int(
-                self.config.get("mathjax_timeout", 10000), 10000
-            ),
-            mermaid_timeout=_safe_int(
-                self.config.get("mermaid_timeout", 15000), 15000
-            ),
+            max_screenshot_height=_cfg_int("max_screenshot_height", 16000),
+            max_screenshot_pixels=_cfg_int("max_screenshot_pixels", 40_000_000),
+            tikz_timeout=_cfg_int("tikz_timeout", 60000),
+            mathjax_timeout=_cfg_int("mathjax_timeout", 10000),
+            mermaid_timeout=_cfg_int("mermaid_timeout", 15000),
             fail_on_mathjax_timeout=bool(
                 self.config.get("fail_on_mathjax_timeout", False)
             ),
-            max_concurrent_renders=_safe_int(
-                self.config.get("max_concurrent_renders", 2), 2
-            ),
+            max_concurrent_renders=_cfg_int("max_concurrent_renders", 2),
         )
 
         # LLM编排器

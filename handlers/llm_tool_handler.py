@@ -93,12 +93,10 @@ class LLMToolHandler:
         try:
             image_name = image_path.name
             image_bytes = await consume_artifact(image_path)
-            image_path = None
             chain = [Comp.Image.fromBytes(image_bytes)]
             await self._context.send_message(
                 event.unified_msg_origin, MessageChain(chain)
             )
-            self._last_rendered_image = None
             return f"图片已发送: {image_name}"
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
@@ -142,11 +140,7 @@ class LLMToolHandler:
             sender = ""
         if origin and sender:
             return f"{origin}|{sender}"
-        if origin:
-            return origin
-        if sender:
-            return sender
-        return str(id(event))
+        return origin or sender or str(id(event))
 
     @property
     def last_rendered_image(self) -> Optional[Path]:

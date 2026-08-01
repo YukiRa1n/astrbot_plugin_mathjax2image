@@ -4,11 +4,15 @@
 """
 
 import asyncio
+import tempfile
 import uuid
 import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+_GOTO_TIMEOUT_MS = 60_000
+_EXTRA_MARGIN_MS = 10_000  # 截图等余量
 
 try:
     from astrbot.api import logger
@@ -59,12 +63,11 @@ class PageRenderer:
         self._max_screenshot_pixels = max_screenshot_pixels
         self._fail_on_mathjax_timeout = fail_on_mathjax_timeout
         # 当前渲染页面的 file URI（安全边界：仅放行此 URI 的本地文件加载）
-        self._current_page_uri: str | None = None
+        # 当前渲染页面的 file URI，按 page 隔离（网络策略只放行各自页面自身资源）
+        self._current_page_uris: dict = {}
 
     async def render_to_image(self, html: str, output: Path) -> None:
         """将HTML渲染为图片"""
-        import tempfile
-
         # 使用系统临时目录（插件目录可能因 pip 安装到 site-packages 而只读）
         temp_dir = Path(tempfile.gettempdir()) / "astrbot_mathjax2image"
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -98,14 +101,15 @@ class PageRenderer:
                 self._setup_logging(page)
 
             # 记录当前渲染页面的 file URI，网络策略据此放行自身资源
-            self._current_page_uri = html_path.resolve().as_uri()
+            self._current_page_uris[page] = html_path.resolve().as_uri()
             # 单次渲染整体超时，防止恶意/超长内容长时间占满页面池
-            # (goto 60s + MathJax 10s + Mermaid 15s + TikZ 60s 串行最坏约 145s)
+            # (goto + MathJax + Mermaid + TikZ 串行最坏约 145s)
             overall_timeout = (
                 self._mathjax_timeout
                 + self._tikz_timeout
                 + self._mermaid_timeout
-                + 70_000  # goto + screenshot 余量
+                + _GOTO_TIMEOUT_MS
+                + _EXTRA_MARGIN_MS
             )
             try:
                 await asyncio.wait_for(
@@ -125,6 +129,7 @@ class PageRenderer:
             raise RenderError(f"渲染失败: {e}")
         finally:
             if page is not None:
+                self._current_page_uris.pop(page, None)
                 await self._browser_manager.release_page(page, exception_occurred)
 
     def _get_inject_script(self) -> str:
@@ -149,14 +154,13 @@ class PageRenderer:
             url = route.request.url
             font_path = None
 
-            if "/bakoma/ttf/" in url:
-                raw_name = url.split("/bakoma/ttf/")[-1]
-                safe_name = Path(raw_name).name
-                font_path = static_dir / "bakoma" / "ttf" / safe_name
-            elif "/fonts/" in url:
-                raw_name = url.split("/fonts/")[-1]
-                safe_name = Path(raw_name).name
-                font_path = static_dir / "fonts" / safe_name
+            for marker, subdir in (
+                ("/bakoma/ttf/", static_dir / "bakoma" / "ttf"),
+                ("/fonts/", static_dir / "fonts"),
+            ):
+                if marker in url:
+                    font_path = subdir / Path(url.split(marker)[-1]).name
+                    break
 
             if font_path and font_path.exists() and font_path.is_file():
                 await route.fulfill(path=str(font_path))
@@ -176,7 +180,8 @@ class PageRenderer:
                 # 安全边界：只放行当前渲染页面自身的 file URI。
                 # 攻击者可通过 Markdown 图片语法构造 file:/// 引用，若全部放行
                 # 即可读取服务器本地文件（图片/SVG）并回传给请求者。
-                if self._current_page_uri and route.request.url == self._current_page_uri:
+                page_uri = self._current_page_uris.get(page)
+                if page_uri and route.request.url == page_uri:
                     await route.continue_()
                     return
                 logger.warning(
@@ -211,7 +216,7 @@ class PageRenderer:
         await page.goto(
             html_path.resolve().as_uri(),
             wait_until="domcontentloaded",
-            timeout=60000,
+            timeout=_GOTO_TIMEOUT_MS,
         )
 
         # 等待MathJax

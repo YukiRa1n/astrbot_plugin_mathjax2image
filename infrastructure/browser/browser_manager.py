@@ -23,7 +23,6 @@ _browser_install_locks = {
     engine: asyncio.Lock() for engine in ("chromium", "firefox", "webkit")
 }
 _installed_browsers: set[str] = set()
-_browser_installed = False
 
 
 async def _ensure_browser_installed(
@@ -32,7 +31,6 @@ async def _ensure_browser_installed(
     allow_install: bool = False,
 ):
     """确保所选 Playwright 浏览器已安装。"""
-    global _browser_installed
     if engine in _installed_browsers:
         return
 
@@ -45,7 +43,6 @@ async def _ensure_browser_installed(
                 if not executable.is_file():
                     raise FileNotFoundError(executable)
             _installed_browsers.add(engine)
-            _browser_installed = engine == "chromium" or _browser_installed
             logger.info(f"[MathJax2Image] Playwright {engine} 已就绪")
             return
         except Exception as exc:
@@ -91,7 +88,6 @@ async def _ensure_browser_installed(
             ) from launch_failure
 
         _installed_browsers.add(engine)
-        _browser_installed = engine == "chromium" or _browser_installed
         logger.info(f"[MathJax2Image] Playwright {engine} 安装完成")
 
 
@@ -125,6 +121,20 @@ class BrowserManager:
             f"[MathJax2Image] BrowserManager 初始化完成，池页面上限: {max_pages}"
         )
 
+    async def _best_effort_close(self, obj, method_name: str) -> None:
+        """尽力关闭浏览器/playwright 资源，旧事件循环可能已失效。"""
+        try:
+            fn = getattr(obj, method_name, None)
+            if fn is not None:
+                result = fn()
+                if asyncio.iscoroutine(result):
+                    try:
+                        await asyncio.wait_for(result, timeout=2.0)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     async def _force_cleanup_loop_resources(self):
         """当事件循环改变时强行清理僵尸连接"""
         logger.info("[MathJax2Image] 检测到运行 Loop 改变，强行重置浏览器页面池")
@@ -139,29 +149,9 @@ class BrowserManager:
 
         # Best-effort close (old loop may already be dead)
         if browser is not None and owns:
-            try:
-                close_fn = getattr(browser, "close", None)
-                if close_fn is not None:
-                    result = close_fn()
-                    if asyncio.iscoroutine(result):
-                        try:
-                            await asyncio.wait_for(result, timeout=2.0)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            await self._best_effort_close(browser, "close")
         if playwright is not None:
-            try:
-                stop_fn = getattr(playwright, "stop", None)
-                if stop_fn is not None:
-                    result = stop_fn()
-                    if asyncio.iscoroutine(result):
-                        try:
-                            await asyncio.wait_for(result, timeout=2.0)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            await self._best_effort_close(playwright, "stop")
 
     @staticmethod
     def _launch_options(engine: str) -> dict:
