@@ -65,6 +65,9 @@ class PageRenderer:
         # 当前渲染页面的 file URI（安全边界：仅放行此 URI 的本地文件加载）
         # 当前渲染页面的 file URI，按 page 隔离（网络策略只放行各自页面自身资源）
         self._current_page_uris: dict = {}
+        # 进程级 CDN 资源缓存(URL → bytes),避免跨页重复下载 MathJax/TikZJax
+        self._cdn_cache: dict[str, bytes] = {}
+        self._cdn_content_types: dict[str, str] = {}
 
     async def render_to_image(self, html: str, output: Path) -> None:
         """将HTML渲染为图片"""
@@ -255,16 +258,27 @@ class PageRenderer:
             timeout=_GOTO_TIMEOUT_MS,
         )
 
-        # 等待MathJax
+        # 等待MathJax(仅当页面含公式时,无公式跳过避免白等 CDN 加载)
         try:
-            await page.wait_for_function(
-                "() => window.mathJaxReady === true", timeout=self._mathjax_timeout
+            has_math = await page.evaluate(
+                """() => {
+                    const text = document.body.innerHTML;
+                    return /\\$\\$[\\s\\S]*?\\$\\$|\\$[^\\$\\n]+\\$|\\\\\\([\\s\\S]*?\\\\\\)|\\\\\\[[\\s\\S]*?\\\\\\]/.test(text);
+                }"""
             )
-            logger.debug("[MathJax2Image] MathJax 渲染完成")
-        except Exception as e:
-            logger.warning(f"[MathJax2Image] MathJax 等待超时: {e}")
-            if self._fail_on_mathjax_timeout:
-                raise RenderError(f"MathJax 渲染超时: {e}")
+        except Exception:
+            has_math = True
+        if has_math:
+            try:
+                await page.wait_for_function(
+                    "() => window.mathJaxReady === true",
+                    timeout=self._mathjax_timeout,
+                )
+                logger.debug("[MathJax2Image] MathJax 渲染完成")
+            except Exception as e:
+                logger.warning(f"[MathJax2Image] MathJax 等待超时: {e}")
+                if self._fail_on_mathjax_timeout:
+                    raise RenderError(f"MathJax 渲染超时: {e}")
 
         # 等待 Mermaid（若页面含 mermaid 块）
         await self._wait_for_mermaid(page)
@@ -367,8 +381,8 @@ class PageRenderer:
             logger.error(f"[MathJax2Image] TikZ渲染失败或超时: {e}")
             raise RenderError(f"TikZ渲染失败或超时: {e}")
 
-        # 额外等待确保字体加载
-        await asyncio.sleep(0.15)
+        # 截图前已 await document.fonts.ready(_take_screenshot 内),
+        # 无需额外固定 sleep(每图省约 150ms)
 
     async def _take_screenshot(self, page, output: Path) -> None:
         """截取页面截图"""

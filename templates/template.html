@@ -46,7 +46,7 @@
             tex: {
                 inlineMath: [['$', '$'], ['\\(', '\\)']],
                 displayMath: [['$$', '$$'], ['\\[', '\\]']],
-                packages: {'[+]': ['ams', 'newcommand']},
+                packages: {'[+]': ['ams', 'newcommand', 'boldsymbol', 'mathtools']},
                 macros: {
                     // 群论/代数
                     Stab: '\\operatorname{Stab}',
@@ -113,18 +113,44 @@
                     eqqcolon: '\\mathrel{=:}',
                     // 加粗数学符号
                     bm: ['\\boldsymbol{#1}', 1],
-                    // 扩展箭头（extpfeil 替代）
-                    xleftrightarrow: ['\\overset{#1}{\\longleftrightarrow}', 1],
-                    xrightarrow: ['\\overset{#1}{\\longrightarrow}', 1],
-                    xleftarrow: ['\\overset{#1}{\\longleftarrow}', 1],
-                    xRightarrow: ['\\overset{#1}{\\Longrightarrow}', 1],
-                    xLeftarrow: ['\\overset{#1}{\\Longleftarrow}', 1],
-                    xLeftrightarrow: ['\\overset{#1}{\\Longleftrightarrow}', 1]
+                    // 扩展箭头（extpfeil 提供 xrightarrow/xleftarrow 等,不自定义避免覆盖）
+                    // 微积分(不与内置冲突的)
+                    dd: '\\mathrm{d}',
+                    dv: ['\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}', 2],
+                    pdv: ['\\frac{\\partial #1}{\\partial #2}', 2],
+                    divop: '\\nabla \\cdot',
+                    // 物理(不与 physics 包冲突的)
+                    Laplacian: '\\nabla^2',
+                    E: '\\mathbb{E}',
+                    Var: '\\operatorname{Var}',
+                    Cov: '\\operatorname{Cov}',
+                    // 统计/概率(避免与内置 Pr 等冲突,用大写命名)
+                    Exp: '\\operatorname{Exp}',
+                    Bin: '\\operatorname{Bin}',
+                    Unif: '\\operatorname{Unif}',
+                    iid: '\\stackrel{\\mathrm{i.i.d.}}{\\sim}',
+                    // 线性代数补充(不覆盖内置)
+                    adj: '\\operatorname{adj}',
+                    nullspace: '\\operatorname{null}',
+                    im: '\\operatorname{im}',
+                    coker: '\\operatorname{coker}',
+                    // 常用集合/符号补充
+                    emptyset: '\\varnothing',
+                    set: ['\\{ #1 \\}', 1],
+                    abs: ['\\lvert #1 \\rvert', 1],
+                    norm: ['\\lVert #1 \\rVert', 1],
+                    floor: ['\\lfloor #1 \\rfloor', 1],
+                    ceil: ['\\lceil #1 \\rceil', 1],
+                    avg: '\\operatorname{avg}',
+                    max: '\\max',
+                    min: '\\min',
+                    argmax: '\\operatorname{arg\\,max}',
+                    argmin: '\\operatorname{arg\\,min}'
                 }
             },
             loader: {
-                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/extpfeil'],
-                paths: {mathjax: 'https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/mathjax'}
+                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/extpfeil', '[tex]/boldsymbol', '[tex]/mathtools'],
+                paths: {mathjax: 'https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5'}
             },
             chtml: {
                 scale: 1.0
@@ -447,8 +473,11 @@
 
     <div class="footer-line"></div>
 
-    <!-- MathJax 脚本 (CDN) -->
-    <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/mathjax/tex-chtml.js"></script>
+    <!-- 预连接 CDN,减少 MathJax/TikZJax 首字节延迟 -->
+    <link rel="preconnect" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <!-- MathJax 脚本 (jsdelivr,与 TikZJax 同源更稳;OSS 源曾 ERR_CONNECTION_CLOSED) -->
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
 
     <!-- TikZJax 脚本 (drgrice1 fork via jsdelivr npm)
          原 OSS 源缺 tex.wasm.gz/core.dump.gz/tex_files/,复杂 TikZ 库

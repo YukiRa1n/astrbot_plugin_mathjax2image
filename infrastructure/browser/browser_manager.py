@@ -161,6 +161,12 @@ class BrowserManager:
                 "--disable-features=VizDisplayCompositor",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-sync",
+                "--no-first-run",
+                "--no-default-browser-check",
                 "--js-flags=--max-old-space-size=512",
             ]
         return options

@@ -95,19 +95,21 @@ class TikzConverter:
                 tikz_code,
             )
 
-        # 剥离用户自带的 preamble 指令(usepackage/usetikzlibrary/documentclass)。
-        # TikZJax 已预定义 standalone preamble 并自动插入 \begin{document}，
-        # 用户输入若含这些会在 document body 中报
-        # "Can be used only in preamble"。检测到的库会通过
-        # data-tikz-libraries 预加载，不需要用户手写 usetikzlibrary。
+        # 提取用户显式 preamble 指令后再剥离。TikZJax 的 worker 会将
+        # data-* 属性放到 preamble；若仅剥离而不提取，用户声明的库会丢失。
+        explicit_packages, explicit_libraries = self._extract_preamble_directives(
+            tikz_code
+        )
         tikz_code = self._strip_preamble_directives(tikz_code)
 
         # 预处理plot命令
         tikz_code = self._plot_converter.convert(tikz_code)
 
-        # 检测需要的包和库
-        packages = self._detect_packages(tikz_code)
-        tikzlibraries = self._detect_libraries(tikz_code)
+        # 检测需要的包和库，并合并用户显式声明（白名单过滤）。
+        packages = list(dict.fromkeys(explicit_packages + self._detect_packages(tikz_code)))
+        tikzlibraries = list(
+            dict.fromkeys(explicit_libraries + self._detect_libraries(tikz_code))
+        )
 
         logger.info(f"[MathJax2Image] TikZ包: {packages}, 库: {tikzlibraries}")
 
@@ -126,15 +128,29 @@ class TikzConverter:
             tikz_libraries=tikzlibraries,
         )
 
+    @classmethod
+    def _extract_preamble_directives(cls, tikz_code: str) -> tuple[list[str], list[str]]:
+        """提取并白名单过滤用户的宏包和 TikZ 库声明。"""
+        packages: list[str] = []
+        for match in re.finditer(
+            r"\\usepackage(?:\[([^\]]*)\])?\{([^{}]*)\}", tikz_code
+        ):
+            for package in match.group(2).split(","):
+                package = package.strip()
+                if package in cls.SUPPORTED_PACKAGES and package not in packages:
+                    packages.append(package)
+
+        libraries: list[str] = []
+        for match in re.finditer(r"\\usetikzlibrary\{([^{}]*)\}", tikz_code):
+            for library in match.group(1).split(","):
+                library = library.strip()
+                if library in cls.SUPPORTED_LIBRARIES and library not in libraries:
+                    libraries.append(library)
+        return packages, libraries
+
     @staticmethod
     def _strip_preamble_directives(tikz_code: str) -> str:
-        """剥离用户输入中的 preamble 指令。
-
-        TikZJax 已预定义 standalone 文档类并自动插入 \\begin{document}，
-        用户输入若含 \\usepackage/\\usetikzlibrary/\\documentclass 会在
-        document body 中报错。这些指令由 data-tex-packages/
-        data-tikz-libraries 属性代替。
-        """
+        """剥离用户输入中的 preamble 指令。"""
         # 移除 \documentclass{...} 整行
         code = re.sub(
             r"\\documentclass(\[[^\]]*\])?\{[^}]*\}", "", tikz_code
@@ -436,6 +452,11 @@ class TikzConverter:
         # 海龟
         if "turtle" in tikz_code:
             libs.append("turtle")
+
+        # tikz-cd 包内部会加载 cd -> matrix,quotes,arrows.meta；显式的
+        # rrow 命令本身不代表通用 arrows 库，避免错误地加载 arrows。
+        if "tikzcd" in tikz_code and r"rrow" in tikz_code:
+            libs = [lib for lib in libs if lib != "arrows"]
 
         # 只保留 TikZJax 支持的库,去重
         return list(dict.fromkeys(l for l in libs if l in self.SUPPORTED_LIBRARIES))
