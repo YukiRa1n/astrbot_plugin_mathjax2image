@@ -63,8 +63,7 @@
                     SL: '\\operatorname{SL}',
                     SO: '\\operatorname{SO}',
                     SU: '\\operatorname{SU}',
-                    Tr: '\\operatorname{Tr}',
-                    tr: '\\operatorname{tr}',
+                    // Tr/tr 为 AMS 内置,不自定义避免覆盖
                     rank: '\\operatorname{rank}',
                     Ann: '\\operatorname{Ann}',
                     Rad: '\\operatorname{Rad}',
@@ -142,10 +141,25 @@
                     floor: ['\\lfloor #1 \\rfloor', 1],
                     ceil: ['\\lceil #1 \\rceil', 1],
                     avg: '\\operatorname{avg}',
-                    max: '\\max',
-                    min: '\\min',
-                    argmax: '\\operatorname{arg\\,max}',
-                    argmin: '\\operatorname{arg\\,min}'
+                    // max/min/argmax/argmin 为 TeX 内置,不自定义避免覆盖
+                    // 数论/图论(非内置)
+                    mod: '\\operatorname{mod}',
+                    rem: '\\operatorname{rem}',
+                    deg: '\\operatorname{deg}',
+                    dist: '\\operatorname{dist}',
+                    diam: '\\operatorname{diam}',
+                    girth: '\\operatorname{girth}',
+                    vol: '\\operatorname{vol}',
+                    cut: '\\operatorname{cut}',
+                    // 信号处理/分析
+                    sinc: '\\operatorname{sinc}',
+                    rect: '\\operatorname{rect}',
+                    Laplace: '\\mathcal{L}',
+                    FT: '\\mathcal{F}',
+                    iFT: '\\mathcal{F}^{-1}',
+                    ZTransform: '\\mathcal{Z}',
+                    // 统计正态分布(避免 N 重复键)
+                    Normal: '\\mathcal{N}'
                 }
             },
             loader: {
