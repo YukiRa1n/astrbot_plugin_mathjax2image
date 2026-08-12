@@ -36,10 +36,18 @@ class LLMToolHandler:
         self._pending_lock = asyncio.Lock()
         self._last_rendered_image: Optional[Path] = None
 
-    async def handle_render_math(self, event: AstrMessageEvent, content: str) -> str:
+    async def handle_render_math(
+        self, event: AstrMessageEvent, content: str, auto_send: bool = True
+    ) -> str:
         """处理 render_math 工具调用
 
         将Markdown/LaTeX/TikZ内容渲染为图片
+
+        Args:
+            content: 要渲染的内容
+            auto_send: 渲染成功后是否立即发送图片(默认 True)。
+                为 True 时一步到位(渲染+发送),为 False 时仅保存,
+                需调用 send_image 发送。
         """
         if not content:
             return "错误：content 参数不能为空"
@@ -63,6 +71,10 @@ class LLMToolHandler:
                         remove_artifact(old_path)
                     self._pending_images[session_key] = (image_path, time.time())
                     self._last_rendered_image = image_path
+
+                if auto_send:
+                    # 一步到位: 直接发送,减少 LLM 记忆"先渲染再发送"两步链
+                    return await self.handle_send_image(event)
                 return "渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
                 remove_artifact(image_path)
@@ -70,7 +82,29 @@ class LLMToolHandler:
 
         except Exception as e:
             logger.error(f"[MathJax2Image] LLM工具渲染失败: {e}")
-            return f"渲染失败: {str(e)}"
+            # 将常见失败原因映射为 LLM 可操作的提示,便于自行修正重试
+            message = str(e)
+            if "chemfig" in message or "circuitikz" in message:
+                return (
+                    f"渲染失败: {message}。提示: circuitikz/chemfig 不受支持,"
+                    "请改用 TikZ 原生命令(\\draw/\\node/\\fill 等)重试。"
+                )
+            if "过于复杂" in message or "过长" in message:
+                return (
+                    f"渲染失败: {message}。提示: 请简化 TikZ 代码"
+                    "(减少节点/命令/foreach 数量)后重试。"
+                )
+            if "超时" in message or "Timeout" in message:
+                return (
+                    f"渲染失败: {message}。提示: 渲染超时,请简化内容"
+                    "或拆分为多个小图分别渲染。"
+                )
+            if "不支持" in message:
+                return (
+                    f"渲染失败: {message}。提示: 使用了 TikZJax 不支持的库/命令,"
+                    "请改用已支持的 TikZ 语法。"
+                )
+            return f"渲染失败: {message}"
 
     async def handle_send_image(self, event: AstrMessageEvent) -> str:
         """处理 send_image 工具调用

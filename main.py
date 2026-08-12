@@ -131,15 +131,19 @@ class MathJax2ImagePlugin(Star):
     # ==================== LLM 工具 ====================
 
     @filter.llm_tool(name="render_math")
-    async def llm_render_math(self, event: AstrMessageEvent, content: str) -> str:
-        """【数学与图形渲染工具】将 Markdown/LaTeX/TikZ 内容渲染为图片。
+    async def llm_render_math(
+        self, event: AstrMessageEvent, content: str, auto_send: bool = True
+    ) -> str:
+        """【数学与图形渲染工具】将 Markdown/LaTeX/TikZ/Mermaid 内容渲染为图片并发送。
 
-        ⚠️ 关键格式要求（必须严格遵守）：
-        1. 所有数学公式必须用 $$ 包裹，例如：$$f(x) = x^2$$
-        2. 普通文字直接写，不要用 $$ 包裹
-        3. 每个独立公式单独一行，用 $$ 包裹
-        4. TikZ代码直接使用 \\begin{tikzpicture}...\\end{tikzpicture}
-        5. Mermaid图表使用 ```mermaid ... ``` 代码块
+        默认渲染成功后立即把图片发送给用户(一步到位,无需再调其他工具)。
+        若 auto_send=False,则仅保存图片,需再调用 send_image 发送。
+
+        ⚠️ 格式要求：
+        1. 数学公式用 $$ 包裹(独立)或 $...$(行内),例如 $$f(x) = x^2$$
+        2. 普通文字直接写,不要用 $$ 包裹
+        3. TikZ 绘图直接用 \\begin{tikzpicture}...\\end{tikzpicture}
+        4. Mermaid 图表用 ```mermaid ... ``` 代码块
 
         正确示例：
         ```
@@ -153,24 +157,33 @@ class MathJax2ImagePlugin(Star):
         ```
 
         支持内容类型：
-        - 数学公式（MathJax）：行内 $...$ 和独立 $$...$$
-        - TikZ 绘图、circuitikz、chemfig、tikz-cd、pgfplots
+        - 数学公式(MathJax): 行内 $...$ 和独立 $$...$$(支持 boldsymbol/mathtools 等)
+        - TikZ 绘图: 常用库已自动加载(calc/positioning/arrows.meta/intersections/
+          decorations/patterns/angles/matrix/3d/trees/mindmap/automata 等 60+ 库)
+        - pgfplots 图表(axis/addplot)、tikz-cd 交换图
         - Mermaid 流程图、时序图等
+        - Markdown 文本(标题/列表/表格/代码块)
+
+        不支持(会返回明确错误): circuitikz、chemfig、graphicx 等 TikZJax
+        未内置的宏包,请用 TikZ 原生命令替代。
 
         Args:
-            content(string): Required. Markdown/LaTeX/TikZ 格式内容，数学公式必须用$$包裹
+            content(string): Required. Markdown/LaTeX/TikZ/Mermaid 内容,公式用 $$ 包裹
+            auto_send(bool): Optional. 渲染后是否立即发送图片,默认 True
 
         Returns:
-            string: 渲染结果
+            string: 渲染+发送结果(成功或失败原因)
         """
-        return await self._llm_tool_handler.handle_render_math(event, content)
+        return await self._llm_tool_handler.handle_render_math(
+            event, content, auto_send=auto_send
+        )
 
     @filter.llm_tool(name="send_image")
     async def llm_send_image(self, event: AstrMessageEvent) -> str:
-        """发送最近渲染的数学图片给用户。
+        """发送最近渲染的图片给用户。
 
-        在每次 render_math 渲染完成后调用此工具发送图片。
-        发送后可以继续用文字讲解，或继续渲染下一个公式。
+        仅在 render_math 以 auto_send=False 调用后使用(此时图片已保存未发送)。
+        默认 render_math 会直接发送,无需调用本工具。
 
         Returns:
             string: 发送结果
