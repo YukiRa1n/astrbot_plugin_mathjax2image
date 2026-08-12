@@ -118,6 +118,8 @@ class PageRenderer:
                 )
                 await self._take_screenshot(page, output)
             except asyncio.TimeoutError:
+                # 超时取消的页面可能处于中间态，标记异常以便销毁而非干净回收
+                exception_occurred = True
                 raise RenderError(
                     f"渲染总时长超过限制 {overall_timeout / 1000:.0f}s"
                 )
@@ -166,7 +168,9 @@ class PageRenderer:
                 await route.fulfill(path=str(font_path))
                 return
 
-            await route.continue_()
+            # 未命中本地字体时用 fallback() 交回下一个 handler（网络策略），
+            # 而不是 continue_()（直接发网，绕过网络策略白名单）。
+            await route.fallback()
 
         await page.route("**/*.ttf", handle_font_route)
         await page.route("**/*.otf", handle_font_route)

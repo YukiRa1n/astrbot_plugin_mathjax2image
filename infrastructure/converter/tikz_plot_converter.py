@@ -18,8 +18,22 @@ from ...utils import safe_eval_math
 class TikzPlotConverter:
     """TikZ plot命令转换器"""
 
+    # 每次 convert() 总评估预算：samples×plots 可能被攻击者放大
+    # （50 个 plot × 2000 点 = 10 万次 AST 解析，实测阻塞事件循环约 460 秒）。
+    # 预算按"点"计（每点 x/y 各评估 1 次），单 plot 正常 2000 点够用。
+    MAX_EVAL_POINTS = 4000
+
+    def __init__(self) -> None:
+        self._eval_points_used = 0
+        # 表达式 → 可复用求值器缓存（同一 plot 的 x/y 表达式通常重复，
+        # 避免每个点都重新 ast.parse，极大降低 CPU 开销）
+        self._expr_cache: dict[str, object] = {}
+
     def convert(self, tikz_code: str) -> str:
         """将TikZ plot命令转换为坐标点序列"""
+        # 每次转换重置预算和缓存
+        self._eval_points_used = 0
+        self._expr_cache.clear()
         # 预处理：清理HTML实体
         tikz_code = self._clean_html_entities(tikz_code)
 
@@ -98,14 +112,24 @@ class TikzPlotConverter:
     def _generate_points(
         self, x_min: float, x_max: float, samples: int, x_expr: str, y_expr: str
     ) -> list[str]:
-        """生成坐标点"""
+        """生成坐标点（受总评估预算约束，防止 samples×plots 放大 DoS）"""
         points = []
         step = (x_max - x_min) / (samples - 1) if samples > 1 else 0
 
-        for i in range(samples):
+        # 本 plot 最多还能评估的点数（x/y 各算 1 次）
+        remaining = max(0, self.MAX_EVAL_POINTS - self._eval_points_used)
+        if remaining < 2:
+            logger.warning(
+                "[MathJax2Image] plot 总评估点数超过预算，已跳过"
+            )
+            return points
+        effective_samples = min(samples, remaining // 2)
+
+        for i in range(effective_samples):
             x = x_min + i * step
             x_val = self._eval_tikz_expr(x_expr, x)
             y_val = self._eval_tikz_expr(y_expr, x)
+            self._eval_points_used += 2
 
             if not (
                 math.isnan(x_val)
@@ -120,7 +144,7 @@ class TikzPlotConverter:
     def _eval_tikz_expr(self, expr: str, x: float) -> float:
         """计算TikZ数学表达式"""
         # 替换\x为实际值（使用词边界避免误替换如\xi）
-        expr = re.sub(r'\\x(?![a-zA-Z])', str(x), expr)
+        replaced = re.sub(r'\\x(?![a-zA-Z])', str(x), expr)
 
         # 替换TikZ/LaTeX数学函数
         # 注意：必须先替换 \\pi，再替换其他内容，避免反斜杠问题
@@ -143,7 +167,7 @@ class TikzPlotConverter:
         ]
 
         for pattern, repl in replacements:
-            expr = re.sub(pattern, repl, expr)
+            replaced = re.sub(pattern, repl, replaced)
 
         # 使用安全求值器替代 eval()
-        return safe_eval_math(expr)
+        return safe_eval_math(replaced)
