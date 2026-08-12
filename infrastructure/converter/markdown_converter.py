@@ -10,8 +10,11 @@ from pathlib import Path
 import markdown
 
 TRUSTED_HTML_PLACEHOLDER = "TRUSTEDHTML{}TRUSTEDHTML"
+# 注意：转换器生成的 TikZ 块可能带 data-tex-packages 属性
+# （<script type="text/tikz" data-tex-packages='...'>），正则必须允许
+# 任意属性，否则该块不被识别为受信 HTML 而被整体转义成文本。
 TRUSTED_HTML_PATTERN = re.compile(
-    r'<div class="tikz-diagram"><script type="text/tikz">\n[\s\S]*?\n</script></div>'
+    r'<div class="tikz-diagram"><script type="text/tikz"[^>]*>\n[\s\S]*?\n</script></div>'
     r'|<pre class="mermaid">\n[\s\S]*?\n</pre>'
     r'|<div class="error">[^<>]*</div>'
 )
@@ -166,11 +169,27 @@ class MarkdownConverter:
     def _is_trusted_html_block(self, block: str) -> bool:
         """校验受控HTML块，避免用户闭合标签后注入脚本"""
         tikz_match = re.fullmatch(
-            r'<div class="tikz-diagram"><script type="text/tikz">\n([\s\S]*?)\n</script></div>',
+            r'<div class="tikz-diagram"><script type="text/tikz"([^>]*)>\n([\s\S]*?)\n</script></div>',
             block,
         )
         if tikz_match:
-            return not re.search(r"</?script", tikz_match.group(1), re.IGNORECASE)
+            # 内容中不允许出现 script 标签(防闭合注入)
+            if re.search(r"</?script", tikz_match.group(2), re.IGNORECASE):
+                return False
+            # 属性白名单: 只允许 data-tex-packages/data-tikz-libraries,
+            # 禁止 onerror/onload 等事件属性和任意 data-x(防属性注入)。
+            attrs = tikz_match.group(1).strip()
+            if not attrs:
+                return True
+            # 逐个解析属性,只允许白名单名
+            allowed_names = {"data-tex-packages", "data-tikz-libraries"}
+            for name, _, _ in re.findall(r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attrs):
+                if name not in allowed_names:
+                    return False
+            # 拒绝残留的无值属性或异常字符
+            if re.search(r"\s(?:on\w+)\s*=", attrs, re.IGNORECASE):
+                return False
+            return True
 
         mermaid_match = re.fullmatch(r'<pre class="mermaid">\n([\s\S]*?)\n</pre>', block)
         if mermaid_match:

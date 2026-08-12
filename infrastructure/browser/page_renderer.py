@@ -135,17 +135,49 @@ class PageRenderer:
                 await self._browser_manager.release_page(page, exception_occurred)
 
     def _get_inject_script(self) -> str:
-        """获取注入脚本"""
+        """获取注入脚本。
+
+        TikZJax 渲染是异步的：先把 script 替换成 loading spinner SVG，
+        编译完成后派发 ``tikzjax-load-finished`` 事件并替换为最终 SVG。
+        这里监听该事件并计数，供 ``_wait_for_tikz`` 判断"全部编译完成"。
+        同时记录 ``img-not-found``(编译失败)以便立即报错。
+        """
         return """
-        setTimeout(function() {
-            document.querySelectorAll('.tikz-diagram svg').forEach(function(svg) {
-                svg.style.position = 'relative';
-                svg.style.display = 'block';
-                svg.style.margin = '20px auto';
-                svg.style.border = 'none';
-                svg.style.padding = '0';
+        (function() {
+            window.__tikzFinished = 0;
+            window.__tikzFailed = 0;
+            document.addEventListener('tikzjax-load-finished', function() {
+                window.__tikzFinished++;
             });
-        }, 1000);
+            // 编译失败: TikZJax 插入 <img src="//invalid.site/img-not-found.png">
+            // 注意: add_init_script 在文档解析前运行, DOM 尚未创建,
+            // MutationObserver.observe 会抛 "must be an instance of Node"。
+            // 必须等 DOMContentLoaded 后再安装 observer。
+            function installObserver() {
+                var checkFailed = function() {
+                    var bad = document.querySelectorAll('.tikz-diagram img[src*="invalid.site"], .tikz-diagram img[src*="img-not-found"]');
+                    if (bad.length > 0) window.__tikzFailed = bad.length;
+                };
+                var imgObserver = new MutationObserver(checkFailed);
+                imgObserver.observe(document.documentElement, {childList: true, subtree: true});
+                checkFailed();
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', installObserver);
+            } else {
+                installObserver();
+            }
+            // 页面 load 后确保样式修复执行
+            window.addEventListener('load', function() {
+                document.querySelectorAll('.tikz-diagram svg').forEach(function(svg) {
+                    svg.style.position = 'relative';
+                    svg.style.display = 'block';
+                    svg.style.margin = '20px auto';
+                    svg.style.border = 'none';
+                    svg.style.padding = '0';
+                });
+            });
+        })();
         """
 
     async def _setup_font_routes(self, page) -> None:
@@ -262,7 +294,13 @@ class PageRenderer:
             logger.warning(f"[MathJax2Image] Mermaid 等待超时: {e}")
 
     async def _wait_for_tikz(self, page) -> None:
-        """等待TikZ渲染完成"""
+        """等待TikZ渲染完成。
+
+        TikZJax 异步编译：先显示 spinner SVG，完成后派发
+        ``tikzjax-load-finished`` 事件。等待"finished 数 >= 容器数"，
+        避免把 spinner 误判为完成内容(旧逻辑轮询 SVG 元素，1 秒就
+        误判成功，截图拍到 spinner)。
+        """
         tikz_count = await page.evaluate(
             "() => document.querySelectorAll('.tikz-diagram').length"
         )
@@ -274,31 +312,46 @@ class PageRenderer:
 
         try:
             result = await page.wait_for_function(
-                """() => {
+                """(count) => {
+                    // 编译失败检测: TikZJax 插入 invalid 图片(不依赖注入状态,
+                    // 直接查询 DOM,更可靠)
+                    const bad = document.querySelectorAll('.tikz-diagram img[src*="invalid.site"], .tikz-diagram img[src*="img-not-found"]');
+                    if (bad.length > 0) {
+                        return {failed: bad.length};
+                    }
+                    // 完成判定: TikZJax 渲染的 SVG 是 <svg><g ...>...</g></svg>
+                    // (1 个 g 子元素),而 loading spinner 是
+                    // <rect fill-opacity="0.2"> + <circle> x2 + <animate>
+                    // (3+ 子元素)。用 "有 g 且无 spinner 特征" 判断,
+                    // 不能用子元素数量(真实内容可能就是 1 个 g)。
                     const containers = Array.from(document.querySelectorAll('.tikz-diagram'));
                     if (containers.length === 0) return null;
-
-                    let totalElements = 0;
                     for (const container of containers) {
                         const svg = container.querySelector('svg');
                         if (!svg) return null;
-
-                        const selectors = 'path,line,text,polygon,polyline,circle,ellipse,rect';
-                        const elementCount = svg.querySelectorAll(selectors).length;
-                        if (elementCount < 1) return null;
-
-                        totalElements += elementCount;
+                        const inner = svg.innerHTML;
+                        // spinner 特征: 半透明黑色圆角矩形
+                        if (inner.includes('fill-opacity="0.2"') && inner.includes('<animate')) return null;
+                        // 必须有实际绘制内容(g 元素)
+                        if (!inner.includes('<g ')) return null;
                     }
-
-                    return {
-                        success: true,
-                        diagrams: containers.length,
-                        count: totalElements
-                    };
+                    let totalElements = 0;
+                    for (const container of containers) {
+                        const svg = container.querySelector('svg');
+                        if (svg) {
+                            totalElements += svg.querySelectorAll('path,line,text,circle,ellipse,rect,polygon,polyline,g,use').length;
+                        }
+                    }
+                    return {success: true, diagrams: containers.length, count: totalElements};
                 }""",
+                arg=tikz_count,
                 timeout=self._tikz_timeout,
             )
             tikz_result = await result.json_value()
+            if tikz_result and tikz_result.get("failed"):
+                raise RenderError(
+                    f"TikZ渲染失败：{tikz_result['failed']} 个图编译错误"
+                )
             if tikz_result and tikz_result.get("success"):
                 logger.info(
                     "[MathJax2Image] TikZ渲染完成，"
@@ -306,8 +359,10 @@ class PageRenderer:
                     f"元素数: {tikz_result.get('count', 0)}"
                 )
             else:
-                raise RenderError("TikZ渲染失败：SVG中没有有效图形元素")
+                raise RenderError("TikZ渲染失败：未收到完成事件")
 
+        except RenderError:
+            raise
         except Exception as e:
             logger.error(f"[MathJax2Image] TikZ渲染失败或超时: {e}")
             raise RenderError(f"TikZ渲染失败或超时: {e}")

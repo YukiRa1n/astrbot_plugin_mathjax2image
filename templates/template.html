@@ -450,9 +450,12 @@
     <!-- MathJax 脚本 (CDN) -->
     <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/mathjax/tex-chtml.js"></script>
 
-    <!-- TikZJax 脚本 (CDN) -->
-    <link rel="stylesheet" type="text/css" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/fonts.css">
-    <script src="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/tikzjax/tikzjax.js"></script>
+    <!-- TikZJax 脚本 (drgrice1 fork via jsdelivr npm)
+         原 OSS 源缺 tex.wasm.gz/core.dump.gz/tex_files/,复杂 TikZ 库
+         (intersections/patterns/decorations/angles 等)全部渲染失败破图。
+         jsdelivr 自动托管 npm 包完整 dist,含全部库文件。 -->
+    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/fonts.css">
+    <script src="https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/tikzjax.js"></script>
 
     <!-- Mermaid：优先 unpkg，失败回退 jsdelivr -->
     <script>
