@@ -449,13 +449,22 @@ class TikzConverter:
         # SVG 路径
         if "svg[" in tikz_code or "\\pgfpathsvg" in tikz_code:
             libs.append("svg.path")
+        # 其他常用库
+        if "scope" in tikz_code or "local bounding box" in tikz_code:
+            libs.append("scopes")
+        if "folding" in tikz_code or "folding line" in tikz_code:
+            libs.append("folding")
+        if "view=" in tikz_code or "meet=" in tikz_code or "slice=" in tikz_code:
+            libs.append("views")
+        if re.search(r"\b(?:and|nand|or|nor|xor|xnor|not|buffer) gate\b", tikz_code):
+            libs.append("shapes.gates.logic.IEC")
         # 海龟
         if "turtle" in tikz_code:
             libs.append("turtle")
 
         # tikz-cd 包内部会加载 cd -> matrix,quotes,arrows.meta；显式的
-        # rrow 命令本身不代表通用 arrows 库，避免错误地加载 arrows。
-        if "tikzcd" in tikz_code and r"rrow" in tikz_code:
+        # \arrow 命令本身不代表通用 arrows 库，避免错误地加载 arrows。
+        if "tikzcd" in tikz_code and r"\arrow" in tikz_code:
             libs = [lib for lib in libs if lib != "arrows"]
 
         # 只保留 TikZJax 支持的库,去重
