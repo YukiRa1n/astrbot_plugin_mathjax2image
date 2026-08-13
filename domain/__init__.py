@@ -1,16 +1,7 @@
 """
-领域层 - 核心接口和错误定义
+领域层 - 错误定义
 """
 
-from .interfaces import (
-    IContentConverter,
-    ILatexPreprocessor,
-    ILatexValidator,
-    IBrowserManager,
-    IPageRenderer,
-    IDependencyInstaller,
-    IRenderOrchestrator,
-)
 from .errors import (
     RenderError,
     BrowserError,
@@ -19,13 +10,6 @@ from .errors import (
 )
 
 __all__ = [
-    "IContentConverter",
-    "ILatexPreprocessor",
-    "ILatexValidator",
-    "IBrowserManager",
-    "IPageRenderer",
-    "IDependencyInstaller",
-    "IRenderOrchestrator",
     "RenderError",
     "BrowserError",
     "DependencyError",

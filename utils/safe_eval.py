@@ -96,11 +96,6 @@ class SafeMathEvaluator(ast.NodeVisitor):
             return float(node.value)
         raise ValueError(f"Unsupported constant type: {type(node.value)}")
 
-    def visit_Num(self, node: ast.Num) -> float:
-        """访问数字节点（Python 3.7 兼容）"""
-        logger.debug(f"[SafeEval] [PROCESS] Num value={node.n}")
-        return float(node.n)
-
     def visit_Name(self, node: ast.Name) -> float:
         """访问变量名节点（常量）"""
         name = node.id

@@ -15,7 +15,6 @@ from .converter import (
     LatexPreprocessor,
     MarkdownConverter,
 )
-from .validator import LatexValidator
 
 __all__ = [
     "PlaywrightDependencyInstaller",
@@ -27,5 +26,4 @@ __all__ = [
     "TableConverter",
     "LatexPreprocessor",
     "MarkdownConverter",
-    "LatexValidator",
 ]

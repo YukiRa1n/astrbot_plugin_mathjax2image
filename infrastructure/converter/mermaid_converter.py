@@ -97,7 +97,3 @@ class MermaidConverter:
 
         # 默认为flowchart
         return "unknown"
-
-    def has_mermaid(self, text: str) -> bool:
-        """检查文本是否包含Mermaid代码块"""
-        return bool(re.search(r"```mermaid\s*\n", text))

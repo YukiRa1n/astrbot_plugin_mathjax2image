@@ -6,7 +6,7 @@ LLM工具处理器
 import asyncio
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
@@ -34,7 +34,6 @@ class LLMToolHandler:
 
         self._pending_images: dict[str, tuple[Path, float]] = {}
         self._pending_lock = asyncio.Lock()
-        self._last_rendered_image: Optional[Path] = None
 
     async def handle_render_math(self, event: AstrMessageEvent, content: str) -> str:
         """处理 render_math 工具调用
@@ -55,14 +54,13 @@ class LLMToolHandler:
 
             if image_path and image_path.exists():
                 logger.info(f"[MathJax2Image] LLM工具渲染成功: {image_path}")
-                # 保存状态（加锁避免并发竞争，_last_rendered_image 也在锁内写）
+                # 保存状态（加锁避免并发竞争）
                 async with self._pending_lock:
                     old_entry = self._pending_images.pop(session_key, None)
                     if old_entry:
                         old_path, _ = old_entry
                         remove_artifact(old_path)
                     self._pending_images[session_key] = (image_path, time.time())
-                    self._last_rendered_image = image_path
                 return "渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
                 remove_artifact(image_path)
@@ -87,7 +85,6 @@ class LLMToolHandler:
             image_path, _ = self._pending_images.pop(session_key)
 
         if not image_path.exists():
-            self._last_rendered_image = None
             return f"图片文件不存在: {image_path}"
 
         try:
@@ -103,7 +100,6 @@ class LLMToolHandler:
             return f"发送图片失败: {str(e)}"
         finally:
             remove_artifact(image_path)
-            self._last_rendered_image = None
 
     def _cleanup_expired_images(self) -> None:
         """清理过期的图片缓存"""
@@ -121,7 +117,6 @@ class LLMToolHandler:
         async with self._pending_lock:
             entries = list(self._pending_images.values())
             self._pending_images.clear()
-            self._last_rendered_image = None
         for path, _ in entries:
             remove_artifact(path)
 
@@ -142,12 +137,3 @@ class LLMToolHandler:
             return f"{origin}|{sender}"
         return origin or sender or str(id(event))
 
-    @property
-    def last_rendered_image(self) -> Optional[Path]:
-        """获取最近渲染的图片路径"""
-        return self._last_rendered_image
-
-    @property
-    def has_pending_image(self) -> bool:
-        """是否有待发送的图片"""
-        return bool(self._pending_images)
