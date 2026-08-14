@@ -205,15 +205,15 @@ class MarkdownConverter:
         """还原插件内部HTML块，并移除Markdown自动生成的段落包裹"""
         for i, block in enumerate(blocks):
             placeholder = TRUSTED_HTML_PLACEHOLDER.format(i)
-            html = html.replace(f"<p>{placeholder}</p>", block)
-            html = html.replace(placeholder, block)
+            html = html.replace(f"<p>{placeholder}</p>", block, 1)
+            html = html.replace(placeholder, block, 1)
         return html
 
     def _restore_math_blocks(self, html: str, blocks: list[str]) -> str:
         """还原数学公式块"""
         for i, block in enumerate(blocks):
             escaped_block = html_lib.escape(block, quote=False)
-            html = html.replace(f"MATHBLOCK{i}MATHBLOCK", escaped_block)
+            html = html.replace(f"MATHBLOCK{i}MATHBLOCK", escaped_block, 1)
         return html
 
     def _restore_code_blocks(self, html: str, blocks: list[str]) -> str:
@@ -232,7 +232,7 @@ class MarkdownConverter:
             lang_class = f' class="language-{language}"' if language else ""
             escaped_code = html_lib.escape(code_content)
             code_html = f"<pre><code{lang_class}>{escaped_code}</code></pre>"
-            html = html.replace(f"CODEBLOCK{i}CODEBLOCK", code_html)
+            html = html.replace(f"CODEBLOCK{i}CODEBLOCK", code_html, 1)
         return html
 
     def _sanitize_language(self, language: str) -> str:

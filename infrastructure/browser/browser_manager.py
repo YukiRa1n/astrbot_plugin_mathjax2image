@@ -117,6 +117,7 @@ class BrowserManager:
         self._active_pages_count = 0
         self._lock = asyncio.Lock()
         self._loop = None  # 绑定时的 asyncio 事件循环
+        self._closed = False
         logger.info(
             f"[MathJax2Image] BrowserManager 初始化完成，池页面上限: {max_pages}"
         )
@@ -236,6 +237,8 @@ class BrowserManager:
         Returns:
             (page, has_been_setup) - page 实例和是否已配置过路由和注入脚本的标记
         """
+        if self._closed:
+            raise BrowserError("BrowserManager 已关闭，无法分配页面")
         async with self._lock:
             browser = await self.get_browser()
 
@@ -321,6 +324,17 @@ class BrowserManager:
             self._configured_pages.add(page)
             self._pool.put_nowait(page)
             logger.debug("[MathJax2Image] 页面已完成自净并归还至页面池")
+        except asyncio.CancelledError:
+            # Python 3.11+ CancelledError 是 BaseException，不被 except Exception 捕获。
+            # 取消时必须确保页面被销毁且不归还池中，否则 _active_pages_count 泄漏。
+            logger.warning("[MathJax2Image] 页面归还过程中被取消，强制销毁")
+            async with self._lock:
+                self._active_pages_count = max(0, self._active_pages_count - 1)
+            try:
+                await self._dispose_page(page)
+            except Exception:
+                pass
+            raise
         except Exception as e:
             logger.warning(f"[MathJax2Image] 归还页面至页面池出错，进行销毁: {e}")
             async with self._lock:
@@ -332,11 +346,23 @@ class BrowserManager:
 
     async def close(self) -> None:
         """关闭所有浏览器资源并清空池"""
+        self._closed = True
         async with self._lock:
             while not self._pool.empty():
                 page = self._pool.get_nowait()
                 try:
                     await self._dispose_page(page)
+                except Exception:
+                    pass
+
+            # 关闭所有活跃 context（CDP 共享模式下 browser.close 不负责）
+            if self._browser and not self._owns_browser:
+                try:
+                    for ctx in self._browser.contexts:
+                        try:
+                            await ctx.close()
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 

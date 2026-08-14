@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import os
 import tempfile
 import uuid
 import traceback
@@ -72,16 +73,17 @@ class PageRenderer:
     async def render_to_image(self, html: str, output: Path) -> None:
         """将HTML渲染为图片"""
         # 使用系统临时目录（插件目录可能因 pip 安装到 site-packages 而只读）
+        # 使用 mkstemp 确保文件权限为 0600，避免其他本地用户读取渲染内容
         temp_dir = Path(tempfile.gettempdir()) / "astrbot_mathjax2image"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = temp_dir / f"temp_{uuid.uuid4().hex}.html"
+        fd, tmp_path_str = tempfile.mkstemp(suffix=".html", dir=str(temp_dir))
+        tmp_path = Path(tmp_path_str)
 
         logger.info(f"[MathJax2Image] HTML 临时文件: {tmp_path}")
 
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(html)
-
         try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(html)
             await self._do_render(tmp_path, output)
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -107,24 +109,28 @@ class PageRenderer:
             self._current_page_uris[page] = html_path.resolve().as_uri()
             # 单次渲染整体超时，防止恶意/超长内容长时间占满页面池
             # (goto + MathJax + Mermaid + TikZ 串行最坏约 145s)
-            overall_timeout = (
+            overall_timeout_ms = (
                 self._mathjax_timeout
                 + self._tikz_timeout
                 + self._mermaid_timeout
                 + _GOTO_TIMEOUT_MS
                 + _EXTRA_MARGIN_MS
             )
+            overall_timeout_s = overall_timeout_ms / 1000.0
             try:
                 await asyncio.wait_for(
                     self._load_and_wait(page, html_path),
-                    timeout=overall_timeout,
+                    timeout=overall_timeout_s,
                 )
-                await self._take_screenshot(page, output)
+                await asyncio.wait_for(
+                    self._take_screenshot(page, output),
+                    timeout=self._screenshot_timeout / 1000.0 + _EXTRA_MARGIN_MS / 1000.0,
+                )
             except asyncio.TimeoutError:
                 # 超时取消的页面可能处于中间态，标记异常以便销毁而非干净回收
                 exception_occurred = True
                 raise RenderError(
-                    f"渲染总时长超过限制 {overall_timeout / 1000:.0f}s"
+                    f"渲染总时长超过限制 {overall_timeout_s:.0f}s"
                 )
 
         except Exception as e:
@@ -418,4 +424,7 @@ class PageRenderer:
         await page.screenshot(
             path=str(output), full_page=True, timeout=self._screenshot_timeout
         )
+        # 校验截图非空：WebKit 等引擎可能产生 0 字节截图
+        if not output.exists() or output.stat().st_size == 0:
+            raise RenderError("截图为空或文件未生成")
         logger.info(f"[MathJax2Image] 截图已保存: {output}")

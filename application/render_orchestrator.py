@@ -148,11 +148,13 @@ class RenderOrchestrator:
                     install_command="playwright install-deps chromium",
                 )
 
-            # 2. LaTeX预处理（如果需要）
+            # 2. LaTeX预处理（纯 CPU 密集，放到线程池避免阻塞事件循环）
             if skip_preprocess:
                 processed = content
             else:
-                processed = self._latex_preprocessor.preprocess(content)
+                processed = await asyncio.to_thread(
+                    self._latex_preprocessor.preprocess, content
+                )
                 logger.debug("[MathJax2Image] LaTeX预处理完成")
 
             # 3. Markdown转HTML（同步 CPU 密集，放到线程池避免阻塞事件循环）

@@ -34,7 +34,7 @@ class LLMOrchestrator:
         Returns:
             LLM响应文本，失败时返回None
         """
-        logger.info(f"[MathJax2Image] 开始调用LLM，主题: {user_input[:50]}...")
+        logger.debug(f"[MathJax2Image] 开始调用LLM，输入长度: {len(user_input)}")
 
         try:
             provider = self._get_provider()

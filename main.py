@@ -24,6 +24,15 @@ from .handlers import CommandHandler, LLMToolHandler
 from .utils.security import validate_cdp_url
 
 
+def _safe_bool(value) -> bool:
+    """安全布尔解析：只接受布尔值或明确的 true/false 字符串，其他一律视为 False。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return False
+
+
 @register(
     "astrbot_plugin_mathjax2image",
     "Willixrain",
@@ -53,7 +62,7 @@ class MathJax2ImagePlugin(Star):
 
     def _init_components(self):
         """初始化组件 - 依赖注入"""
-        allow_remote_cdp = bool(self.config.get("allow_remote_cdp", False))
+        allow_remote_cdp = _safe_bool(self.config.get("allow_remote_cdp", False))
         try:
             browser_cdp_url = validate_cdp_url(
                 self.config.get("browser_cdp_url", ""),
@@ -70,19 +79,25 @@ class MathJax2ImagePlugin(Star):
             except (TypeError, ValueError):
                 return default
 
+        # 校验浏览器引擎，非法值回退 chromium
+        raw_engine = str(self.config.get("browser_engine", "chromium") or "chromium").strip().lower()
+        browser_engine = raw_engine if raw_engine in ("chromium", "firefox", "webkit") else "chromium"
+        if browser_engine != raw_engine:
+            logger.warning(f"[MathJax2Image] 无效的 browser_engine '{raw_engine}'，回退为 chromium")
+
         self._render_orchestrator = RenderOrchestrator(
             plugin_dir=self._plugin_dir,
             bg_color=self._bg_color,
-            browser_engine=self.config.get("browser_engine", "chromium"),
+            browser_engine=browser_engine,
             browser_cdp_url=browser_cdp_url,
             browser_max_pages=_cfg_int("browser_max_pages", 2),
-            auto_install_browser=bool(self.config.get("auto_install_browser", False)),
+            auto_install_browser=_safe_bool(self.config.get("auto_install_browser", False)),
             max_screenshot_height=_cfg_int("max_screenshot_height", 16000),
             max_screenshot_pixels=_cfg_int("max_screenshot_pixels", 40_000_000),
             tikz_timeout=_cfg_int("tikz_timeout", 60000),
             mathjax_timeout=_cfg_int("mathjax_timeout", 10000),
             mermaid_timeout=_cfg_int("mermaid_timeout", 15000),
-            fail_on_mathjax_timeout=bool(
+            fail_on_mathjax_timeout=_safe_bool(
                 self.config.get("fail_on_mathjax_timeout", False)
             ),
             max_concurrent_renders=_cfg_int("max_concurrent_renders", 2),

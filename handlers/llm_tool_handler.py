@@ -35,6 +35,8 @@ class LLMToolHandler:
         self._pending_images: dict[str, tuple[Path, float]] = {}
         self._pending_lock = asyncio.Lock()
         self._last_rendered_image: Optional[Path] = None
+        self._closed = False
+        self._active_renders: set[asyncio.Task] = set()
 
     async def handle_render_math(
         self, event: AstrMessageEvent, content: str, auto_send: bool = True
@@ -49,6 +51,9 @@ class LLMToolHandler:
                 为 True 时一步到位(渲染+发送),为 False 时仅保存,
                 需调用 send_image 发送。
         """
+        if getattr(self, '_closed', False):
+            return "插件已卸载，无法渲染"
+
         if not content:
             return "错误：content 参数不能为空"
 
@@ -63,7 +68,13 @@ class LLMToolHandler:
 
             if image_path and image_path.exists():
                 logger.info(f"[MathJax2Image] LLM工具渲染成功: {image_path}")
-                # 保存状态（加锁避免并发竞争，_last_rendered_image 也在锁内写）
+
+                if auto_send:
+                    # 一步到位: 直接用本次渲染的 image_path 发送,
+                    # 不经过共享 pending 槽位,避免并发请求互相覆盖/错发。
+                    return await self._send_image_direct(event, image_path)
+
+                # auto_send=False: 保存到 pending,等待后续 send_image 调用
                 async with self._pending_lock:
                     old_entry = self._pending_images.pop(session_key, None)
                     if old_entry:
@@ -71,10 +82,6 @@ class LLMToolHandler:
                         remove_artifact(old_path)
                     self._pending_images[session_key] = (image_path, time.time())
                     self._last_rendered_image = image_path
-
-                if auto_send:
-                    # 一步到位: 直接发送,减少 LLM 记忆"先渲染再发送"两步链
-                    return await self.handle_send_image(event)
                 return "渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
                 remove_artifact(image_path)
@@ -111,6 +118,9 @@ class LLMToolHandler:
 
         发送最近渲染的图片给用户
         """
+        if getattr(self, '_closed', False):
+            return "插件已卸载，无法发送"
+
         session_key = self._get_session_key(event)
 
         async with self._pending_lock:
@@ -128,9 +138,32 @@ class LLMToolHandler:
             image_name = image_path.name
             image_bytes = await consume_artifact(image_path)
             chain = [Comp.Image.fromBytes(image_bytes)]
-            await self._context.send_message(
+            result = await self._context.send_message(
                 event.unified_msg_origin, MessageChain(chain)
             )
+            if result is False:
+                logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
+                return f"发送图片失败: 平台不可用或已断开"
+            return f"图片已发送: {image_name}"
+        except Exception as e:
+            logger.error(f"[MathJax2Image] 发送图片失败: {e}")
+            return f"发送图片失败: {str(e)}"
+        finally:
+            remove_artifact(image_path)
+            self._last_rendered_image = None
+
+    async def _send_image_direct(self, event: AstrMessageEvent, image_path: Path) -> str:
+        """直接发送指定路径的图片,不经过 pending 槽位(用于 auto_send=True)。"""
+        try:
+            image_name = image_path.name
+            image_bytes = await consume_artifact(image_path)
+            chain = [Comp.Image.fromBytes(image_bytes)]
+            result = await self._context.send_message(
+                event.unified_msg_origin, MessageChain(chain)
+            )
+            if result is False:
+                logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
+                return f"发送图片失败: 平台不可用或已断开"
             return f"图片已发送: {image_name}"
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
@@ -151,7 +184,16 @@ class LLMToolHandler:
             remove_artifact(path)
 
     async def close(self) -> None:
-        """回收所有尚未发送的渲染产物。"""
+        """回收所有尚未发送的渲染产物。先标记关闭，再等待进行中的渲染完成，最后清理。"""
+        self._closed = True
+        # 等待进行中的渲染任务完成（或取消）
+        active = getattr(self, '_active_renders', set())
+        if active:
+            for t in active:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*active, return_exceptions=True)
+            active.clear()
         async with self._pending_lock:
             entries = list(self._pending_images.values())
             self._pending_images.clear()

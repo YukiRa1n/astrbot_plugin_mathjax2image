@@ -217,7 +217,7 @@ def safe_eval_math(expr: str) -> float:
         evaluator = SafeMathEvaluator()
         result = evaluator.visit(tree)
 
-        logger.info(f"[SafeEval] [EXIT] safe_eval_math result={result}")
+        logger.debug(f"[SafeEval] [EXIT] safe_eval_math result={result}")
         return float(result)
 
     except Exception as e:
