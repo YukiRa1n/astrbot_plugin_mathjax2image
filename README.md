@@ -1,24 +1,23 @@
 # MathJax2Image
-> 喜欢的话可以给个 Star 喵，有问题欢迎提 Issue/PR
-> 
-将 Markdown/MathJax 内容渲染为精美图片的 AstrBot 插件。
 
-## 命令
+将 Markdown、LaTeX 公式、TikZ / PGFplots 和 Mermaid 图表渲染为 PNG 的 AstrBot 插件。
 
-- `/math <主题>` - 调用 LLM 生成数学文章，支持 LaTeX 公式渲染
-- `/art <主题>` - 调用 LLM 生成普通文章
-- `/render <内容>` - 直接渲染 Markdown/LaTeX 内容为图片
+[安装](#安装) · [命令](#命令) · [效果展示](#效果展示) · [扩展包](#扩展包) · [配置](#配置) · [性能验证](#性能验证)
 
-**示例：**
-```
-/math 勾股定理的证明
-/art 人工智能的发展历程
-/render $E=mc^2$ 是爱因斯坦的质能方程
-```
+> 喜欢的话可以给个 Star 喵，有问题欢迎提 Issue/PR。
+
+## 特性
+
+- **公式与图表**：支持行内 / 独立公式、化学反应式、物理公式、TikZ 二维与三维图形、Mermaid。
+- **Markdown 排版**：支持标题、列表、表格和带行号的代码块，可配置背景色、正文字号及标题比例。
+- **按需加载与缓存**：只加载内容需要的引擎，复用浏览器资源和近期渲染结果。
+- **并发与内存控制**：合并相同请求，限制排队及重型 TikZ 并发，自动回收空闲页面。
+- **密集绘图优化**：预计算支持的函数采样，保留网格精度，修复深层 SVG 的着色与裁剪。
 
 ## 安装
 
 ### 1. 安装依赖
+
 ```bash
 pip install -r requirements.txt
 python -m playwright install chromium --only-shell
@@ -31,41 +30,38 @@ playwright install-deps chromium
 ```
 
 ### 2. CDN 资源
+
 MathJax 3.2.2、TikZJax beta24 和 Mermaid 10.9.3 使用固定版本 CDN；字体来自阿里云 OSS。首次使用仍需联网，后续在插件进程内复用资源。
 
-## 特性
+## 命令
 
-- **LaTeX 公式渲染** - 支持行内公式 `$...$` 和独立公式 `$$...$$`
-- **TikZ 图形渲染** - 支持 `tikzpicture`、`tikzcd` 等环境，自动检测所需库
-- **Markdown 智能预处理** - 自动修复格式问题，确保正确渲染
-- **代码块行号** - 代码块自动显示行号，长代码自动换行
-- **可配置背景色** - 支持自定义模板背景颜色
-- **按需加载** - 无公式、TikZ 或 Mermaid 时跳过对应引擎
-- **两级缓存** - CDN 静态资源最多 64 MiB / 256 项（1 小时过期）；成功图片默认最多 8 MiB / 64 项（5 分钟过期），重启清空。每次调用仍返回独立文件，可安全发送后删除
-- **并发复用** - 相同内容合并渲染，相同资源合并下载；取消一个等待者不会取消其他请求
-- **紧凑排版** - 无上下装饰线，字体和图片就绪后测量尺寸，短消息按实际高度输出，TikZ 放大参与布局以避免覆盖正文
+- `/math <主题>` - 调用 LLM 生成数学文章，支持 LaTeX 公式渲染
+- `/art <主题>` - 调用 LLM 生成普通文章
+- `/render <内容>` - 直接渲染 Markdown/LaTeX 内容为图片
 
-## 实际渲染示例
+**示例：**
 
-以下 PNG 均由本插件实际生成，点击源码可复制到 `/render`。示例统一使用白底；蓝色曲面是合成函数，神经网络图是结构示意，不代表实验结果。
+```text
+/math 勾股定理的证明
+/art 人工智能的发展历程
+/render $E=mc^2$ 是爱因斯坦的质能方程
+```
 
-| 示例 | 内容与源码 |
+### Mermaid
+
+支持 ```` ```mermaid ```` 代码块；CDN 优先 unpkg，失败回退 jsdelivr。离线环境需自行保证浏览器可访问 Mermaid 脚本。
+
+## 效果展示
+
+以下图片均由当前插件实际渲染。点击示例标题查看完整源码，复制内容后加上 `/render` 即可使用。示例使用白底；损失曲面为合成函数，网络图为结构示意。
+
+| 公式与排版 | TikZ 绘图 |
 | --- | --- |
-| 数学 | [矩阵谱分解、Gaussian 积分、Hessian](examples/math.md) |
-| 化学 | [反应式、平衡、离子与同位素](examples/chemistry.md) |
-| 物理 | [Maxwell 方程、Schrödinger 方程、阻尼振子](examples/physics.md) |
-| 机器学习曲面 | [48 × 48 采样的非凸损失曲面](examples/ml_surface.md) |
-| 参数曲面 | [48 × 24 采样的完整圆环](examples/torus.md) |
-| 深度学习结构 | [4–6–6–3 全连接网络](examples/neural_network.md) |
+| [数学：谱分解、高斯积分与 Hessian](examples/math.md)<br>![数学公式](examples/math.png) | [非凸损失曲面：48 × 48 采样](examples/ml_surface.md)<br>![蓝色非凸损失曲面](examples/ml_surface.png) |
+| [化学：反应、离子与平衡](examples/chemistry.md)<br>![化学公式](examples/chemistry.png) | [参数圆环：48 × 24 采样](examples/torus.md)<br>![参数圆环](examples/torus.png) |
+| [物理：场方程、量子态与阻尼振子](examples/physics.md)<br>![物理公式](examples/physics.png) | [全连接网络：4–6–6–3](examples/neural_network.md)<br>![神经网络结构](examples/neural_network.png) |
 
-![数学公式](examples/math.png)
-![化学公式](examples/chemistry.png)
-![物理公式](examples/physics.png)
-![蓝色非凸损失曲面](examples/ml_surface.png)
-![参数圆环](examples/torus.png)
-![神经网络结构](examples/neural_network.png)
-
-重新生成：`python scripts/render_showcase.py`（需要浏览器及 CDN 网络）。图片来自真实渲染流程，没有用外部绘图工具替换 TikZ。
+重新生成全部示例：`python scripts/render_showcase.py`（需要浏览器及 CDN 网络）。
 
 ## 扩展包
 
@@ -103,9 +99,12 @@ TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，
 
 **可加载宏包（17 个）：** `amsbsy`、`amsfonts`、`amsgen`、`amsmath`、`amsopn`、`amssymb`、`amstext`、`array`、`etoolbox`、`expl3`、`hf-tikz`、`ifthen`、`pgfcalendar`、`pgfplots`、`tikz-3dplot`、`tikz-cd`、`xparse`。
 
-**可加载 TikZ 库（75 个）：**
+<details>
+<summary>展开完整 TikZ 库清单（75 个）</summary>
 
 `3d`、`angles`、`animations`、`arrows`、`arrows.meta`、`automata`、`babel`、`backgrounds`、`bending`、`calc`、`calendar`、`cd`、`chains`、`circuits`、`circuits.ee`、`circuits.ee.IEC`、`circuits.logic`、`circuits.logic.CDH`、`circuits.logic.IEC`、`circuits.logic.US`、`datavisualization`、`datavisualization.3d`、`datavisualization.barcharts`、`datavisualization.formats.functions`、`datavisualization.polar`、`datavisualization.sparklines`、`decorations`、`decorations.footprints`、`decorations.fractals`、`decorations.markings`、`decorations.pathmorphing`、`decorations.pathreplacing`、`decorations.shapes`、`decorations.text`、`er`、`fadings`、`fit`、`fixedpointarithmetic`、`folding`、`fpu`、`graphs`、`graphs.standard`、`intersections`、`lindenmayersystems`、`math`、`matrix`、`mindmap`、`patterns`、`patterns.meta`、`perspective`、`petri`、`plothandlers`、`plotmarks`、`positioning`、`quotes`、`rdf`、`scopes`、`shadings`、`shadows`、`shapes`、`shapes.arrows`、`shapes.callouts`、`shapes.gates.logic.IEC`、`shapes.gates.logic.US`、`shapes.geometric`、`shapes.misc`、`shapes.multipart`、`shapes.symbols`、`snakes`、`spy`、`svg.path`、`through`、`trees`、`turtle`、`views`。
+
+</details>
 
 ### 支持边界
 
@@ -117,7 +116,21 @@ TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，
 - 圆环使用 `compat=1.16`、`axis equal image` 和显式视角保持几何比例；网格线用于呈现完整表面。不要用独立的 x/y/z 投影向量随意替代三维视角。原生计算与预计算已对照，采样网格完整保留。
 - 密集 PGFplots 输出可能包含超过 512 层的 SVG 分组。插件将 TikZJax 的 SVG 插入改为 XML 解析，避免 HTML 解析器压平深层分组后丢失颜色、线条和变换继承。再合并冗余的颜色与坐标变换分组，避免浏览器因过深嵌套崩溃；保留裁剪、透明度等有独立语义的分组，不减少采样点。
 
-## 字体与标题比例
+## 配置
+
+在 AstrBot 插件配置页修改，保存后重载插件生效。
+
+### 常用设置
+
+| 参数 | 作用 |
+| --- | --- |
+| `background_color` | 背景色，默认 `#FDFBF0` |
+| `math_system_prompt` / `article_system_prompt` | `/math` 和 `/art` 的生成提示词 |
+| `tikz_timeout` / `mathjax_timeout` / `mermaid_timeout` | 各引擎渲染超时，单位毫秒 |
+| `fail_on_mathjax_timeout` | MathJax 超时是否拒绝出图 |
+| `max_screenshot_height` / `max_screenshot_pixels` | 截图尺寸上限 |
+
+### 字体与标题比例
 
 在插件配置的 `typography` 分组内设置以下字段。标题字号等于正文大小乘以对应比例：
 
@@ -130,6 +143,8 @@ TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，
 | `line_height` | 1.7 | 1.2–2.2 |
 
 例如正文 32 px、一级标题比例 1.5，对应标题 48 px。四至六级标题为正文大小，使用字重区分。此配置控制 Markdown 排版；TikZ 图内文字通过 TeX 的 `font`、`scale` 等选项调整。
+
+绘图采样与 TikZ 并发见[密集曲线与三维曲面性能](#密集曲线与三维曲面性能)；浏览器选择、页面池、缓存和排队参数见 [Playwright 引擎定制](#playwright-引擎定制)。
 
 ## 密集曲线与三维曲面性能
 
@@ -164,6 +179,8 @@ python scripts/benchmark_heavy.py --output ./heavy-output --cases dense-curve su
 
 ## Playwright 引擎定制
 
+通过 `browser_engine` 选择 `chromium`、`firefox` 或 `webkit`，默认 `chromium`。
+
 默认使用 Playwright 自带的 Chromium Headless Shell（Playwright >= 1.49），只需安装精简无头浏览器，不需要完整 Chrome、Firefox 或 WebKit。插件直接启动匹配版本的 Shell，不额外启动驱动检查完整浏览器路径。保留 Playwright 官方启动参数，不再重复覆盖 Chromium 的默认开关。参见 [官方 Headless Shell 文档](https://playwright.dev/python/docs/browsers#chromium-headless-shell)。
 
 一个常驻浏览器搭配隔离页面池：每个渲染任务独占页面和 BrowserContext，任务结束后默认最多保留 1 个空闲页面，多余页面立即关闭；空闲 30 秒后回收剩余页面，释放对应渲染进程。静态资源缓存持有独立 APIRequestContext 中的响应，命中时直接向浏览器复用响应，避免反复通过 Python/Node 管道传输大字体；缓存淘汰时释放对应响应。页面销毁不会清掉其他页面使用的资源缓存。
@@ -185,82 +202,7 @@ python scripts/benchmark_heavy.py --output ./heavy-output --cases dense-curve su
 
 2 路适合兼顾吞吐和内存；可用下方压测工具对比 4 路。只增大排队数不会提高渲染吞吐。无需为每条消息启动浏览器，也无需为每个任务新建 Python 进程。已有 `browser_cdp_url` 仍可连接共享浏览器；当前优化不依赖外部浏览器服务。
 
-## 性能验证
-
-```bash
-python scripts/benchmark_rendering.py --output ./benchmark-output --runs 5 --unique
-python scripts/benchmark_rendering.py --output ./benchmark-cached --runs 5
-```
-
-并发吞吐和内存测试（额外需要 `psutil`、`Pillow`）：
-
-```bash
-python scripts/benchmark_concurrency.py --output ./concurrency-output --jobs 12 --concurrency 1 2 4
-```
-
-空闲内存和唤醒延迟测试：
-
-```bash
-python scripts/benchmark_memory.py --output ./memory-output
-```
-
-对比保留两个页面与回收空闲页面的策略；测试将回收时间缩短到 1 秒，正式配置默认 30 秒。记录驱动和浏览器 RSS、唤醒耗时及唤醒时新增下载数。
-
-每个页面先预热，正式测试使用不同内容绕过图片缓存，检查公式与页面内容隔离，输出吞吐、含排队的延迟和驱动/浏览器进程 RSS 合计（共享内存可能重复计数，不是独占内存）。
-
-第一条测不同 HTML 在页面池和资源缓存热启动后的耗时，第二条测相同内容的图片缓存。支持 `--plugin-dir` 指定另一份插件代码作对照。输出包含耗时、图片尺寸和公式错误节点；首次联网下载与稳定热渲染应分开比较。
-
-## 效果展示
-
-### TikZ 自然变换图
-
-![TikZ 示例](examples/tikz_example.png)
-
-**TikZ 示例代码：**
-```latex
-/render \begin{tikzpicture}[scale=1.8]
-  \draw[gray, rounded corners] (-0.8,-1.2) rectangle (0.8,1.2);
-  \node at (0,1.5) {$\mathcal{C}$};
-  \node (X) at (0,0.5) {$X$};
-  \node (Y) at (0,-0.5) {$Y$};
-  \draw[->] (X) -- (Y) node[midway,left] {$f$};
-
-  \draw[gray, rounded corners] (3,-1.5) rectangle (6,1.5);
-  \node at (4.5,1.8) {$\mathcal{D}$};
-
-  \node (FX) at (3.5,0.7) {$F(X)$};
-  \node (FY) at (3.5,-0.7) {$F(Y)$};
-
-  \node (GX) at (5.5,0.7) {$G(X)$};
-  \node (GY) at (5.5,-0.7) {$G(Y)$};
-
-  \draw[->] (FX) -- (FY) node[midway,left] {$F(f)$};
-  \draw[->] (GX) -- (GY) node[midway,right] {$G(f)$};
-  \draw[->, blue, dashed] (FX) -- (GX) node[midway,above] {$\alpha_X$};
-  \draw[->, blue, dashed] (FY) -- (GY) node[midway,below] {$\alpha_Y$};
-
-  \draw[->, red, bend left=20] (0.9,0.3) to node[above] {$F$} (3.4,0.5);
-  \draw[->, orange, bend right=20] (0.9,-0.3) to node[below] {$G$} (3.4,-0.5);
-\end{tikzpicture}
-```
-
-## 配置
-
-在 AstrBot 插件配置中可设置：
-
-- `background_color` - 模板背景颜色（默认 `#FDFBF0`）
-- `math_system_prompt` - 数学文章提示词
-- `article_system_prompt` - 普通文章提示词
-- `browser_engine` - `chromium`、`firefox` 或 `webkit`，默认 Chromium
-- `browser_cdp_url` - 可选共享 Chromium CDP（默认仅本机）
-- `allow_remote_cdp` - 是否允许远程 CDP（默认关闭）
-- `browser_max_pages` / `max_concurrent_renders` - 并发控制，默认 2
-- `max_queued_renders` / `render_queue_timeout` - 排队容量和等待时间，默认 8 / 30000 毫秒
-- `tikz_timeout` / `mathjax_timeout` / `mermaid_timeout` - 各引擎超时（毫秒）
-- `fail_on_mathjax_timeout` - MathJax 超时是否拒绝出图
-- `max_screenshot_height` / `max_screenshot_pixels` - 截图尺寸护栏
-
-### 浏览器选择与基准
+### 其他浏览器与共享实例
 
 Chromium 是默认推荐。Firefox/WebKit 使用前需执行：
 
@@ -274,11 +216,36 @@ playwright install firefox webkit
 python scripts/benchmark_browsers.py --runs 5
 ```
 
-若多个插件需要截图，建议连接同一个外部 Chromium，并将 `browser_cdp_url` 设置为 `http://127.0.0.1:9222`。CDP 端口不要暴露到公网；非本机地址需显式开启 `allow_remote_cdp`。
+若多个插件需要截图，建议连接同一个外部 Chromium，并将 `browser_cdp_url` 设置为 `http://127.0.0.1:9222`。CDP 端口不要暴露到公网；`allow_remote_cdp` 默认关闭，非本机地址需显式开启。
 
-### Mermaid
+## 性能验证
 
-支持 ```` ```mermaid ```` 代码块；CDN 优先 unpkg，失败回退 jsdelivr。离线环境需自行保证浏览器可访问 Mermaid 脚本。
+以下脚本用于本机对照；并发和内存测试额外需要 `psutil`、`Pillow`。首次联网下载与资源预热后的稳定渲染应分开比较。
+
+### 页面复用与图片缓存
+
+```bash
+python scripts/benchmark_rendering.py --output ./benchmark-output --runs 5 --unique
+python scripts/benchmark_rendering.py --output ./benchmark-cached --runs 5
+```
+
+第一条使用不同内容测页面池和资源缓存的热启动耗时，第二条重复相同内容测图片结果缓存。输出包含耗时、图片尺寸和公式错误节点；支持 `--plugin-dir` 指定另一份插件代码作对照。
+
+### 并发吞吐
+
+```bash
+python scripts/benchmark_concurrency.py --output ./concurrency-output --jobs 12 --concurrency 1 2 4
+```
+
+页面预热后使用不同内容绕过图片缓存，检查公式与页面内容隔离，记录吞吐、含排队的延迟，以及驱动 / 浏览器进程 RSS 合计。RSS 可能重复计入共享内存，不代表独占内存。
+
+### 空闲内存与唤醒延迟
+
+```bash
+python scripts/benchmark_memory.py --output ./memory-output
+```
+
+对比保留两个页面与回收空闲页面的策略，记录 RSS、唤醒耗时及新增下载数。测试将回收时间缩短到 1 秒，正式配置默认 30 秒。
 
 ## 支持
 
