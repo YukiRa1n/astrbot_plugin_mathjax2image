@@ -4,13 +4,17 @@
 """
 
 import asyncio
+import hashlib
 import os
 import tempfile
-import uuid
+import time
 import traceback
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+from ...domain.errors import RenderError
 
 _GOTO_TIMEOUT_MS = 60_000
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
@@ -21,7 +25,6 @@ except ModuleNotFoundError:  # pragma: no cover - standalone test support
     import logging
 
     logger = logging.getLogger("astrbot")
-from ...domain.errors import RenderError
 
 if TYPE_CHECKING:
     from .browser_manager import BrowserManager
@@ -43,7 +46,7 @@ class PageRenderer:
         browser_manager: "BrowserManager",
         plugin_dir: Path,
         viewport_width: int = 1150,
-        viewport_height: int = 2000,
+        viewport_height: int = 1,
         mathjax_timeout: int = 10000,
         tikz_timeout: int = 60000,
         mermaid_timeout: int = 15000,
@@ -51,6 +54,9 @@ class PageRenderer:
         max_screenshot_height: int = 16000,
         max_screenshot_pixels: int = 40_000_000,
         fail_on_mathjax_timeout: bool = False,
+        resource_cache_max_mb: int = 64,
+        image_cache_max_mb: int = 8,
+        max_concurrent_tikz: int = 1,
     ):
         self._browser_manager = browser_manager
         self._plugin_dir = plugin_dir
@@ -67,28 +73,102 @@ class PageRenderer:
         # 当前渲染页面的 file URI，按 page 隔离（网络策略只放行各自页面自身资源）
         self._current_page_uris: dict = {}
         # 进程级 CDN 资源缓存(URL → bytes),避免跨页重复下载 MathJax/TikZJax
-        self._cdn_cache: dict[str, bytes] = {}
-        self._cdn_content_types: dict[str, str] = {}
+        self._cdn_cache = OrderedDict()
+        self._cdn_lock = asyncio.Lock()
+        self._cdn_context = None
+        self._cdn_cache_bytes = 0
+        self._cdn_cache_limit = max(0, int(resource_cache_max_mb)) * 1024 * 1024
+        self._cdn_pending: dict[str, asyncio.Future] = {}
+        self._image_cache = OrderedDict()
+        self._image_cache_bytes = 0
+        self._image_cache_limit = max(0, int(image_cache_max_mb)) * 1024 * 1024
+        self._image_pending: dict[bytes, asyncio.Future] = {}
+        self._tikz_slots = asyncio.Semaphore(max(1, int(max_concurrent_tikz)))
 
     async def render_to_image(self, html: str, output: Path) -> None:
-        """将HTML渲染为图片"""
-        # 使用系统临时目录（插件目录可能因 pip 安装到 site-packages 而只读）
-        # 使用 mkstemp 确保文件权限为 0600，避免其他本地用户读取渲染内容
-        temp_dir = Path(tempfile.gettempdir()) / "astrbot_mathjax2image"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path_str = tempfile.mkstemp(suffix=".html", dir=str(temp_dir))
-        tmp_path = Path(tmp_path_str)
+        """Render HTML, reusing recent successful images and concurrent work.
 
-        logger.info(f"[MathJax2Image] HTML 临时文件: {tmp_path}")
+        Args:
+            html: Complete HTML document.
+            output: Independent output file owned by the caller.
+        """
+        key = hashlib.sha256(html.encode("utf-8")).digest()
+        while True:
+            cached = self._image_cache.pop(key, None)
+            if cached is not None:
+                if time.monotonic() - cached[1] < 300:
+                    self._image_cache[key] = cached
+                    await asyncio.to_thread(output.write_bytes, cached[0])
+                    return
+                self._image_cache_bytes -= len(cached[0])
+            pending = self._image_pending.get(key)
+            if pending is None:
+                break
+            # A cancelled waiter must not cancel another caller's rendering.
+            body = await asyncio.shield(pending)
+            if body is not None:
+                await asyncio.to_thread(output.write_bytes, body)
+                return
 
+        pending = asyncio.get_running_loop().create_future()
+        self._image_pending[key] = pending
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(html)
-            await self._do_render(tmp_path, output)
+            complete = await self._render_uncached(html, output)
+            if complete and output.stat().st_size <= self._image_cache_limit:
+                body = await asyncio.to_thread(output.read_bytes)
+                while self._image_cache and (
+                    self._image_cache_bytes + len(body) > self._image_cache_limit
+                    or len(self._image_cache) >= 64
+                ):
+                    _, evicted = self._image_cache.popitem(last=False)
+                    self._image_cache_bytes -= len(evicted[0])
+                self._image_cache[key] = (body, time.monotonic())
+                self._image_cache_bytes += len(body)
+                pending.set_result(body)
         finally:
-            tmp_path.unlink(missing_ok=True)
+            if not pending.done():
+                pending.set_result(None)
+            self._image_pending.pop(key, None)
 
-    async def _do_render(self, html_path: Path, output: Path) -> None:
+    async def _render_uncached(self, html: str, output: Path) -> bool:
+        """Render a private temporary HTML file and remove it after use.
+
+        Args:
+            html: Complete HTML document.
+            output: Destination PNG path.
+
+        Returns:
+            Whether rendering completed without a timeout fallback.
+        """
+        heavy = 'type="text/tikz"' in html
+        if heavy:
+            try:
+                await asyncio.wait_for(
+                    self._tikz_slots.acquire(), timeout=self._tikz_timeout / 1000.0
+                )
+            except asyncio.TimeoutError as exc:
+                raise RenderError("TikZ 编译队列等待超时，请稍后重试") from exc
+        try:
+            # 使用系统临时目录（插件目录可能因 pip 安装到 site-packages 而只读）
+            # 使用 mkstemp 确保文件权限为 0600，避免其他本地用户读取渲染内容
+            temp_dir = Path(tempfile.gettempdir()) / "astrbot_mathjax2image"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path_str = tempfile.mkstemp(suffix=".html", dir=str(temp_dir))
+            tmp_path = Path(tmp_path_str)
+
+            logger.info(f"[MathJax2Image] HTML 临时文件: {tmp_path}")
+
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(html)
+                return await self._do_render(tmp_path, output)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        finally:
+            if heavy:
+                self._tikz_slots.release()
+
+    async def _do_render(self, html_path: Path, output: Path) -> bool:
         """执行实际的渲染操作"""
         inject_script = self._get_inject_script()
         page = None
@@ -118,21 +198,24 @@ class PageRenderer:
             )
             overall_timeout_s = overall_timeout_ms / 1000.0
             try:
-                await asyncio.wait_for(
+                complete = await asyncio.wait_for(
                     self._load_and_wait(page, html_path),
                     timeout=overall_timeout_s,
                 )
                 await asyncio.wait_for(
                     self._take_screenshot(page, output),
-                    timeout=self._screenshot_timeout / 1000.0 + _EXTRA_MARGIN_MS / 1000.0,
+                    timeout=self._screenshot_timeout / 1000.0
+                    + _EXTRA_MARGIN_MS / 1000.0,
                 )
+                return complete
             except asyncio.TimeoutError:
                 # 超时取消的页面可能处于中间态，标记异常以便销毁而非干净回收
                 exception_occurred = True
-                raise RenderError(
-                    f"渲染总时长超过限制 {overall_timeout_s:.0f}s"
-                )
+                raise RenderError(f"渲染总时长超过限制 {overall_timeout_s:.0f}s")
 
+        except asyncio.CancelledError:
+            exception_occurred = True
+            raise
         except Exception as e:
             exception_occurred = True
             logger.error(f"[MathJax2Image] 渲染失败: {type(e).__name__}: {e}")
@@ -155,6 +238,76 @@ class PageRenderer:
         (function() {
             window.__tikzFinished = 0;
             window.__tikzFailed = 0;
+            // TikZJax inserts SVG with the HTML fragment parser, whose depth
+            // limit flattens dense PGFplots groups and corrupts inherited paint.
+            // Parse SVG as XML so every transform and color scope survives.
+            const parseFragment = Range.prototype.createContextualFragment;
+            Range.prototype.createContextualFragment = function(markup) {
+                if (typeof markup === 'string') {
+                    const source = markup.trimStart();
+                    if ((source.startsWith('<svg') || source.startsWith('<?xml')) &&
+                        source.includes('<g')) {
+                        const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
+                        if (parsed.documentElement.localName === 'svg' &&
+                            !parsed.querySelector('parsererror')) {
+                            const inherited = new Set([
+                                'fill', 'fill-rule', 'fill-opacity', 'stroke',
+                                'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+                                'stroke-miterlimit', 'stroke-dasharray',
+                                'stroke-dashoffset', 'stroke-opacity', 'color'
+                            ]);
+                            // Deep XML is valid, but also exceeds Chromium's
+                            // layout stack. Collapse only presentation scopes;
+                            // retain IDs, clips, opacity, styles and other groups.
+                            const pending = Array.from(parsed.documentElement.children);
+                            while (pending.length) {
+                                const node = pending.pop();
+                                const children = Array.from(node.children);
+                                if (node.localName === 'g' &&
+                                    Array.from(node.attributes).every(attribute =>
+                                        inherited.has(attribute.name) || attribute.name === 'transform')) {
+                                    const matrix = node.transform.baseVal.consolidate()?.matrix;
+                                    for (const child of children) {
+                                        for (const attribute of node.attributes) {
+                                            if (inherited.has(attribute.name) && !child.hasAttribute(attribute.name)) {
+                                                child.setAttribute(attribute.name, attribute.value);
+                                            }
+                                        }
+                                        // Definition coordinates are resolved at
+                                        // their use site, not at this ancestor.
+                                        if (matrix && child.transform &&
+                                            !['clipPath', 'mask', 'pattern', 'marker',
+                                              'symbol', 'defs'].includes(child.localName)) {
+                                            const local = child.transform.baseVal.consolidate()?.matrix;
+                                            const combined = local ? matrix.multiply(local) : matrix;
+                                            child.setAttribute('transform', 'matrix(' +
+                                                [combined.a, combined.b, combined.c, combined.d,
+                                                 combined.e, combined.f].join(' ') + ')');
+                                        }
+                                    }
+                                    const parent = node.parentNode;
+                                    while (node.firstChild) parent.insertBefore(node.firstChild, node);
+                                    node.remove();
+                                }
+                                pending.push(...children);
+                            }
+                            const depths = [[parsed.documentElement, 0]];
+                            while (depths.length) {
+                                const [node, depth] = depths.pop();
+                                if (depth > 256) {
+                                    window.__tikzFailed++;
+                                    throw new Error('SVG contains too many non-collapsible nested groups');
+                                }
+                                for (const child of node.children) depths.push([child, depth + 1]);
+                            }
+                            const fragment = document.createDocumentFragment();
+                            fragment.appendChild(document.importNode(parsed.documentElement, true));
+                            return fragment;
+                        }
+                    }
+                }
+                return parseFragment.call(this, markup);
+            };
             document.addEventListener('tikzjax-load-finished', function() {
                 window.__tikzFinished++;
             });
@@ -238,7 +391,30 @@ class PageRenderer:
             if parsed.scheme in {"about", "data", "blob"}:
                 await route.continue_()
                 return
-            if parsed.scheme == "https" and parsed.hostname in self._ALLOWED_REMOTE_HOSTS:
+            if (
+                parsed.scheme == "https"
+                and parsed.hostname in self._ALLOWED_REMOTE_HOSTS
+            ):
+                # Routing disables Chromium's HTTP cache. Cache only static GET
+                # assets, with a byte budget and TTL, across isolated pages.
+                cacheable = (
+                    route.request.method == "GET"
+                    and not parsed.query
+                    and parsed.path.endswith(
+                        (
+                            ".js",
+                            ".css",
+                            ".woff",
+                            ".woff2",
+                            ".ttf",
+                            ".otf",
+                            ".wasm",
+                            ".gz",
+                        )
+                    )
+                )
+                if cacheable and await self._serve_cached_resource(route):
+                    return
                 await route.continue_()
                 return
             logger.warning(
@@ -249,6 +425,92 @@ class PageRenderer:
 
         await page.route("**/*", handle_request)
 
+    async def _serve_cached_resource(self, route) -> bool:
+        """Fulfill a static request from a bounded driver-side response cache.
+
+        Args:
+            route: An already allowlisted static GET request.
+
+        Returns:
+            Whether the request was fulfilled from a fetched or cached response.
+        """
+        context = self._browser_manager.request_context
+        if context is None or self._cdn_cache_limit == 0:
+            return False
+        url = route.request.url
+        async with self._cdn_lock:
+            if self._cdn_context is not context:
+                # BrowserManager disposes the old request context on reconnect.
+                self._cdn_cache.clear()
+                self._cdn_cache_bytes = 0
+                self._cdn_context = context
+            cached = self._cdn_cache.pop(url, None)
+            if cached is not None:
+                if time.monotonic() - cached[2] < 3600:
+                    self._cdn_cache[url] = cached
+                    await route.fulfill(response=cached[0], headers=cached[1])
+                    return True
+                self._cdn_cache_bytes -= cached[3]
+                await cached[0].dispose()
+            pending = self._cdn_pending.get(url)
+            owner = pending is None
+            if owner:
+                pending = asyncio.get_running_loop().create_future()
+                self._cdn_pending[url] = pending
+        if not owner:
+            await asyncio.shield(pending)
+            async with self._cdn_lock:
+                cached = self._cdn_cache.get(url)
+                if cached is not None:
+                    self._cdn_cache.move_to_end(url)
+                    await route.fulfill(response=cached[0], headers=cached[1])
+                    return True
+            return False
+
+        response = None
+        retained = False
+        try:
+            # No redirects here: the browser re-applies the network allowlist.
+            response = await context.get(url, timeout=15000, max_redirects=0)
+            if response.status != 200:
+                return False
+            # Inspect the decoded size once. Warm hits send only a response ID
+            # through the Python/Node pipe, instead of base64-encoding large fonts.
+            size = len(await response.body())
+            headers = {
+                "content-type": response.headers.get(
+                    "content-type", "application/octet-stream"
+                ),
+                "access-control-allow-origin": "*",
+            }
+            async with self._cdn_lock:
+                if context is not self._browser_manager.request_context:
+                    return False
+                if size <= min(self._cdn_cache_limit, 32 * 1024 * 1024):
+                    while self._cdn_cache and (
+                        self._cdn_cache_bytes + size > self._cdn_cache_limit
+                        or len(self._cdn_cache) >= 256
+                    ):
+                        _, evicted = self._cdn_cache.popitem(last=False)
+                        self._cdn_cache_bytes -= evicted[3]
+                        await evicted[0].dispose()
+                    self._cdn_cache[url] = (response, headers, time.monotonic(), size)
+                    self._cdn_cache_bytes += size
+                    retained = True
+                # Keep the lock until fulfillment completes so an eviction can
+                # never dispose a response still being delivered to another page.
+                await route.fulfill(response=response, headers=headers)
+                return True
+        except Exception as exc:
+            logger.debug("[MathJax2Image] Asset response cache failed: %s", exc)
+            return False
+        finally:
+            if not pending.done():
+                pending.set_result(None)
+            self._cdn_pending.pop(url, None)
+            if response is not None and not retained:
+                await response.dispose()
+
     def _setup_logging(self, page) -> None:
         """设置页面日志"""
         page.on(
@@ -256,7 +518,7 @@ class PageRenderer:
         )
         page.on("pageerror", lambda err: logger.error(f"[Browser Error] {err}"))
 
-    async def _load_and_wait(self, page, html_path: Path) -> None:
+    async def _load_and_wait(self, page, html_path: Path) -> bool:
         """加载页面并等待渲染完成"""
         await page.goto(
             html_path.resolve().as_uri(),
@@ -268,12 +530,14 @@ class PageRenderer:
         try:
             has_math = await page.evaluate(
                 """() => {
+                    if (typeof window.mathJaxRequired === 'boolean') return window.mathJaxRequired;
                     const text = document.body.innerHTML;
                     return /\\$\\$[\\s\\S]*?\\$\\$|\\$[^\\$\\n]+\\$|\\\\\\([\\s\\S]*?\\\\\\)|\\\\\\[[\\s\\S]*?\\\\\\]/.test(text);
                 }"""
             )
         except Exception:
             has_math = True
+        complete = True
         if has_math:
             try:
                 await page.wait_for_function(
@@ -282,6 +546,7 @@ class PageRenderer:
                 )
                 logger.debug("[MathJax2Image] MathJax 渲染完成")
             except Exception as e:
+                complete = False
                 logger.warning(f"[MathJax2Image] MathJax 等待超时: {e}")
                 if self._fail_on_mathjax_timeout:
                     raise RenderError(f"MathJax 渲染超时: {e}")
@@ -291,6 +556,7 @@ class PageRenderer:
 
         # 检查TikZ
         await self._wait_for_tikz(page)
+        return complete
 
     async def _wait_for_mermaid(self, page) -> None:
         """等待 Mermaid 渲染完成（无图则跳过）"""
@@ -306,12 +572,15 @@ class PageRenderer:
         logger.info(f"[MathJax2Image] 检测到 {count} 个 Mermaid 图")
         try:
             await page.wait_for_function(
-                "() => window.mermaidReady === true",
+                "() => window.mermaidReady === true || !!window.mermaidError",
                 timeout=self._mermaid_timeout,
             )
-            logger.debug("[MathJax2Image] Mermaid 渲染完成")
+            error = await page.evaluate("() => window.mermaidError || null")
+            if error:
+                raise RenderError(f"Mermaid rendering failed: {error}")
+            logger.debug("[MathJax2Image] Mermaid rendering complete")
         except Exception as e:
-            logger.warning(f"[MathJax2Image] Mermaid 等待超时: {e}")
+            raise RenderError(f"Mermaid rendering failed or timed out: {e}") from e
 
     async def _wait_for_tikz(self, page) -> None:
         """等待TikZ渲染完成。
@@ -333,6 +602,7 @@ class PageRenderer:
         try:
             result = await page.wait_for_function(
                 """(count) => {
+                    if (window.__tikzFailed) return {failed: window.__tikzFailed};
                     // 编译失败检测: TikZJax 插入 invalid 图片(不依赖注入状态,
                     // 直接查询 DOM,更可靠)
                     const bad = document.querySelectorAll('.tikz-diagram img[src*="invalid.site"], .tikz-diagram img[src*="img-not-found"]');
@@ -352,8 +622,8 @@ class PageRenderer:
                         const inner = svg.innerHTML;
                         // spinner 特征: 半透明黑色圆角矩形
                         if (inner.includes('fill-opacity="0.2"') && inner.includes('<animate')) return null;
-                        // 必须有实际绘制内容(g 元素)
-                        if (!inner.includes('<g ')) return null;
+                        // Collapsed SVG paint scopes may leave no group nodes.
+                        if (!svg.querySelector('path,line,text,circle,ellipse,rect,polygon,polyline,use')) return null;
                     }
                     let totalElements = 0;
                     for (const container of containers) {
@@ -369,9 +639,7 @@ class PageRenderer:
             )
             tikz_result = await result.json_value()
             if tikz_result and tikz_result.get("failed"):
-                raise RenderError(
-                    f"TikZ渲染失败：{tikz_result['failed']} 个图编译错误"
-                )
+                raise RenderError(f"TikZ渲染失败：{tikz_result['failed']} 个图编译错误")
             if tikz_result and tikz_result.get("success"):
                 logger.info(
                     "[MathJax2Image] TikZ渲染完成，"
@@ -392,6 +660,24 @@ class PageRenderer:
 
     async def _take_screenshot(self, page, output: Path) -> None:
         """截取页面截图"""
+        # Measure only after fonts and images settle. A small viewport removes
+        # the initial 2000px minimum from short documents without changing width.
+        if page.viewport_size != {"width": self._viewport_width, "height": 1}:
+            await page.set_viewport_size({"width": self._viewport_width, "height": 1})
+        await page.evaluate("""async () => {
+            // Change layout dimensions instead of a transform that overlaps text.
+            for (const svg of document.querySelectorAll('.tikz-diagram svg')) {
+                const rect = svg.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    const factor = Math.min(2, svg.parentElement.clientWidth / rect.width);
+                    svg.style.width = (rect.width * factor) + 'px';
+                    svg.style.height = (rect.height * factor) + 'px';
+                }
+            }
+            await document.fonts.ready;
+            await Promise.all(Array.from(document.images, image =>
+                image.decode().catch(() => {})));
+        }""")
         metrics = await page.evaluate(
             """() => ({
                 width: Math.max(document.body.scrollWidth, document.documentElement.scrollWidth),
@@ -411,16 +697,7 @@ class PageRenderer:
                 f"截图像素 {pixels} 超过限制 {self._max_screenshot_pixels}"
             )
 
-        await page.set_viewport_size(
-            {"width": self._viewport_width, "height": height}
-        )
-        await page.evaluate(
-            "() => document.fonts ? document.fonts.ready : Promise.resolve()"
-        )
-
-        logger.info(
-            f"[MathJax2Image] 截图中，尺寸: {width}x{height}px，像素: {pixels}"
-        )
+        logger.info(f"[MathJax2Image] 截图中，尺寸: {width}x{height}px，像素: {pixels}")
         await page.screenshot(
             path=str(output), full_page=True, timeout=self._screenshot_timeout
         )

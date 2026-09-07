@@ -149,6 +149,8 @@ async def test_configured_browser_engine_smoke(tmp_path, engine):
             pytest.skip(f"Playwright {engine} is not installed")
         raise
     except RenderError as exc:
+        if f"Playwright {engine} is unavailable" in str(exc):
+            pytest.skip(f"Playwright {engine} is not installed")
         if "截图为空" in str(exc) or "文件未生成" in str(exc):
             pytest.skip(f"Playwright {engine} screenshot is unreliable on this platform")
         raise

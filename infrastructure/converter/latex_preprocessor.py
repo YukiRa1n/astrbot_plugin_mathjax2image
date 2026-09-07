@@ -7,10 +7,10 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .tikz_converter import TikzConverter
     from .list_converter import ListConverter
-    from .table_converter import TableConverter
     from .mermaid_converter import MermaidConverter
+    from .table_converter import TableConverter
+    from .tikz_converter import TikzConverter
 
 
 class LatexPreprocessor:
@@ -53,13 +53,23 @@ class LatexPreprocessor:
 
     def _convert_text_commands(self, text: str) -> str:
         """将LaTeX文本命令转换为Markdown格式"""
-        # \\textbf{...} -> **...**
-        text = re.sub(r"\\textbf\{([\s\S]*?)\}", lambda m: f"**{m.group(1)}**", text)
-        # \\textit{...} -> *...*
-        text = re.sub(r"\\textit\{([\s\S]*?)\}", lambda m: f"*{m.group(1)}*", text)
-        # \\emph{...} -> *...*
-        text = re.sub(r"\\emph\{([\s\S]*?)\}", lambda m: f"*{m.group(1)}*", text)
-        return text
+        pattern = (
+            r"(?P<protected>```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`"
+            r"|\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}"
+            r"|\\begin\{tikzcd\}[\s\S]*?\\end\{tikzcd\}"
+            r"|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)"
+            r"|\$\$[\s\S]*?\$\$|\$[^$\n]*\$"
+            r"|\\begin\{(?P<env>align\*?|equation\*?|gather\*?)\}[\s\S]*?\\end\{(?P=env)\})"
+            r"|\\(?P<command>textbf|textit|emph)\{(?P<body>[^{}]*)\}"
+        )
+
+        def replace(match):
+            if match.group("protected") is not None:
+                return match.group(0)
+            marker = "**" if match.group("command") == "textbf" else "*"
+            return marker + match.group("body") + marker
+
+        return re.sub(pattern, replace, text)
 
     def _fix_set_notation(self, text: str) -> str:
         """修复集合表示法 {... \\mid ...}

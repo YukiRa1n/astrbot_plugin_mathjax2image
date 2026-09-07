@@ -8,6 +8,7 @@ build/
 
 # 测试输出
 test_*.py
+!tests/test_*.py
 test_*.png
 *.log
 

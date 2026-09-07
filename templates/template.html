@@ -42,11 +42,13 @@
 
     <!-- MathJax 配置 -->
     <script id="MathJax-config">
+        window.mathJaxRequired = {{MATH_REQUIRED}};
+        const requestedPackages = {{MATH_PACKAGES}};
         window.MathJax = {
             tex: {
                 inlineMath: [['$', '$'], ['\\(', '\\)']],
                 displayMath: [['$$', '$$'], ['\\[', '\\]']],
-                packages: {'[+]': ['ams', 'newcommand', 'boldsymbol', 'mathtools']},
+                packages: {'[+]': ['ams', 'newcommand', 'boldsymbol', 'mathtools', 'extpfeil', ...requestedPackages]},
                 macros: {
                     // 群论/代数
                     Stab: '\\operatorname{Stab}',
@@ -163,7 +165,7 @@
                 }
             },
             loader: {
-                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/extpfeil', '[tex]/boldsymbol', '[tex]/mathtools'],
+                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/extpfeil', '[tex]/boldsymbol', '[tex]/mathtools', ...requestedPackages.map(name => '[tex]/' + name)],
                 paths: {mathjax: 'https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5'}
             },
             chtml: {
@@ -180,12 +182,25 @@
                 }
             }
         };
+        if (requestedPackages.includes('physics')) {
+            // Let the package own its optional-argument and starred commands.
+            for (const name of ['dd', 'dv', 'pdv', 'abs', 'norm', 'Re', 'Im', 'Res', 'rank', 'op', 'set']) {
+                delete MathJax.tex.macros[name];
+            }
+            MathJax.tex.autoload = {braket: []};
+        }
+        if (requestedPackages.includes('braket')) delete MathJax.tex.macros.set;
     </script>
 
     <style>
         :root {
             /* LaTeX 学术论文风格配色 */
             --bg-color: #FDFBF0;        /* 暖白/米色羊皮纸（可被配置覆盖） */
+            --body-font-size: 36px;
+            --h1-scale: 1.55;
+            --h2-scale: 1.25;
+            --h3-scale: 1.10;
+            --line-height: 1.7;
             --text-color: #2c2c2c;      /* 深炭灰（不用纯黑） */
             --heading-color: #000000;   /* 标题用纯黑 */
             --code-bg: #f5f2f0;         /* 代码块背景 */
@@ -202,25 +217,20 @@
         }
 
         html, body {
-            width: 1100px !important;
+            box-sizing: border-box;
+            width: 100%;
             margin: 0;
             padding: 0;
-            overflow: hidden;
+            overflow: visible;
         }
 
         body {
             background-color: var(--bg-color);
             color: var(--text-color);
             font-family: var(--font-main);
-            line-height: 1.8;
-            padding: 80px 100px 40px 100px;
-            font-size: 40px;
-        }
-
-        /* --- 头部样式 --- */
-        .header-line {
-            border-top: 2px solid #333;
-            margin-bottom: 30px;
+            line-height: var(--line-height);
+            padding: 56px 72px;
+            font-size: var(--body-font-size);
         }
 
         h1, h2, h3, h4, h5, h6 {
@@ -230,38 +240,50 @@
             /* LaTeX 排版：标题字间距收紧 */
             letter-spacing: -0.01em;
             /* LaTeX 排版：标题上方留白要大，体现层级 */
-            margin-top: 2.5em;
-            margin-bottom: 1em;
+            margin-top: 1.3em;
+            margin-bottom: 0.55em;
+        }
+
+        .render-content {
+            display: flow-root;
+        }
+
+        .render-content > :first-child {
+            margin-top: 0;
+        }
+
+        .render-content > :last-child {
+            margin-bottom: 0;
         }
 
         h1 {
-            font-size: 2.2em;
+            font-size: calc(1em * var(--h1-scale));
             border-bottom: none;
         }
 
         h2 {
-            font-size: 1.6em;
+            font-size: calc(1em * var(--h2-scale));
             border-bottom: 1px solid #ccc;
             padding-bottom: 8px;
         }
 
         h3 {
-            font-size: 1.3em;
+            font-size: calc(1em * var(--h3-scale));
         }
 
         h4, h5, h6 {
-            font-size: 1.1em;
+            font-size: 1em;
         }
 
         p {
             /* LaTeX 排版：字间距微调，增加空气感 */
             letter-spacing: 0.02em;
-            line-height: 1.8;
+            line-height: var(--line-height);
             /* LaTeX 灵魂：两端对齐 */
             text-align: justify;
             text-justify: inter-ideograph;
             /* 段落间距 */
-            margin: 0 0 1.5em 0;
+            margin: 0 0 0.9em 0;
         }
 
         hr {
@@ -419,13 +441,6 @@
             font-style: italic;
         }
 
-        /* --- 底部样式 --- */
-        .footer-line {
-            border-top: 1px solid #333;
-            margin-top: 40px;
-            padding-top: 15px;
-        }
-
         /* --- MathJax 公式样式 --- */
         .MathJax {
             font-size: 1.1em !important;
@@ -445,18 +460,17 @@
         /* 只针对 TikZ 容器内的 SVG */
         .tikz-diagram {
             text-align: center;
-            margin: 80px 0;
-            padding: 60px 20px;
-            min-height: 200px;
+            margin: 24px 0;
+            padding: 16px 0;
         }
 
         .tikz-diagram svg {
             display: block !important;
             position: relative !important;
-            margin: 60px auto !important;
+            margin: 0 auto !important;
             overflow: visible !important;
             /* 放大 TikZ 图形 */
-            transform: scale(2.0) !important;
+            transform: none !important;
             transform-origin: center center !important;
         }
 
@@ -481,11 +495,9 @@
     </style>
 </head>
 <body>
-    <div class="header-line"></div>
-
+    <main class="render-content">
     {{CONTENT}}
-
-    <div class="footer-line"></div>
+    </main>
 
     <!-- 预连接 CDN,减少 MathJax/TikZJax 首字节延迟 -->
     <link rel="preconnect" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com" crossorigin>
@@ -505,14 +517,18 @@
         window.mermaidReady = false;
         (function loadMermaid() {
             var sources = [
-                'https://unpkg.com/mermaid@10/dist/mermaid.min.js',
-                'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'
+                'https://unpkg.com/mermaid@10.9.3/dist/mermaid.min.js',
+                'https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js'
             ];
             var idx = 0;
             function tryNext() {
+                if (!document.querySelector('pre.mermaid')) {
+                    window.mermaidReady = true;
+                    return;
+                }
                 if (idx >= sources.length) {
                     console.warn('[MathJax2Image] Mermaid CDN unavailable');
-                    window.mermaidReady = true;
+                    window.mermaidError = 'Mermaid CDN unavailable';
                     return;
                 }
                 var s = document.createElement('script');
@@ -554,11 +570,11 @@
                             window.mermaidReady = true;
                         }).catch(function(err) {
                             console.warn('[MathJax2Image] Mermaid run failed', err);
-                            window.mermaidReady = true;
+                            window.mermaidError = String(err);
                         });
                     } catch (e) {
                         console.warn('[MathJax2Image] Mermaid init failed', e);
-                        window.mermaidReady = true;
+                        window.mermaidError = String(e);
                     }
                 };
                 s.onerror = tryNext;

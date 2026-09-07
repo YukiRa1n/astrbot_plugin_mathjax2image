@@ -19,6 +19,18 @@
         "hint": "支持十六进制颜色值，如 #FDFBF0（米黄）、#FFFFFF（白色）、#F5F5F5（浅灰）",
         "default": "#FDFBF0"
     },
+    "typography": {
+        "description": "字体大小与标题比例",
+        "type": "object",
+        "hint": "标题大小 = 正文字号 × 对应标题比例。修改后重载插件",
+        "items": {
+            "body_font_size": {"description": "正文字号（px）", "type": "int", "default": 36, "hint": "支持 16–64，默认 36"},
+            "h1_scale": {"description": "一级标题 / 正文比例", "type": "float", "default": 1.55, "hint": "默认 1.55；正文 36px 时约 56px"},
+            "h2_scale": {"description": "二级标题 / 正文比例", "type": "float", "default": 1.25, "hint": "默认 1.25；正文 36px 时为 45px"},
+            "h3_scale": {"description": "三级标题 / 正文比例", "type": "float", "default": 1.1, "hint": "默认 1.10；正文 36px 时约 40px"},
+            "line_height": {"description": "正文行高倍数", "type": "float", "default": 1.7, "hint": "默认 1.7，支持 1.2–2.2"}
+        }
+    },
     "math_system_prompt": {
         "description": "数学文章提示词（/math）",
         "type": "text",
@@ -53,20 +65,74 @@
     "browser_max_pages": {
         "description": "最大并发渲染页面数",
         "type": "int",
-        "hint": "建议 1-2；较高值会显著增加内存占用",
+        "hint": "默认 2。可压测 1/2/4 个页面选择吞吐与内存的平衡点；每个页面独占隔离环境",
         "default": 2
+    },
+    "browser_max_idle_pages": {
+        "description": "最多保留空闲页面数",
+        "type": "int",
+        "hint": "默认 1，突发并发结束后立即关闭多余页面。设为 0 可每次释放页面，进一步降低空闲内存",
+        "default": 1
+    },
+    "browser_idle_timeout": {
+        "description": "空闲页面回收时间（秒）",
+        "type": "int",
+        "hint": "默认 30 秒。回收页面但保留浏览器和资源缓存，下次无需重新下载资源；0 表示不定时回收",
+        "default": 30
+    },
+    "resource_cache_max_mb": {
+        "description": "静态资源缓存上限（MiB）",
+        "type": "int",
+        "hint": "默认 64。缓存字体和渲染库；可降为 32，0 表示禁用。过小可能导致重新下载；不是浏览器总内存上限",
+        "default": 64
+    },
+    "image_cache_max_mb": {
+        "description": "渲染图片缓存上限（MiB）",
+        "type": "int",
+        "hint": "默认 8，超出时淘汰最久未使用的图片。0 表示禁用图片缓存",
+        "default": 8
     },
     "auto_install_browser": {
         "description": "运行时自动安装浏览器",
         "type": "bool",
-        "hint": "默认关闭。请在部署阶段执行 python -m playwright install chromium；开启后首次渲染会下载浏览器。",
+        "hint": "默认关闭。请在部署阶段执行 python -m playwright install chromium --only-shell；开启后首次渲染会下载浏览器。",
         "default": false
     },
     "max_concurrent_renders": {
         "description": "最大并发渲染任务数",
         "type": "int",
-        "hint": "业务层信号量，建议与 browser_max_pages 相同或略小",
+        "hint": "默认 2。实际并发取本项与 browser_max_pages 的较小值",
         "default": 2
+    },
+    "max_queued_renders": {
+        "description": "最多排队渲染任务数",
+        "type": "int",
+        "hint": "不含正在运行的任务。默认 8；填 0 表示繁忙时立即返回，避免无限排队占用内存",
+        "default": 8
+    },
+    "render_queue_timeout": {
+        "description": "渲染排队超时（毫秒）",
+        "type": "int",
+        "hint": "默认 30000。仅限制排队时间，不改变 MathJax、TikZ 和截图自身的超时",
+        "default": 30000
+    },
+    "precompute_pgfplots": {
+        "description": "预计算 PGFplots 曲面坐标",
+        "type": "bool",
+        "hint": "默认开启。支持的表达式只解析一次，并保持 samples 和 samples y 指定的网格点数；自定义宏/样式保留原生 TeX 计算",
+        "default": true
+    },
+    "plot_max_points": {
+        "description": "单个 TikZ 图的 3D 采样点数上限",
+        "type": "int",
+        "hint": "默认 6400（80×80）。超过时明确报错，不自动降低 3D 曲面精度；更高点数仍可能达到 TeX 时间或内存限制",
+        "default": 6400
+    },
+    "max_concurrent_tikz": {
+        "description": "最多同时编译的 TikZ 图片数",
+        "type": "int",
+        "hint": "默认 1，避免多个大型曲面同时占用 CPU 和内存；普通 Markdown/MathJax 页面仍使用一般并发配置",
+        "default": 1
     },
     "tikz_timeout": {
         "description": "TikZ 渲染超时（毫秒）",

@@ -4,6 +4,8 @@ Markdown转换器
 """
 
 import html as html_lib
+import json
+import math
 import re
 from pathlib import Path
 
@@ -18,6 +20,39 @@ TRUSTED_HTML_PATTERN = re.compile(
     r'|<pre class="mermaid">\n[\s\S]*?\n</pre>'
     r'|<div class="error">[^<>]*</div>'
 )
+MATHJAX_PACKAGES = {
+    "ams",
+    "amscd",
+    "bbox",
+    "boldsymbol",
+    "braket",
+    "cancel",
+    "cases",
+    "centernot",
+    "color",
+    "empheq",
+    "enclose",
+    "extpfeil",
+    "gensymb",
+    "mathtools",
+    "mhchem",
+    "newcommand",
+    "physics",
+    "textcomp",
+    "textmacros",
+    "unicode",
+    "upgreek",
+    "verb",
+}
+
+MATHJAX_PACKAGE_ALIASES = {
+    "amsmath": "ams",
+    "amsfonts": "ams",
+    "amssymb": "ams",
+    "bm": "boldsymbol",
+    "xcolor": "color",
+}
+
 LANGUAGE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 BG_COLOR_PATTERN = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -25,9 +60,25 @@ BG_COLOR_PATTERN = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 class MarkdownConverter:
     """Markdown转换器"""
 
-    def __init__(self, template_path: Path):
+    def __init__(self, template_path: Path, typography: dict | None = None):
         self._template_path = template_path
         self._template_cache: str | None = None
+        typography = typography if isinstance(typography, dict) else {}
+        self._typography = {}
+        for name, default, low, high in (
+            ("body_font_size", 36, 16, 64),
+            ("h1_scale", 1.55, 1, 3),
+            ("h2_scale", 1.25, 1, 2.5),
+            ("h3_scale", 1.10, 1, 2),
+            ("line_height", 1.7, 1.2, 2.2),
+        ):
+            try:
+                value = float(typography.get(name, default))
+                if not math.isfinite(value):
+                    value = default
+            except (TypeError, ValueError):
+                value = default
+            self._typography[name] = max(low, min(high, value))
 
     def convert_to_html(self, md_text: str, bg_color: str = "#FDFBF0") -> str:
         """将Markdown转换为完整HTML"""
@@ -38,6 +89,26 @@ class MarkdownConverter:
         # 保护插件内部生成的HTML、数学公式和代码块
         md_text, code_blocks = self._extract_code_blocks(md_text)
         md_text, trusted_html_blocks = self._extract_trusted_html_blocks(md_text)
+        declared_packages = set()
+
+        def collect_packages(match):
+            if match.group(1) is not None:
+                raise ValueError("MathJax package options are not supported")
+            names = {
+                MATHJAX_PACKAGE_ALIASES.get(name.strip(), name.strip())
+                for name in match.group(2).split(",")
+            }
+            unsupported = names - MATHJAX_PACKAGES
+            if unsupported:
+                raise ValueError(
+                    "Unsupported MathJax packages: " + ", ".join(sorted(unsupported))
+                )
+            declared_packages.update(names)
+            return ""
+
+        md_text = re.sub(
+            r"\\usepackage(?:\[([^\]]*)\])?\{([^{}]+)\}", collect_packages, md_text
+        )
         md_text, math_blocks = self._extract_math_blocks(md_text)
 
         # Python-Markdown默认保留原始HTML，这里显式转义用户输入中的标签
@@ -58,13 +129,42 @@ class MarkdownConverter:
             output_format="html",  # 使用标准 HTML5 输出
         )
 
+        # Select optional packages from math only, never from code examples.
+        math_source = "\n".join(math_blocks)
+        packages = declared_packages
+        for declaration in re.findall(r"\\require\{([^{}]+)\}", math_source):
+            packages.update(
+                name.strip()
+                for name in declaration.split(",")
+                if name.strip() in MATHJAX_PACKAGES
+            )
+        if {"physics", "braket"} <= packages:
+            raise ValueError(
+                "physics and braket have incompatible syntax; select one package"
+            )
+        # Physics changes standard commands, so activate it only when requested.
+        # Other common extensions keep MathJax's existing autoload behavior.
+
         # 还原插件内部HTML、数学公式和代码块
         html_body = self._restore_trusted_html_blocks(html_body, trusted_html_blocks)
         html_body = self._restore_math_blocks(html_body, math_blocks)
         html_body = self._restore_code_blocks(html_body, code_blocks)
 
         # 应用模板
-        return self._apply_template(html_body, bg_color)
+        result = self._apply_template(html_body, bg_color)
+        result = result.replace("{{MATH_REQUIRED}}", json.dumps(bool(math_blocks)))
+        result = result.replace("{{MATH_PACKAGES}}", json.dumps(sorted(packages)))
+        if not math_blocks:
+            result = re.sub(
+                r'<script src="[^" ]*/mathjax@[^" ]+"></script>', "", result
+            )
+        if not any('class="tikz-diagram"' in block for block in trusted_html_blocks):
+            result = re.sub(
+                r'<(?:script|link)[^>]+(?:src|href)="[^" ]*/@drgrice1/tikzjax[^" ]+"[^>]*>(?:</script>)?',
+                "",
+                result,
+            )
+        return result
 
     def _fix_tikz_comments(self, text: str) -> str:
         """修复TikZ代码中注释与\\end{tikzpicture}同行的问题"""
@@ -136,6 +236,11 @@ class MarkdownConverter:
         text = re.sub(r"\\\([\s\S]*?\\\)", substitute, text)
         text = re.sub(r"\$\$.*?\$\$", substitute, text, flags=re.DOTALL)
         text = re.sub(r"\$.*?\$", substitute, text)
+        text = re.sub(
+            r"\\begin\{(equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|flalign\*?|CD|numcases|subnumcases)\}[\s\S]*?\\end\{\1\}",
+            substitute,
+            text,
+        )
 
         return text, blocks
 
@@ -148,7 +253,11 @@ class MarkdownConverter:
             blocks.append(match.group(0))
             return placeholder
 
-        text = re.sub(r"```[\s\S]*?```", substitute, text)
+        text = re.sub(
+            r"(?P<fence>`{3,}|~{3,})[^\n]*\n[\s\S]*?(?P=fence)|(?P<ticks>`+)[^\n]*?(?P=ticks)",
+            substitute,
+            text,
+        )
         return text, blocks
 
     def _extract_trusted_html_blocks(self, text: str) -> tuple[str, list[str]]:
@@ -183,7 +292,9 @@ class MarkdownConverter:
                 return True
             # 逐个解析属性,只允许白名单名
             allowed_names = {"data-tex-packages", "data-tikz-libraries"}
-            for name, _, _ in re.findall(r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attrs):
+            for name, _, _ in re.findall(
+                r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attrs
+            ):
                 if name not in allowed_names:
                     return False
             # 拒绝残留的无值属性或异常字符
@@ -191,9 +302,13 @@ class MarkdownConverter:
                 return False
             return True
 
-        mermaid_match = re.fullmatch(r'<pre class="mermaid">\n([\s\S]*?)\n</pre>', block)
+        mermaid_match = re.fullmatch(
+            r'<pre class="mermaid">\n([\s\S]*?)\n</pre>', block
+        )
         if mermaid_match:
-            return "<" not in mermaid_match.group(1) and ">" not in mermaid_match.group(1)
+            return "<" not in mermaid_match.group(1) and ">" not in mermaid_match.group(
+                1
+            )
 
         return bool(re.fullmatch(r'<div class="error">[^<>]*</div>', block))
 
@@ -219,14 +334,13 @@ class MarkdownConverter:
     def _restore_code_blocks(self, html: str, blocks: list[str]) -> str:
         """还原代码块"""
         for i, block in enumerate(blocks):
-            content = block.strip("`")
-            if "\n" in content:
-                parts = content.split("\n", 1)
-                language = parts[0].strip()
-                code_content = parts[1] if len(parts) > 1 else ""
-            else:
-                language = ""
-                code_content = content
+            fence = re.fullmatch(r"(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\1", block)
+            if fence is None:
+                code_html = "<code>" + html_lib.escape(block.strip("`")) + "</code>"
+                html = html.replace(f"CODEBLOCK{i}CODEBLOCK", code_html, 1)
+                continue
+            language = fence.group(2).strip()
+            code_content = fence.group(3)
 
             language = self._sanitize_language(language)
             lang_class = f' class="language-{language}"' if language else ""
@@ -242,11 +356,21 @@ class MarkdownConverter:
     def _apply_template(self, html_body: str, bg_color: str) -> str:
         """应用HTML模板"""
         if self._template_cache is None:
-            with open(self._template_path, "r", encoding="utf-8") as f:
+            with open(self._template_path, encoding="utf-8") as f:
                 self._template_cache = f.read()
 
         safe_bg_color = bg_color if BG_COLOR_PATTERN.fullmatch(bg_color) else "#FDFBF0"
-        full_html = self._template_cache.replace("{{CONTENT}}", html_body)
+        template = self._template_cache
+        for name, value in self._typography.items():
+            variable = "--" + name.replace("_", "-")
+            unit = "px" if name == "body_font_size" else ""
+            template = re.sub(
+                re.escape(variable) + r":\s*[^;]+;",
+                f"{variable}: {value:g}{unit};",
+                template,
+                count=1,
+            )
+        full_html = template.replace("{{CONTENT}}", html_body)
         # Match any existing --bg-color value (template default may differ in case)
         full_html = re.sub(
             r"--bg-color:\s*#[0-9a-fA-F]{3,8}\s*;",

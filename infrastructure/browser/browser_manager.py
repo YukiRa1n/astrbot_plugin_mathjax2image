@@ -6,10 +6,15 @@
 
 import asyncio
 import sys
-from pathlib import Path
-from typing import Optional, Tuple
 
-from playwright.async_api import async_playwright, Browser, Playwright, Page
+from playwright.async_api import (
+    APIRequestContext,
+    Browser,
+    Page,
+    Playwright,
+    async_playwright,
+)
+from playwright.async_api import Error as PlaywrightError
 
 try:
     from astrbot.api import logger
@@ -22,73 +27,44 @@ from ...domain.errors import BrowserError
 _browser_install_locks = {
     engine: asyncio.Lock() for engine in ("chromium", "firefox", "webkit")
 }
-_installed_browsers: set[str] = set()
 
 
-async def _ensure_browser_installed(
-    engine: str = "chromium",
-    *,
-    allow_install: bool = False,
-):
-    """确保所选 Playwright 浏览器已安装。"""
-    if engine in _installed_browsers:
-        return
+async def _install_browser(engine: str) -> None:
+    """Install a missing browser only after an actual launch failure.
 
+    Args:
+        engine: Playwright browser type name.
+
+    Raises:
+        BrowserError: The installer fails or exceeds its time budget.
+    """
     async with _browser_install_locks[engine]:
-        if engine in _installed_browsers:
-            return
-        try:
-            async with async_playwright() as playwright:
-                executable = Path(getattr(playwright, engine).executable_path)
-                if not executable.is_file():
-                    raise FileNotFoundError(executable)
-            _installed_browsers.add(engine)
-            logger.info(f"[MathJax2Image] Playwright {engine} 已就绪")
-            return
-        except Exception as exc:
-            if not allow_install:
-                raise BrowserError(
-                    f"Playwright {engine} is unavailable. Install it during deployment with: "
-                    f"{sys.executable} -m playwright install {engine}"
-                ) from exc
-            launch_failure = exc
-
-        logger.info(f"[MathJax2Image] 正在安装 Playwright {engine}...")
+        command = [sys.executable, "-m", "playwright", "install", engine]
+        if engine == "chromium":
+            command.append("--only-shell")
         process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "playwright",
-            "install",
-            engine,
+            *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            # 带超时安装，防止网络挂起永久阻塞整个渲染管线
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=300
-            )
-        except asyncio.TimeoutError:
-            logger.error(
-                f"[MathJax2Image] 安装 Playwright {engine} 超时（300s），终止安装进程"
-            )
-            try:
-                process.kill()
-            except Exception:
-                pass
-            try:
-                await process.wait()
-            except Exception:
-                pass
-            raise BrowserError(f"安装 Playwright {engine} 超时") from launch_failure
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            await process.wait()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise BrowserError(f"Installing Playwright {engine} timed out") from exc
         if process.returncode != 0:
             detail = stderr.decode(errors="replace") or stdout.decode(errors="replace")
             raise BrowserError(
-                f"无法安装 Playwright {engine}: {detail.strip()}"
-            ) from launch_failure
-
-        _installed_browsers.add(engine)
-        logger.info(f"[MathJax2Image] Playwright {engine} 安装完成")
+                f"Unable to install Playwright {engine}: {detail.strip()}"
+            )
+        logger.info("[MathJax2Image] Playwright %s installation completed", engine)
 
 
 class BrowserManager:
@@ -100,6 +76,9 @@ class BrowserManager:
         engine: str = "chromium",
         cdp_url: str = "",
         auto_install_browser: bool = False,
+        page_wait_timeout: float = 30.0,
+        max_idle_pages: int = 1,
+        idle_timeout: float = 30.0,
     ):
         if engine not in {"chromium", "firefox", "webkit"}:
             raise ValueError(f"不支持的浏览器引擎: {engine}")
@@ -109,13 +88,23 @@ class BrowserManager:
         self.engine = engine
         self.cdp_url = cdp_url.strip()
         self.auto_install_browser = bool(auto_install_browser)
-        self._playwright: Optional[Playwright] = None
-        self._browser: Optional[Browser] = None
+        self._page_wait_timeout = max(0.001, float(page_wait_timeout))
+        self._max_idle_pages = min(self.max_pages, max(0, int(max_idle_pages)))
+        self._idle_timeout = max(0.0, float(idle_timeout))
+        self._idle_deadline = 0.0
+        self._idle_timer = None
+        self._idle_cleanup_task = None
+        self._playwright: Playwright | None = None
+        self.request_context: APIRequestContext | None = None
+        self._browser: Browser | None = None
         self._owns_browser = True
         self._pool = asyncio.Queue()
+        self._page_available = asyncio.Event()
         self._configured_pages: set[Page] = set()
+        self._owned_contexts = set()
         self._active_pages_count = 0
         self._lock = asyncio.Lock()
+        self._startup_lock = asyncio.Lock()
         self._loop = None  # 绑定时的 asyncio 事件循环
         self._closed = False
         logger.info(
@@ -139,38 +128,39 @@ class BrowserManager:
     async def _force_cleanup_loop_resources(self):
         """当事件循环改变时强行清理僵尸连接"""
         logger.info("[MathJax2Image] 检测到运行 Loop 改变，强行重置浏览器页面池")
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
         browser = self._browser
         playwright = self._playwright
+        request_context = self.request_context
+        self.request_context = None
         owns = self._owns_browser
+        contexts = tuple(self._owned_contexts)
         self._browser = None
         self._playwright = None
         self._pool = asyncio.Queue()
+        self._page_available = asyncio.Event()
         self._configured_pages = set()
+        self._owned_contexts.clear()
         self._active_pages_count = 0
 
         # Best-effort close (old loop may already be dead)
         if browser is not None and owns:
             await self._best_effort_close(browser, "close")
+        if not owns:
+            for context in contexts:
+                await self._best_effort_close(context, "close")
+        if request_context is not None:
+            await self._best_effort_close(request_context, "dispose")
         if playwright is not None:
             await self._best_effort_close(playwright, "stop")
 
     @staticmethod
     def _launch_options(engine: str) -> dict:
-        options = {"headless": True}
-        if engine == "chromium":
-            options["args"] = [
-                "--disable-features=VizDisplayCompositor",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-component-update",
-                "--disable-sync",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--js-flags=--max-old-space-size=512",
-            ]
-        return options
+        # Playwright already supplies background-task and extension switches.
+        # Its default headless channel selects the separate Chromium shell.
+        return {"headless": True}
 
     async def get_browser(self) -> Browser:
         """获取或创建浏览器实例（自愈并兼容 Loop 重启）"""
@@ -181,47 +171,62 @@ class BrowserManager:
             await self._force_cleanup_loop_resources()
             self._loop = current_loop
 
-        if self._browser is None or not self._browser.is_connected():
-            logger.info("[MathJax2Image] 正在启动浏览器实例...")
-
+        async with self._startup_lock:
+            if self._closed:
+                raise BrowserError("BrowserManager is closed")
+            if self._browser is not None and self._browser.is_connected():
+                return self._browser
+            logger.info("[MathJax2Image] Starting Playwright %s", self.engine)
             if self._playwright is None:
-                if not self.cdp_url:
-                    await _ensure_browser_installed(
-                        self.engine,
-                        allow_install=self.auto_install_browser,
-                    )
                 self._playwright = await async_playwright().start()
-                logger.debug("[MathJax2Image] Playwright 已启动")
-
+            if self.request_context is None:
+                self.request_context = await self._playwright.request.new_context()
             if self.cdp_url:
                 self._browser = await self._playwright.chromium.connect_over_cdp(
                     self.cdp_url
                 )
                 self._owns_browser = False
-                logger.info(f"[MathJax2Image] 已连接共享 CDP: {self.cdp_url}")
             else:
                 browser_type = getattr(self._playwright, self.engine)
-                self._browser = await browser_type.launch(
-                    **self._launch_options(self.engine)
-                )
+                options = self._launch_options(self.engine)
+                try:
+                    # Let Playwright resolve the matching headless executable.
+                    # chromium.executable_path points to the full browser, even
+                    # when launch(headless=True) uses the smaller headless shell.
+                    self._browser = await browser_type.launch(**options)
+                except PlaywrightError as exc:
+                    if "Executable doesn't exist" not in str(exc):
+                        raise
+                    if not self.auto_install_browser:
+                        shell_flag = (
+                            " --only-shell" if self.engine == "chromium" else ""
+                        )
+                        raise BrowserError(
+                            f"Playwright {self.engine} is unavailable. Install it with: "
+                            f"{sys.executable} -m playwright install {self.engine}{shell_flag}"
+                        ) from exc
+                    await _install_browser(self.engine)
+                    self._browser = await browser_type.launch(**options)
                 self._owns_browser = True
-                logger.info(
-                    f"[MathJax2Image] Playwright {self.engine} 进程已创建"
-                )
-        return self._browser
+            return self._browser
 
     async def _create_page(self, browser: Browser, width: int, height: int) -> Page:
         context = await browser.new_context(
-            viewport={"width": width, "height": height}
+            viewport={"width": width, "height": height},
+            service_workers="block",
+            accept_downloads=False,
         )
         try:
-            return await context.new_page()
-        except Exception:
+            page = await context.new_page()
+            self._owned_contexts.add(context)
+            return page
+        except BaseException:
             await context.close()
             raise
 
     async def _dispose_page(self, page: Page) -> None:
         self._configured_pages.discard(page)
+        self._owned_contexts.discard(page.context)
         try:
             await page.context.close()
         except Exception:
@@ -230,124 +235,128 @@ class BrowserManager:
             except Exception:
                 pass
 
-    async def acquire_page(self, width: int, height: int) -> Tuple[Page, bool]:
+    async def acquire_page(self, width: int, height: int) -> tuple[Page, bool]:
         """
         从池中拿取一个 Page
 
         Returns:
             (page, has_been_setup) - page 实例和是否已配置过路由和注入脚本的标记
         """
-        if self._closed:
-            raise BrowserError("BrowserManager 已关闭，无法分配页面")
-        async with self._lock:
-            browser = await self.get_browser()
-
-            # 1. 尝试从空闲池中拿取
-            while not self._pool.empty():
-                page = self._pool.get_nowait()
-                try:
-                    if page.is_closed():
-                        self._active_pages_count = max(0, self._active_pages_count - 1)
-                        self._configured_pages.discard(page)
-                        continue
-                    await page.set_viewport_size({"width": width, "height": height})
-                    has_been_setup = page in self._configured_pages
-                    return page, has_been_setup
-                except Exception as e:
-                    logger.warning(
-                        f"[MathJax2Image] 从池中拿取的 Page 健康度检查失败，予以舍弃: {e}"
-                    )
-                    self._active_pages_count = max(0, self._active_pages_count - 1)
+        deadline = asyncio.get_running_loop().time() + self._page_wait_timeout
+        while True:
+            async with self._lock:
+                if self._closed:
+                    raise BrowserError("BrowserManager is closed")
+                browser = await self.get_browser()
+                while not self._pool.empty():
+                    page = self._pool.get_nowait()
                     try:
+                        if page.is_closed():
+                            raise BrowserError("Pooled page is closed")
+                        if page.viewport_size != {"width": width, "height": height}:
+                            await page.set_viewport_size(
+                                {"width": width, "height": height}
+                            )
+                        return page, page in self._configured_pages
+                    except BaseException as exc:
+                        self._active_pages_count = max(0, self._active_pages_count - 1)
                         await self._dispose_page(page)
-                    except Exception:
-                        pass
-
-            # 2. 如果池空且活动页数未达上限，则创建新页
-            if self._active_pages_count < self.max_pages:
-                logger.info(
-                    f"[MathJax2Image] 创建新渲染 Page (活动页数: {self._active_pages_count + 1})"
-                )
-                try:
+                        self._page_available.set()
+                        if isinstance(exc, asyncio.CancelledError):
+                            raise
+                if self._active_pages_count < self.max_pages:
                     page = await self._create_page(browser, width, height)
                     self._active_pages_count += 1
                     return page, False
-                except Exception as e:
-                    logger.error(f"[MathJax2Image] 创建 Page 失败: {e}")
-                    raise BrowserError(f"创建 Page 失败: {e}")
-
-        # 3. Block-wait for a page to be released back to pool
-        logger.debug("[MathJax2Image] 页面池全部满载忙碌，正在阻塞等待空闲归还...")
-        max_retries = 3
-        for _ in range(max_retries):
-            try:
-                page = await asyncio.wait_for(self._pool.get(), timeout=30.0)
-            except asyncio.TimeoutError:
+                # Clear under the same lock used when disposing occupied pages.
+                self._page_available.clear()
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
                 raise BrowserError("Timed out waiting for available page in pool")
             try:
-                if page.is_closed():
-                    async with self._lock:
-                        self._active_pages_count = max(0, self._active_pages_count - 1)
-                    continue
-                await page.set_viewport_size({"width": width, "height": height})
-                has_been_setup = page in self._configured_pages
-                return page, has_been_setup
-            except Exception:
-                async with self._lock:
-                    self._active_pages_count = max(0, self._active_pages_count - 1)
-                try:
-                    await self._dispose_page(page)
-                except Exception:
-                    pass
-        raise BrowserError("Failed to acquire page after retries")
+                await asyncio.wait_for(self._page_available.wait(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise BrowserError(
+                    "Timed out waiting for available page in pool"
+                ) from exc
 
     async def release_page(self, page: Page, exception_occurred: bool = False) -> None:
-        """归还或销毁 Page (DOM 自净化)"""
+        """Return a healthy page, keeping only the configured number warm.
+
+        Args:
+            page: Leased page to release.
+            exception_occurred: Whether the page must be discarded.
+        """
         if page is None:
             return
-
-        if exception_occurred or page.is_closed():
-            logger.warning(
-                "[MathJax2Image] 渲染过程中发生异常或页面已被关闭，强制销毁并剔除"
-            )
-            async with self._lock:
-                self._active_pages_count = max(0, self._active_pages_count - 1)
-            try:
-                await self._dispose_page(page)
-            except Exception:
-                pass
-            return
-
+        discard = (
+            exception_occurred
+            or page.is_closed()
+            or self._closed
+            or self._max_idle_pages == 0
+        )
         try:
-            # DOM 净化
-            await page.goto("about:blank")
-            self._configured_pages.add(page)
-            self._pool.put_nowait(page)
-            logger.debug("[MathJax2Image] 页面已完成自净并归还至页面池")
+            if not discard:
+                await page.goto("about:blank")
+                async with self._lock:
+                    discard = self._closed or self._pool.qsize() >= self._max_idle_pages
+                    if not discard:
+                        self._configured_pages.add(page)
+                        self._pool.put_nowait(page)
+                        self._page_available.set()
+                        if self._idle_timeout > 0:
+                            loop = asyncio.get_running_loop()
+                            self._idle_deadline = loop.time() + self._idle_timeout
+                            if self._idle_timer is not None:
+                                self._idle_timer.cancel()
+
+                            def expire():
+                                self._idle_timer = None
+                                self._idle_cleanup_task = asyncio.create_task(
+                                    self._expire_idle_pages()
+                                )
+
+                            self._idle_timer = loop.call_later(
+                                self._idle_timeout, expire
+                            )
         except asyncio.CancelledError:
-            # Python 3.11+ CancelledError 是 BaseException，不被 except Exception 捕获。
-            # 取消时必须确保页面被销毁且不归还池中，否则 _active_pages_count 泄漏。
-            logger.warning("[MathJax2Image] 页面归还过程中被取消，强制销毁")
-            async with self._lock:
-                self._active_pages_count = max(0, self._active_pages_count - 1)
-            try:
-                await self._dispose_page(page)
-            except Exception:
-                pass
+            discard = True
             raise
-        except Exception as e:
-            logger.warning(f"[MathJax2Image] 归还页面至页面池出错，进行销毁: {e}")
-            async with self._lock:
+        except Exception as exc:
+            discard = True
+            logger.warning(
+                "[MathJax2Image] Discarding page after release failure: %s", exc
+            )
+        finally:
+            if discard:
+                try:
+                    await self._dispose_page(page)
+                finally:
+                    async with self._lock:
+                        self._active_pages_count = max(0, self._active_pages_count - 1)
+                        self._page_available.set()
+
+    async def _expire_idle_pages(self) -> None:
+        """Release idle renderer processes while retaining shared asset responses."""
+        async with self._lock:
+            if self._closed or asyncio.get_running_loop().time() < self._idle_deadline:
+                return
+            while not self._pool.empty():
+                page = self._pool.get_nowait()
                 self._active_pages_count = max(0, self._active_pages_count - 1)
-            try:
                 await self._dispose_page(page)
-            except Exception:
-                pass
+            self._page_available.set()
 
     async def close(self) -> None:
         """关闭所有浏览器资源并清空池"""
         self._closed = True
-        async with self._lock:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+        if self._idle_cleanup_task is not None:
+            await self._idle_cleanup_task
+        self._page_available.set()
+        async with self._lock, self._startup_lock:
             while not self._pool.empty():
                 page = self._pool.get_nowait()
                 try:
@@ -358,7 +367,7 @@ class BrowserManager:
             # 关闭所有活跃 context（CDP 共享模式下 browser.close 不负责）
             if self._browser and not self._owns_browser:
                 try:
-                    for ctx in self._browser.contexts:
+                    for ctx in tuple(self._owned_contexts):
                         try:
                             await ctx.close()
                         except Exception:
@@ -376,6 +385,10 @@ class BrowserManager:
             else:
                 self._browser = None
 
+            if self.request_context is not None:
+                await self._best_effort_close(self.request_context, "dispose")
+                self.request_context = None
+
             if self._playwright:
                 try:
                     await self._playwright.stop()
@@ -386,6 +399,7 @@ class BrowserManager:
 
             self._active_pages_count = 0
             self._configured_pages = set()
+            self._owned_contexts.clear()
             self._loop = None
             logger.info("[MathJax2Image] 浏览器共享页面池已完全销毁")
 

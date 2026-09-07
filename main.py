@@ -14,12 +14,11 @@ AstrBot MathJax2Image 插件
 
 from pathlib import Path
 
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
-from astrbot.api import AstrBotConfig
 
-from .application import RenderOrchestrator, LLMOrchestrator
+from .application import LLMOrchestrator, RenderOrchestrator
 from .handlers import CommandHandler, LLMToolHandler
 from .utils.security import validate_cdp_url
 
@@ -80,10 +79,20 @@ class MathJax2ImagePlugin(Star):
                 return default
 
         # 校验浏览器引擎，非法值回退 chromium
-        raw_engine = str(self.config.get("browser_engine", "chromium") or "chromium").strip().lower()
-        browser_engine = raw_engine if raw_engine in ("chromium", "firefox", "webkit") else "chromium"
+        raw_engine = (
+            str(self.config.get("browser_engine", "chromium") or "chromium")
+            .strip()
+            .lower()
+        )
+        browser_engine = (
+            raw_engine
+            if raw_engine in ("chromium", "firefox", "webkit")
+            else "chromium"
+        )
         if browser_engine != raw_engine:
-            logger.warning(f"[MathJax2Image] 无效的 browser_engine '{raw_engine}'，回退为 chromium")
+            logger.warning(
+                f"[MathJax2Image] 无效的 browser_engine '{raw_engine}'，回退为 chromium"
+            )
 
         self._render_orchestrator = RenderOrchestrator(
             plugin_dir=self._plugin_dir,
@@ -91,7 +100,9 @@ class MathJax2ImagePlugin(Star):
             browser_engine=browser_engine,
             browser_cdp_url=browser_cdp_url,
             browser_max_pages=_cfg_int("browser_max_pages", 2),
-            auto_install_browser=_safe_bool(self.config.get("auto_install_browser", False)),
+            auto_install_browser=_safe_bool(
+                self.config.get("auto_install_browser", False)
+            ),
             max_screenshot_height=_cfg_int("max_screenshot_height", 16000),
             max_screenshot_pixels=_cfg_int("max_screenshot_pixels", 40_000_000),
             tikz_timeout=_cfg_int("tikz_timeout", 60000),
@@ -101,6 +112,18 @@ class MathJax2ImagePlugin(Star):
                 self.config.get("fail_on_mathjax_timeout", False)
             ),
             max_concurrent_renders=_cfg_int("max_concurrent_renders", 2),
+            max_queued_renders=_cfg_int("max_queued_renders", 8),
+            render_queue_timeout=_cfg_int("render_queue_timeout", 30000),
+            browser_max_idle_pages=_cfg_int("browser_max_idle_pages", 1),
+            browser_idle_timeout=_cfg_int("browser_idle_timeout", 30),
+            resource_cache_max_mb=_cfg_int("resource_cache_max_mb", 64),
+            image_cache_max_mb=_cfg_int("image_cache_max_mb", 8),
+            precompute_pgfplots=_safe_bool(
+                self.config.get("precompute_pgfplots", True)
+            ),
+            plot_max_points=_cfg_int("plot_max_points", 6400),
+            max_concurrent_tikz=_cfg_int("max_concurrent_tikz", 1),
+            typography=self.config.get("typography", {}),
         )
 
         # LLM编排器

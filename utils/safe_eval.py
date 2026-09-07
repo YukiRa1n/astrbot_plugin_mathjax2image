@@ -5,6 +5,7 @@
 
 import ast
 import math
+from functools import lru_cache
 from typing import Any
 
 try:
@@ -123,7 +124,7 @@ class SafeMathEvaluator(ast.NodeVisitor):
             left_val = self.visit(node.left)
             if abs(left_val) > 1000 and right_val > 10:
                 raise ValueError(f"Power operation too large: {left_val}**{right_val}")
-            result = left_val ** right_val
+            result = left_val**right_val
             if not math.isfinite(result) or abs(result) > 1e15:
                 raise ValueError("Power result too large")
             logger.debug(
@@ -225,3 +226,130 @@ def safe_eval_math(expr: str) -> float:
             f"[SafeEval] [ERROR] Evaluation failed expr={expr[:50]} error={type(e).__name__}: {e}"
         )
         return float("nan")
+
+
+@lru_cache(maxsize=128)
+def compile_math_expression(
+    expression: str, variables: tuple[str, ...] = (), *, trig_degrees: bool = False
+):
+    """Build an immutable numeric callable from a validated expression tree.
+
+    Args:
+        expression: Arithmetic expression with at most 500 characters.
+        variables: Positional variable names accepted by the callable.
+        trig_degrees: Use PGF's degree convention for trigonometric functions.
+
+    Returns:
+        A callable returning a float, or NaN at undefined sample points.
+
+    Raises:
+        ValueError: The expression contains unsupported syntax or exceeds limits.
+    """
+    if not isinstance(expression, str) or len(expression) > 500:
+        raise ValueError("Expression is too long")
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+    except (SyntaxError, RecursionError) as exc:
+        raise ValueError("Invalid arithmetic expression") from exc
+    if sum(1 for _ in ast.walk(tree)) > 100:
+        raise ValueError("Expression is too complex")
+    functions = dict(SafeMathEvaluator.ALLOWED_FUNCTIONS)
+    functions.update(
+        {
+            "ln": math.log,
+            "min": min,
+            "max": max,
+            "deg": math.degrees,
+            "rad": math.radians,
+            "sinh": math.sinh,
+            "cosh": math.cosh,
+            "tanh": math.tanh,
+        }
+    )
+    if trig_degrees:
+        functions.update(
+            {
+                "sin": lambda x: math.sin(math.radians(x)),
+                "cos": lambda x: math.cos(math.radians(x)),
+                "tan": lambda x: math.tan(math.radians(x)),
+                "asin": lambda x: math.degrees(math.asin(x)),
+                "acos": lambda x: math.degrees(math.acos(x)),
+                "atan": lambda x: math.degrees(math.atan(x)),
+                "atan2": lambda y, x: math.degrees(math.atan2(y, x)),
+                "log": math.log10,
+            }
+        )
+
+    def power(left, right):
+        if abs(right) > 1000 or (abs(left) > 1000 and right > 10):
+            raise ValueError("Power operation exceeds limits")
+        value = left**right
+        if (
+            not isinstance(value, (float, int))
+            or not math.isfinite(value)
+            or abs(value) > 1e15
+        ):
+            raise ValueError("Power result exceeds limits")
+        return value
+
+    def build(node, depth=0):
+        if depth > 20:
+            raise ValueError("Expression nesting is too deep")
+        if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            if isinstance(node.value, int) and node.value.bit_length() > 256:
+                raise ValueError("Numeric constant is too large")
+            value = float(node.value)
+            if not math.isfinite(value):
+                raise ValueError("Numeric constant is not finite")
+            return lambda values: value
+        if isinstance(node, ast.Name):
+            if node.id in variables:
+                index = variables.index(node.id)
+                return lambda values: values[index]
+            if node.id in SafeMathEvaluator.ALLOWED_CONSTANTS:
+                value = SafeMathEvaluator.ALLOWED_CONSTANTS[node.id]
+                return lambda values: value
+            raise ValueError(f"Unsupported variable: {node.id}")
+        if (
+            isinstance(node, ast.BinOp)
+            and type(node.op) in SafeMathEvaluator.ALLOWED_BINARY_OPS
+        ):
+            left, right = build(node.left, depth + 1), build(node.right, depth + 1)
+            operation = (
+                power
+                if isinstance(node.op, ast.Pow)
+                else SafeMathEvaluator.ALLOWED_BINARY_OPS[type(node.op)]
+            )
+            return lambda values: operation(left(values), right(values))
+        if (
+            isinstance(node, ast.UnaryOp)
+            and type(node.op) in SafeMathEvaluator.ALLOWED_UNARY_OPS
+        ):
+            operand = build(node.operand, depth + 1)
+            operation = SafeMathEvaluator.ALLOWED_UNARY_OPS[type(node.op)]
+            return lambda values: operation(operand(values))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in functions
+            and not node.keywords
+        ):
+            function = functions[node.func.id]
+            arguments = tuple(build(arg, depth + 1) for arg in node.args)
+            if not arguments or len(arguments) > 8:
+                raise ValueError("Unsupported function arity")
+            return lambda values: function(
+                *(argument(values) for argument in arguments)
+            )
+        raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+    calculate = build(tree.body)
+
+    def evaluate(*values):
+        try:
+            result = float(calculate(values))
+            return result if math.isfinite(result) else math.nan
+        except (ArithmeticError, ValueError, TypeError, IndexError):
+            return math.nan
+
+    return evaluate

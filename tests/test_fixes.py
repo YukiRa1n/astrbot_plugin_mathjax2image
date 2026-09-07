@@ -718,7 +718,7 @@ class TestPageRendererFullUuid:
             PageRenderer,
         )
 
-        source = inspect.getsource(PageRenderer.render_to_image)
+        source = inspect.getsource(PageRenderer._render_uncached)
         # mkstemp 生成随机唯一文件名（比 uuid 更安全，且文件权限 0600）
         assert "tempfile.mkstemp" in source or "uuid.uuid4().hex" in source
         assert "uuid.uuid4().hex[:8]" not in source
@@ -746,7 +746,7 @@ def test_non_chromium_launch_options_do_not_receive_chromium_flags():
 
     assert BrowserManager._launch_options("firefox") == {"headless": True}
     assert BrowserManager._launch_options("webkit") == {"headless": True}
-    assert "args" in BrowserManager._launch_options("chromium")
+    assert BrowserManager._launch_options("chromium") == {"headless": True}
 
 
 @pytest.mark.asyncio

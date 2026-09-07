@@ -4,29 +4,29 @@
 """
 
 import asyncio
-import uuid
 import traceback
+import uuid
 from pathlib import Path
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
 
-from ..domain.errors import RenderError, DependencyError
-from ..utils.artifacts import cleanup_stale_artifacts, remove_artifact
+from ..domain.errors import DependencyError, RenderError
 from ..infrastructure.browser import (
-    PlaywrightDependencyInstaller,
     BrowserManager,
     PageRenderer,
+    PlaywrightDependencyInstaller,
 )
 from ..infrastructure.converter import (
-    TikzPlotConverter,
-    TikzConverter,
-    ListConverter,
-    TableConverter,
     LatexPreprocessor,
+    ListConverter,
     MarkdownConverter,
     MermaidConverter,
+    TableConverter,
+    TikzConverter,
+    TikzPlotConverter,
 )
+from ..utils.artifacts import cleanup_stale_artifacts, remove_artifact
 
 MAX_RENDER_LENGTH = 100000  # 渲染内容最大长度（字符）
 
@@ -59,10 +59,27 @@ class RenderOrchestrator:
         mermaid_timeout: int = 15000,
         fail_on_mathjax_timeout: bool = False,
         max_concurrent_renders: int = 2,
+        max_queued_renders: int = 8,
+        render_queue_timeout: int = 30000,
+        browser_max_idle_pages: int = 1,
+        browser_idle_timeout: int = 30,
+        resource_cache_max_mb: int = 64,
+        image_cache_max_mb: int = 8,
+        precompute_pgfplots: bool = True,
+        plot_max_points: int = 6400,
+        max_concurrent_tikz: int = 1,
+        typography: dict | None = None,
     ):
         self._plugin_dir = plugin_dir
         self._bg_color = bg_color
-        self._render_semaphore = asyncio.Semaphore(max(1, int(max_concurrent_renders)))
+        self._render_limit = min(
+            max(1, int(max_concurrent_renders)), max(1, int(browser_max_pages))
+        )
+        self._render_semaphore = asyncio.Semaphore(self._render_limit)
+        self._max_pending_renders = self._render_limit + max(0, int(max_queued_renders))
+        self._pending_renders = 0
+        self._queue_timeout = max(1, int(render_queue_timeout)) / 1000.0
+        self._closed = False
 
         # 依赖安装器
         self._dependency_installer = PlaywrightDependencyInstaller()
@@ -73,6 +90,9 @@ class RenderOrchestrator:
             engine=browser_engine,
             cdp_url=browser_cdp_url,
             auto_install_browser=auto_install_browser,
+            page_wait_timeout=self._queue_timeout,
+            max_idle_pages=browser_max_idle_pages,
+            idle_timeout=browser_idle_timeout,
         )
 
         # 页面渲染器
@@ -85,10 +105,15 @@ class RenderOrchestrator:
             mathjax_timeout=mathjax_timeout,
             mermaid_timeout=mermaid_timeout,
             fail_on_mathjax_timeout=fail_on_mathjax_timeout,
+            resource_cache_max_mb=resource_cache_max_mb,
+            image_cache_max_mb=image_cache_max_mb,
+            max_concurrent_tikz=max_concurrent_tikz,
         )
 
         # 转换器组合
-        plot_converter = TikzPlotConverter()
+        plot_converter = TikzPlotConverter(
+            precompute_pgfplots=precompute_pgfplots, max_plot_points=plot_max_points
+        )
         tikz_converter = TikzConverter(plot_converter)
         list_converter = ListConverter()
         table_converter = TableConverter()
@@ -102,7 +127,8 @@ class RenderOrchestrator:
         )
 
         self._markdown_converter = MarkdownConverter(
-            template_path=plugin_dir / "templates" / "template.html"
+            template_path=plugin_dir / "templates" / "template.html",
+            typography=typography,
         )
         self._artifacts_cleaned = False
 
@@ -135,8 +161,31 @@ class RenderOrchestrator:
             )
             raise RenderError(f"渲染内容过长，最大支持 {MAX_RENDER_LENGTH} 字符")
 
-        async with self._render_semaphore:
+        if self._closed:
+            raise RenderError("渲染引擎已关闭")
+        # Admission is atomic until the first await on this event loop.
+        if self._pending_renders >= self._max_pending_renders:
+            raise RenderError("渲染队列已满，请稍后重试")
+        self._pending_renders += 1
+        acquired = False
+        try:
+            try:
+                if self._render_semaphore.locked():
+                    await asyncio.wait_for(
+                        self._render_semaphore.acquire(), timeout=self._queue_timeout
+                    )
+                else:
+                    await self._render_semaphore.acquire()
+            except asyncio.TimeoutError as exc:
+                raise RenderError("等待渲染超时，请稍后重试") from exc
+            acquired = True
+            if self._closed:
+                raise RenderError("渲染引擎已关闭")
             return await self._render_locked(content, skip_preprocess)
+        finally:
+            if acquired:
+                self._render_semaphore.release()
+            self._pending_renders -= 1
 
     async def _render_locked(self, content: str, skip_preprocess: bool) -> Path:
         output_path = None
@@ -181,6 +230,9 @@ class RenderOrchestrator:
             logger.info(f"[MathJax2Image] 渲染成功: {output_path}")
             return output_path
 
+        except asyncio.CancelledError:
+            remove_artifact(output_path)
+            raise
         except Exception as e:
             remove_artifact(output_path)
             if isinstance(e, (DependencyError, RenderError)):
@@ -191,6 +243,7 @@ class RenderOrchestrator:
 
     async def close(self) -> None:
         """释放资源"""
+        self._closed = True
         await self._browser_manager.close()
         logger.info("[MathJax2Image] 编排器资源已释放")
 
