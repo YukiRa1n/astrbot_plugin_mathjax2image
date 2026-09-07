@@ -69,6 +69,7 @@ class RenderOrchestrator:
         plot_max_points: int = 6400,
         max_concurrent_tikz: int = 1,
         typography: dict | None = None,
+        resident_engines: bool = True,
     ):
         self._plugin_dir = plugin_dir
         self._bg_color = bg_color
@@ -108,6 +109,7 @@ class RenderOrchestrator:
             resource_cache_max_mb=resource_cache_max_mb,
             image_cache_max_mb=image_cache_max_mb,
             max_concurrent_tikz=max_concurrent_tikz,
+            resident_engines=resident_engines,
         )
 
         # 转换器组合

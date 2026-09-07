@@ -10,7 +10,7 @@
 
 - **公式与图表**：支持行内 / 独立公式、化学反应式、物理公式、TikZ 二维与三维图形、Mermaid。
 - **Markdown 排版**：支持标题、列表、表格和带行号的代码块，可配置背景色、正文字号及标题比例。
-- **按需加载与缓存**：只加载内容需要的引擎，复用浏览器资源和近期渲染结果。
+- **按需加载与常驻引擎**：相同配置的任务复用 MathJax / TikZ 引擎，空闲时自动回收；资源和近期图片分别缓存。
 - **并发与内存控制**：合并相同请求，限制排队及重型 TikZ 并发，自动回收空闲页面。
 - **密集绘图优化**：预计算支持的函数采样，保留网格精度，修复深层 SVG 的着色与裁剪。
 
@@ -114,7 +114,7 @@ TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，
 - 输出是静态 PNG，不能旋转三维曲面或播放动画；`animations` 在加载白名单中也不改变输出格式。
 - 本次曲面示例使用 `shader=flat` / `shader=faceted`。`shader=interp` 在当前 TikZJax beta24 圆环实测中编译失败，暂不承诺支持。
 - 圆环使用 `compat=1.16`、`axis equal image` 和显式视角保持几何比例；网格线用于呈现完整表面。不要用独立的 x/y/z 投影向量随意替代三维视角。原生计算与预计算已对照，采样网格完整保留。
-- 密集 PGFplots 输出可能包含超过 512 层的 SVG 分组。插件将 TikZJax 的 SVG 插入改为 XML 解析，避免 HTML 解析器压平深层分组后丢失颜色、线条和变换继承。再合并冗余的颜色与坐标变换分组，避免浏览器因过深嵌套崩溃；保留裁剪、透明度等有独立语义的分组，不减少采样点。
+- 密集 PGFplots 输出可能包含超过 512 层的 SVG 分组。插件在 SVG 字符串进入 DOM 前流式合并重复的颜色分组，保留坐标变换、裁剪、透明度和 ID 等作用域。不能走快速路径的 SVG 回退 XML 处理；无法安全压缩的过深结构会报错，避免浏览器崩溃。处理过程不减少采样点。
 
 ## 配置
 
@@ -158,16 +158,18 @@ TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，
 
 保持 `samples × samples y` 的原始点数、端点和遍历顺序；超过预算会报错，不悄悄降低三维精度。普通二维 `draw plot` 每条曲线最多 2000 点、每幅图最多 4000 次采样求值。自定义宏、样式和不能可靠解析的表达式回退原生 TeX；这种情况下预计算点数限制并不是原生 TeX 的总工作量限制，仍由超时约束。仅设置兼容版本的 `pgfplotsset` 不影响优化。
 
-同一台 Windows 机器、预热资源、关闭图片结果缓存的单次对照如下；CPU 为 Python/浏览器进程树累计时间，不是 CPU 占用百分比：
+### 引擎优化实测
 
-| 场景 | 原耗时 → 优化后 | 原 CPU 秒 → 优化后 |
-| --- | --- | --- |
-| 2000 点二维曲线 | 13.08 → 11.68 s | 17.34 → 14.86 |
-| 25 × 25 曲面 | 16.19 → 9.58 s | 20.44 → 12.11 |
-| 40 × 40 曲面 | 37.79 → 18.82 s | 48.83 → 24.33 |
-| 36 × 20 参数圆环 | 20.31 → 12.26 s | 25.75 → 15.38 |
+以下为同一台 Windows 开发机的单次对照，资源预热后渲染不同内容。基线为已完成上一轮采样预计算优化的 `db91353`；本轮增加引擎常驻、SVG 字符串处理、WASM 模块复用、稀疏快照及宏包缓存，预计算坐标跳过重复的 TeX 表达式解析。
 
-这是开发机对照，不是所有硬件的保证；表中圆环为性能用例，画廊采用更细的 48 × 24 网格。高密度曲面仍有 TeX 路径和遮挡排序成本，不能无限增大点数。参见 [PGFplots 性能说明](https://tikz.dev/pgfplots/optimization) 和 [三维网格规则](https://tikz.dev/pgfplots/reference-3dplots)。
+| 场景 | 耗时：基线 → 本轮 | CPU 秒：基线 → 本轮 | 峰值 RSS：基线 → 本轮 |
+| --- | --- | --- | --- |
+| 40 × 40 曲面 | 23.72 → 14.53 s | 30.92 → 18.45 | 1209 → 636 MiB |
+| 36 × 20 圆环 | 14.96 → 8.79 s | 19.58 → 10.95 | 1186 → 638 MiB |
+
+两张输出 PNG 与基线逐像素一致。CPU 是 Python / 浏览器进程树累计时间；RSS 是每 50 ms 采样的进程树合计，可能重复计入共享内存。结果随硬件、调度和输入变化，不代表所有图形都能获得相同比例的提升。
+
+SVG 快速路径在上述两图分别合并 1588 / 672 个颜色分组，处理约 16 / 7 ms。它改善输出结构；整体提速还包括引擎复用等因素，不能将总收益都归因于 SVG。分段测量中，40 × 40 曲面的 Worker 初始化约 11 ms，宏包等待约 2 ms，TeX 执行约 14.17 s，DVI 转 SVG 约 49 ms；宏包等待包含在 TeX 执行时间内，不应重复相加。剩余主要开销仍在 TeX 宏执行和曲面处理。参见 [PGFplots 性能说明](https://tikz.dev/pgfplots/optimization)。
 
 复现（压测额外需要 `psutil`、`Pillow`）：
 
@@ -175,7 +177,7 @@ TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，
 python scripts/benchmark_heavy.py --output ./heavy-output --cases dense-curve surface-25 surface-40 torus
 ```
 
-脚本保存源 TeX、HTML、SVG、PNG 和时间/CPU/内存 JSON，可用 `--plugin-dir` 指向另一个插件版本做对照。对更密集网格可显式选择 `surface-80`；默认不会执行该重负载用例。
+脚本保存源 TeX、HTML、SVG、PNG 和时间/CPU/内存 JSON，可用 `--plugin-dir` 指向另一个插件版本做对照。对更密集网格可显式选择 `surface-80`；默认不会执行该重负载用例。可用 `--no-resident`、`--no-compact-svg`、`--no-worker-opt` 分别关闭本轮优化做对照。
 
 ## Playwright 引擎定制
 
@@ -183,12 +185,17 @@ python scripts/benchmark_heavy.py --output ./heavy-output --cases dense-curve su
 
 默认使用 Playwright 自带的 Chromium Headless Shell（Playwright >= 1.49），只需安装精简无头浏览器，不需要完整 Chrome、Firefox 或 WebKit。插件直接启动匹配版本的 Shell，不额外启动驱动检查完整浏览器路径。保留 Playwright 官方启动参数，不再重复覆盖 Chromium 的默认开关。参见 [官方 Headless Shell 文档](https://playwright.dev/python/docs/browsers#chromium-headless-shell)。
 
-一个常驻浏览器搭配隔离页面池：每个渲染任务独占页面和 BrowserContext，任务结束后默认最多保留 1 个空闲页面，多余页面立即关闭；空闲 30 秒后回收剩余页面，释放对应渲染进程。静态资源缓存持有独立 APIRequestContext 中的响应，命中时直接向浏览器复用响应，避免反复通过 Python/Node 管道传输大字体；缓存淘汰时释放对应响应。页面销毁不会清掉其他页面使用的资源缓存。
+一个常驻浏览器搭配隔离页面池，每个运行任务独占页面和 BrowserContext。模板、引擎组合和宏包配置相同的任务只替换正文，复用 MathJax 和 TikZ WASM Worker；配置变化或包含全局 TeX 宏定义时重新加载，避免状态串入后续文章。归还页面时清空正文与 MathJax 文档记录。
+
+默认最多保留 1 个空闲引擎，空闲 30 秒后关闭页面及其 Worker。静态资源缓存使用独立 APIRequestContext，页面回收后仍可复用已下载资源。最终图片缓存最多 8 MiB / 64 项、5 分钟过期；TikZJax 自带的无容量限制 SVG 缓存关闭，避免常驻页面积累结果。
+
+针对经过哈希校验的 TikZJax beta24 Worker，插件复用编译后的 WASM 模块，流式解压 TeX 快照，只保存并恢复非零页：本次内核由 156.25 MiB 压至 23.13 MiB。每次任务仍创建独立实例和全新零初始化内存，保证字节级状态一致。解压后的宏包缓存最多 4 MiB / 128 项，每个任务获得独立副本；404 缺失文件最多缓存 64 项、60 秒，临时网络错误不缓存。上游构建不匹配时保留原始 Worker。
 
 可配置的运行参数：
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
+| `resident_engines` | `true` | 复用兼容任务的引擎；关闭后每次重新加载 |
 | `browser_max_pages` | 2 | 浏览器页面上限 |
 | `max_concurrent_renders` | 2 | 运行任务上限；实际并发取两项较小值 |
 | `max_queued_renders` | 8 | 额外允许排队的任务数；0 表示繁忙时立即返回 |
@@ -243,9 +250,35 @@ python scripts/benchmark_concurrency.py --output ./concurrency-output --jobs 12 
 
 ```bash
 python scripts/benchmark_memory.py --output ./memory-output
+python scripts/benchmark_memory.py --tikz --output ./memory-tikz-output
 ```
 
 对比保留两个页面与回收空闲页面的策略，记录 RSS、唤醒耗时及新增下载数。测试将回收时间缩短到 1 秒，正式配置默认 30 秒。
+
+本轮简单 TikZ 用例中，回收后驱动 / 浏览器 RSS 从约 425 MiB 降至 274 MiB；常驻时下一张约 167 ms，回收后恢复约 1889 ms，两者均无需重新下载已缓存资源。这反映了延迟与空闲内存的取舍，不等于复杂曲面的绘制耗时。
+
+### CPU 数值内核原型
+
+<details>
+<summary>查看批量计算与消除重复计算的对照</summary>
+
+固定表达式原型运行 15 次取中位数，保留全部采样点，最大绝对数值误差小于 `5e-16`：
+
+| 网格 | 当前标量求值 | 复用行列子表达式 | NumPy 批处理 |
+| --- | --- | --- | --- |
+| 曲面 40 × 40 | 9.30 ms | 0.15 ms | 0.23 ms |
+| 曲面 80 × 80 | 37.50 ms | 0.73 ms | 1.06 ms |
+| 圆环 48 × 24 | 6.62 ms | 0.14 ms | 0.20 ms |
+
+这些是固定函数的数值内核对照，不含 TeX 投影、SVG、截图等开销，也不是任意 TeX 表达式的通用替代。以 40 × 40 曲面为例，省掉约 9 ms 只占当前整图耗时的约 0.06%；当前生产路径保留轻依赖实现。若继续开发原生计算后端，应先分析投影、面片排序和几何输出，而非只替换采样循环。
+
+复现需要额外安装 NumPy，仅用于测试：
+
+```bash
+python scripts/benchmark_numeric_kernels.py --output ./numeric-kernels.json
+```
+
+</details>
 
 ## 支持
 

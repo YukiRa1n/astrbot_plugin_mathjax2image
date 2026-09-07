@@ -6,6 +6,7 @@
 import asyncio
 import hashlib
 import os
+import re
 import tempfile
 import time
 import traceback
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from ...domain.errors import RenderError
+from .tikz_worker import optimize_tikz_worker
 
 _GOTO_TIMEOUT_MS = 60_000
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
@@ -57,7 +59,13 @@ class PageRenderer:
         resource_cache_max_mb: int = 64,
         image_cache_max_mb: int = 8,
         max_concurrent_tikz: int = 1,
+        resident_engines: bool = True,
+        compact_svg: bool = True,
+        optimize_worker: bool = True,
     ):
+        self._optimize_worker = optimize_worker
+        self._compact_svg = compact_svg
+        self._resident_engines = resident_engines
         self._browser_manager = browser_manager
         self._plugin_dir = plugin_dir
         self._viewport_width = viewport_width
@@ -234,7 +242,15 @@ class PageRenderer:
         这里监听该事件并计数，供 ``_wait_for_tikz`` 判断"全部编译完成"。
         同时记录 ``img-not-found``(编译失败)以便立即报错。
         """
-        return """
+        optimizer = ""
+        if self._compact_svg:
+            optimizer = (
+                Path(__file__).resolve().parents[2] / "static/svg_output.js"
+            ).read_text(encoding="utf-8")
+        return (
+            optimizer
+            + "\n"
+            + """
         (function() {
             window.__tikzFinished = 0;
             window.__tikzFailed = 0;
@@ -247,6 +263,8 @@ class PageRenderer:
                     const source = markup.trimStart();
                     if ((source.startsWith('<svg') || source.startsWith('<?xml')) &&
                         source.includes('<g')) {
+                        const compact = window.__compactSvgOutput && window.__compactSvgOutput(source);
+                        if (compact) return parseFragment.call(this, compact);
                         const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
                         if (parsed.documentElement.localName === 'svg' &&
                             !parsed.querySelector('parsererror')) {
@@ -341,6 +359,7 @@ class PageRenderer:
             });
         })();
         """
+        )
 
     async def _setup_font_routes(self, page) -> None:
         """设置字体路由"""
@@ -448,10 +467,18 @@ class PageRenderer:
             if cached is not None:
                 if time.monotonic() - cached[2] < 3600:
                     self._cdn_cache[url] = cached
-                    await route.fulfill(response=cached[0], headers=cached[1])
+                    await route.fulfill(
+                        **(
+                            {"body": cached[0]}
+                            if isinstance(cached[0], bytes)
+                            else {"response": cached[0]}
+                        ),
+                        headers=cached[1],
+                    )
                     return True
                 self._cdn_cache_bytes -= cached[3]
-                await cached[0].dispose()
+                if not isinstance(cached[0], bytes):
+                    await cached[0].dispose()
             pending = self._cdn_pending.get(url)
             owner = pending is None
             if owner:
@@ -463,7 +490,14 @@ class PageRenderer:
                 cached = self._cdn_cache.get(url)
                 if cached is not None:
                     self._cdn_cache.move_to_end(url)
-                    await route.fulfill(response=cached[0], headers=cached[1])
+                    await route.fulfill(
+                        **(
+                            {"body": cached[0]}
+                            if isinstance(cached[0], bytes)
+                            else {"response": cached[0]}
+                        ),
+                        headers=cached[1],
+                    )
                     return True
             return False
 
@@ -476,13 +510,22 @@ class PageRenderer:
                 return False
             # Inspect the decoded size once. Warm hits send only a response ID
             # through the Python/Node pipe, instead of base64-encoding large fonts.
-            size = len(await response.body())
+            body = await response.body()
+            size = len(body)
             headers = {
                 "content-type": response.headers.get(
                     "content-type", "application/octet-stream"
                 ),
                 "access-control-allow-origin": "*",
             }
+            if self._optimize_worker and url.endswith(
+                "/@drgrice1/tikzjax@1.0.0-beta24/dist/run-tex.js"
+            ):
+                optimized = optimize_tikz_worker(body)
+                if optimized is not body:
+                    await response.dispose()
+                    response = optimized
+                    size = len(optimized)
             async with self._cdn_lock:
                 if context is not self._browser_manager.request_context:
                     return False
@@ -493,13 +536,21 @@ class PageRenderer:
                     ):
                         _, evicted = self._cdn_cache.popitem(last=False)
                         self._cdn_cache_bytes -= evicted[3]
-                        await evicted[0].dispose()
+                        if not isinstance(evicted[0], bytes):
+                            await evicted[0].dispose()
                     self._cdn_cache[url] = (response, headers, time.monotonic(), size)
                     self._cdn_cache_bytes += size
                     retained = True
                 # Keep the lock until fulfillment completes so an eviction can
                 # never dispose a response still being delivered to another page.
-                await route.fulfill(response=response, headers=headers)
+                await route.fulfill(
+                    **(
+                        {"body": response}
+                        if isinstance(response, bytes)
+                        else {"response": response}
+                    ),
+                    headers=headers,
+                )
                 return True
         except Exception as exc:
             logger.debug("[MathJax2Image] Asset response cache failed: %s", exc)
@@ -508,7 +559,11 @@ class PageRenderer:
             if not pending.done():
                 pending.set_result(None)
             self._cdn_pending.pop(url, None)
-            if response is not None and not retained:
+            if (
+                response is not None
+                and not retained
+                and not isinstance(response, bytes)
+            ):
                 await response.dispose()
 
     def _setup_logging(self, page) -> None:
@@ -520,11 +575,41 @@ class PageRenderer:
 
     async def _load_and_wait(self, page, html_path: Path) -> bool:
         """加载页面并等待渲染完成"""
-        await page.goto(
-            html_path.resolve().as_uri(),
-            wait_until="domcontentloaded",
-            timeout=_GOTO_TIMEOUT_MS,
-        )
+        html = await asyncio.to_thread(html_path.read_text, encoding="utf-8")
+        content = re.search(r'<main class="render-content">([\s\S]*?)</main>', html)
+        resident_key = ""
+        if (
+            self._resident_engines
+            and content
+            and "window.__replaceRenderContent =" in html
+        ):
+            # Global TeX declarations can persist in MathJax. Reload these jobs
+            # and never retain their state for the following document.
+            stateful_math = re.search(
+                r"\\(?:[egx]?def|let|global|(?:re)?newcommand|providecommand|"
+                r"DeclareMathOperator|(?:re)?newenvironment|newtheorem)\b",
+                content.group(1),
+            )
+            if not stateful_math:
+                shell = html[: content.start(1)] + html[content.end(1) :]
+                shell += str('class="mermaid"' in content.group(1))
+                resident_key = hashlib.sha256(shell.encode()).hexdigest()
+        reused = False
+        if resident_key:
+            reused = await page.evaluate(
+                "key => window.__residentKey === key", resident_key
+            )
+        if reused:
+            await page.evaluate(
+                "content => window.__replaceRenderContent(content)", content.group(1)
+            )
+        else:
+            await page.goto(
+                html_path.resolve().as_uri(),
+                wait_until="domcontentloaded",
+                timeout=_GOTO_TIMEOUT_MS,
+            )
+        await page.evaluate("key => { window.__residentKey = key; }", resident_key)
 
         # 等待MathJax(仅当页面含公式时,无公式跳过避免白等 CDN 加载)
         try:
@@ -556,6 +641,10 @@ class PageRenderer:
 
         # 检查TikZ
         await self._wait_for_tikz(page)
+        if complete and resident_key:
+            self._browser_manager._resident_pages.add(page)
+        else:
+            self._browser_manager._resident_pages.discard(page)
         return complete
 
     async def _wait_for_mermaid(self, page) -> None:

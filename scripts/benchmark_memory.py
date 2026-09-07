@@ -13,6 +13,11 @@ async def main():
     """Compare always-warm pages with the idle-page recycling policy."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--tikz",
+        action="store_true",
+        help="Measure a resident TeX/WASM worker instead of MathJax",
+    )
     args = parser.parse_args()
     plugin_dir = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(plugin_dir.parent))
@@ -42,7 +47,9 @@ async def main():
 
     results = []
     for name, keep, timeout in [("always-warm", 2, 0), ("recycle-idle", 1, 1)]:
-        manager = BrowserManager(max_pages=2, max_idle_pages=keep, idle_timeout=timeout)
+        manager = BrowserManager(
+            max_pages=1 if args.tikz else 2, max_idle_pages=keep, idle_timeout=timeout
+        )
         renderer = PageRenderer(
             manager, plugin_dir, mathjax_timeout=30000, fail_on_mathjax_timeout=True
         )
@@ -64,6 +71,18 @@ async def main():
                     f"# {name} {index}\n\n中文字体与数学公式。\n\n"
                     + r"$$\int_0^1 x^2\,dx=\frac{1}{3}$$"
                 )
+                if args.tikz:
+                    from astrbot_plugin_mathjax2image.infrastructure.converter import (
+                        TikzConverter,
+                        TikzPlotConverter,
+                    )
+
+                    source = r"\begin{tikzpicture}\draw[blue,thick] (0,0) circle (RADIUS);\end{tikzpicture}".replace(
+                        "RADIUS", str(1 + index * 0.1)
+                    )
+                    html = converter.convert_to_html(
+                        TikzConverter(TikzPlotConverter()).convert(source)
+                    )
                 await renderer.render_to_image(
                     html, args.output / f"{name}-{index}.png"
                 )
@@ -81,6 +100,7 @@ async def main():
             resume = (time.perf_counter() - started) * 1000
             result = {
                 "policy": name,
+                "engine": "tikz" if args.tikz else "mathjax",
                 "rss_after_burst_mib": round(burst, 1),
                 "rss_idle_mib": round(idle, 1),
                 "pages_after_burst": pages_after_burst,

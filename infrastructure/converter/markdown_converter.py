@@ -291,7 +291,11 @@ class MarkdownConverter:
             if not attrs:
                 return True
             # 逐个解析属性,只允许白名单名
-            allowed_names = {"data-tex-packages", "data-tikz-libraries"}
+            allowed_names = {
+                "data-tex-packages",
+                "data-tikz-libraries",
+                "data-disable-cache",
+            }
             for name, _, _ in re.findall(
                 r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attrs
             ):

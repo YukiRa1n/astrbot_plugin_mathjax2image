@@ -59,7 +59,9 @@ class TikzConverter:
         # circuitikz 不在 TikZJax(beta24) 的包清单中,明确拒绝
         text = re.sub(
             r"\\begin\{circuitikz\}[\s\S]*?\\end\{circuitikz\}",
-            lambda m: '<div class="error">circuitikz 不支持（TikZJax 无此包），请用 TikZ 原生命令</div>',
+            lambda m: (
+                '<div class="error">circuitikz 不支持（TikZJax 无此包），请用 TikZ 原生命令</div>'
+            ),
             text,
         )
 
@@ -90,7 +92,7 @@ class TikzConverter:
         # 应用简单宏替换（使用词边界避免误替换，如 \Z 不应影响 \Zeta）
         for macro, replacement in self.SIMPLE_MACROS.items():
             tikz_code = re.sub(
-                re.escape(macro) + r'(?![a-zA-Z])',
+                re.escape(macro) + r"(?![a-zA-Z])",
                 lambda m, r=replacement: r,
                 tikz_code,
             )
@@ -106,7 +108,9 @@ class TikzConverter:
         tikz_code = self._plot_converter.convert(tikz_code)
 
         # 检测需要的包和库，并合并用户显式声明（白名单过滤）。
-        packages = list(dict.fromkeys(explicit_packages + self._detect_packages(tikz_code)))
+        packages = list(
+            dict.fromkeys(explicit_packages + self._detect_packages(tikz_code))
+        )
         tikzlibraries = list(
             dict.fromkeys(explicit_libraries + self._detect_libraries(tikz_code))
         )
@@ -118,9 +122,7 @@ class TikzConverter:
         # 因此脚本内容必须只含 tikzpicture 本体（不能有 usepackage/
         # usetikzlibrary/document 包装，否则嵌套 document 报错）。
         tex_packages = {
-            pkg: ""
-            for pkg in packages
-            if pkg not in {"amsmath", "amsfonts", "amssymb"}
+            pkg: "" for pkg in packages if pkg not in {"amsmath", "amsfonts", "amssymb"}
         }
         return self._wrap_tikz_html(
             tikz_code,
@@ -129,7 +131,9 @@ class TikzConverter:
         )
 
     @classmethod
-    def _extract_preamble_directives(cls, tikz_code: str) -> tuple[list[str], list[str]]:
+    def _extract_preamble_directives(
+        cls, tikz_code: str
+    ) -> tuple[list[str], list[str]]:
         """提取并白名单过滤用户的宏包和 TikZ 库声明。"""
         packages: list[str] = []
         for match in re.finditer(
@@ -152,13 +156,9 @@ class TikzConverter:
     def _strip_preamble_directives(tikz_code: str) -> str:
         """剥离用户输入中的 preamble 指令。"""
         # 移除 \documentclass{...} 整行
-        code = re.sub(
-            r"\\documentclass(\[[^\]]*\])?\{[^}]*\}", "", tikz_code
-        )
+        code = re.sub(r"\\documentclass(\[[^\]]*\])?\{[^}]*\}", "", tikz_code)
         # 移除 \usepackage[...]{...} 整行(含可选参数)
-        code = re.sub(
-            r"\\usepackage(\[[^\]]*\])?\{[^}]*\}", "", code
-        )
+        code = re.sub(r"\\usepackage(\[[^\]]*\])?\{[^}]*\}", "", code)
         # 移除 \usetikzlibrary{...} 整行
         code = re.sub(r"\\usetikzlibrary\{[^}]*\}", "", code)
         # 移除 \begin{document}/\end{document} 行
@@ -181,9 +181,7 @@ class TikzConverter:
             logger.error("[MathJax2Image] chemfig代码过于复杂，已拒绝渲染")
             return '<div class="error">chemfig 代码过于复杂，请简化后重试</div>'
 
-        logger.warning(
-            "[MathJax2Image] chemfig 不在 TikZJax 支持的包中，已拒绝渲染"
-        )
+        logger.warning("[MathJax2Image] chemfig 不在 TikZJax 支持的包中，已拒绝渲染")
         return '<div class="error">chemfig 不支持（TikZJax 无此包），请用 TikZ 原生命令</div>'
 
     def _wrap_tikz_html(
@@ -215,7 +213,7 @@ class TikzConverter:
             # 传 JSON 数组会变成 \usetikzlibrary{["arrows"]} 语法错误。
             attrs += f" data-tikz-libraries='{','.join(tikz_libraries)}'"
         return (
-            '<div class="tikz-diagram"><script type="text/tikz"'
+            '<div class="tikz-diagram"><script type="text/tikz" data-disable-cache="true"'
             f"{attrs}>\n"
             f"{safe_document}\n"
             "</script></div>"
@@ -280,30 +278,83 @@ class TikzConverter:
     SUPPORTED_LIBRARIES = frozenset(
         {
             # 基础常用
-            "arrows", "arrows.meta", "calc", "positioning", "shapes",
-            "shapes.geometric", "shapes.arrows", "shapes.callouts",
-            "shapes.misc", "shapes.multipart", "shapes.symbols",
-            "shapes.gates.logic.IEC", "shapes.gates.logic.US",
-            "intersections", "decorations", "decorations.pathreplacing",
-            "decorations.pathmorphing", "decorations.markings",
-            "decorations.footprints", "decorations.fractals",
-            "decorations.shapes", "decorations.text",
-            "backgrounds", "fit", "patterns", "patterns.meta",
-            "angles", "quotes", "matrix", "3d", "trees", "graphs",
-            "graphs.standard", "chains", "scopes", "through",
+            "arrows",
+            "arrows.meta",
+            "calc",
+            "positioning",
+            "shapes",
+            "shapes.geometric",
+            "shapes.arrows",
+            "shapes.callouts",
+            "shapes.misc",
+            "shapes.multipart",
+            "shapes.symbols",
+            "shapes.gates.logic.IEC",
+            "shapes.gates.logic.US",
+            "intersections",
+            "decorations",
+            "decorations.pathreplacing",
+            "decorations.pathmorphing",
+            "decorations.markings",
+            "decorations.footprints",
+            "decorations.fractals",
+            "decorations.shapes",
+            "decorations.text",
+            "backgrounds",
+            "fit",
+            "patterns",
+            "patterns.meta",
+            "angles",
+            "quotes",
+            "matrix",
+            "3d",
+            "trees",
+            "graphs",
+            "graphs.standard",
+            "chains",
+            "scopes",
+            "through",
             # P1 扩展
-            "automata", "calendar", "mindmap", "bending", "er",
-            "fadings", "shadings", "shadows", "spy", "plotmarks",
-            "math", "fpu", "fixedpointarithmetic", "perspective",
-            "petri", "lindenmayersystems", "snakes",
+            "automata",
+            "calendar",
+            "mindmap",
+            "bending",
+            "er",
+            "fadings",
+            "shadings",
+            "shadows",
+            "spy",
+            "plotmarks",
+            "math",
+            "fpu",
+            "fixedpointarithmetic",
+            "perspective",
+            "petri",
+            "lindenmayersystems",
+            "snakes",
             # beta24 补充
-            "animations", "babel", "cd", "circuits", "circuits.ee",
-            "circuits.ee.IEC", "circuits.logic", "circuits.logic.CDH",
-            "circuits.logic.IEC", "circuits.logic.US",
-            "datavisualization", "datavisualization.3d",
-            "datavisualization.barcharts", "datavisualization.formats.functions",
-            "datavisualization.polar", "datavisualization.sparklines",
-            "folding", "plothandlers", "rdf", "svg.path", "turtle", "views",
+            "animations",
+            "babel",
+            "cd",
+            "circuits",
+            "circuits.ee",
+            "circuits.ee.IEC",
+            "circuits.logic",
+            "circuits.logic.CDH",
+            "circuits.logic.IEC",
+            "circuits.logic.US",
+            "datavisualization",
+            "datavisualization.3d",
+            "datavisualization.barcharts",
+            "datavisualization.formats.functions",
+            "datavisualization.polar",
+            "datavisualization.sparklines",
+            "folding",
+            "plothandlers",
+            "rdf",
+            "svg.path",
+            "turtle",
+            "views",
         }
     )
 
@@ -468,7 +519,11 @@ class TikzConverter:
             libs = [lib for lib in libs if lib != "arrows"]
 
         # 只保留 TikZJax 支持的库,去重
-        return list(dict.fromkeys(l for l in libs if l in self.SUPPORTED_LIBRARIES))
+        return list(
+            dict.fromkeys(
+                library for library in libs if library in self.SUPPORTED_LIBRARIES
+            )
+        )
 
     def _build_tikz_document(
         self, tikz_code: str, packages: list[str], tikzlibraries: list[str]

@@ -124,6 +124,7 @@ class MathJax2ImagePlugin(Star):
             plot_max_points=_cfg_int("plot_max_points", 6400),
             max_concurrent_tikz=_cfg_int("max_concurrent_tikz", 1),
             typography=self.config.get("typography", {}),
+            resident_engines=bool(self.config.get("resident_engines", True)),
         )
 
         # LLM编排器

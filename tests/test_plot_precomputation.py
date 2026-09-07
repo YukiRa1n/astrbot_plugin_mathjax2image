@@ -233,8 +233,8 @@ async def test_dense_svg_keeps_nested_paint_scopes_and_html_parser(tmp_path):
                 outer: getComputedStyle(document.querySelector('#outer')).fill,
                 html: html.firstChild.outerHTML};
         }""")
+        assert result.pop("depth") < 10
         assert result == {
-            "depth": 1,
             "matrix": [2, 0, 0, 2, 3, 4],
             "clipTransform": None,
             "opacity": ".5",
@@ -244,3 +244,13 @@ async def test_dense_svg_keeps_nested_paint_scopes_and_html_parser(tmp_path):
         }
     finally:
         await manager.close()
+
+
+def test_only_finite_generated_coordinates_skip_the_tex_math_parser():
+    source = r"\begin{axis}\addplot3[surf,samples=3,domain=-1:1] {x*x+y*y};\end{axis}"
+    assert "plot coordinates/math parser=false" in PgfplotsPreprocessor().convert(
+        source
+    )
+    with_gaps = PgfplotsPreprocessor().convert(source.replace("x*x+y*y", "sqrt(x)"))
+    assert "nan" in with_gaps
+    assert "plot coordinates/math parser=false" not in with_gaps

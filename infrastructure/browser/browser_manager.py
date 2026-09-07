@@ -101,6 +101,7 @@ class BrowserManager:
         self._pool = asyncio.Queue()
         self._page_available = asyncio.Event()
         self._configured_pages: set[Page] = set()
+        self._resident_pages: set[Page] = set()
         self._owned_contexts = set()
         self._active_pages_count = 0
         self._lock = asyncio.Lock()
@@ -142,6 +143,7 @@ class BrowserManager:
         self._pool = asyncio.Queue()
         self._page_available = asyncio.Event()
         self._configured_pages = set()
+        self._resident_pages.clear()
         self._owned_contexts.clear()
         self._active_pages_count = 0
 
@@ -226,6 +228,7 @@ class BrowserManager:
 
     async def _dispose_page(self, page: Page) -> None:
         self._configured_pages.discard(page)
+        self._resident_pages.discard(page)
         self._owned_contexts.discard(page.context)
         try:
             await page.context.close()
@@ -297,7 +300,10 @@ class BrowserManager:
         )
         try:
             if not discard:
-                await page.goto("about:blank")
+                if page in self._resident_pages:
+                    await page.evaluate("() => window.__clearRenderContent()")
+                else:
+                    await page.goto("about:blank")
                 async with self._lock:
                     discard = self._closed or self._pool.qsize() >= self._max_idle_pages
                     if not discard:
@@ -399,6 +405,7 @@ class BrowserManager:
 
             self._active_pages_count = 0
             self._configured_pages = set()
+            self._resident_pages.clear()
             self._owned_contexts.clear()
             self._loop = None
             logger.info("[MathJax2Image] 浏览器共享页面池已完全销毁")

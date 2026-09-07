@@ -169,5 +169,11 @@
         "type": "int",
         "hint": "宽度乘高度的上限，默认约 4000 万像素",
         "default": 40000000
+    },
+    "resident_engines": {
+        "description": "常驻渲染引擎",
+        "type": "bool",
+        "default": true,
+        "hint": "兼容配置的任务复用 MathJax/TikZ 引擎，仍按 browser_idle_timeout 回收空闲页面；关闭后每次重新加载。"
     }
 }

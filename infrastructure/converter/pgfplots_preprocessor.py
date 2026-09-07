@@ -248,6 +248,9 @@ class PgfplotsPreprocessor:
                     for x, y in grid
                 ]
                 extra = f"mesh/rows={m},mesh/cols={n},mesh/ordering={ordering}"
+                # Generated finite literals need no TeX expression parser.
+                if not any("nan" in point for point in coordinates):
+                    extra += ",plot coordinates/math parser=false"
                 plot_options = (
                     options.rstrip(" ,") + "," + extra if options.strip() else extra
                 )

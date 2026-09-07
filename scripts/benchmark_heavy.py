@@ -22,6 +22,9 @@ async def main():
         default=["dense-curve", "surface-25", "surface-40", "torus"],
     )
     parser.add_argument("--timeout", type=int, default=90000)
+    parser.add_argument("--no-resident", action="store_true")
+    parser.add_argument("--no-compact-svg", action="store_true")
+    parser.add_argument("--no-worker-opt", action="store_true")
     args = parser.parse_args()
     sys.path.insert(0, str(args.plugin_dir.resolve().parent))
     import psutil
@@ -44,12 +47,20 @@ async def main():
     logging.disable(logging.CRITICAL)
     args.output.mkdir(parents=True, exist_ok=True)
     manager = BrowserManager(max_pages=1)
+    overrides = {}
+    if args.no_resident:
+        overrides["resident_engines"] = False
+    if args.no_compact_svg:
+        overrides["compact_svg"] = False
+    if args.no_worker_opt:
+        overrides["optimize_worker"] = False
     renderer = PageRenderer(
         manager,
         args.plugin_dir,
         tikz_timeout=args.timeout,
         mathjax_timeout=30000,
         fail_on_mathjax_timeout=True,
+        **overrides,
     )
     preprocess = LatexPreprocessor(
         TikzConverter(TikzPlotConverter()),
@@ -121,8 +132,24 @@ async def main():
                 svgs = await page.locator(".tikz-diagram svg").evaluate_all(
                     "(nodes)=>nodes.map(n=>n.outerHTML)"
                 )
+                if (
+                    len(svgs) != 1
+                    or not await page.locator(".tikz-diagram svg path").count()
+                ):
+                    raise RuntimeError("Expected a fully rendered TikZ SVG")
                 state = {
                     "svg_count": len(svgs),
+                    "svg_optimization": await page.evaluate("window.__svgStats || []"),
+                    "worker_profiles": [
+                        await worker.evaluate(
+                            "({phases:globalThis.__texProfile,snapshot:globalThis.__texSnapshotStats})"
+                        )
+                        for worker in page.workers
+                    ],
+                    "wasm_compiles": [
+                        await worker.evaluate("globalThis.__mathjaxWasmCompiles || 0")
+                        for worker in page.workers
+                    ],
                     "svg_bytes": sum(len(s.encode()) for s in svgs),
                 }
                 for i, svg in enumerate(svgs):

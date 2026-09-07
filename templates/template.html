@@ -588,9 +588,9 @@
         })();
     </script>
 
-    <!-- 代码块行号处理 -->
+    <!-- Reusable content lifecycle; engines stay loaded between compatible jobs. -->
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
+        window.__formatRenderCode = function() {
             document.querySelectorAll('pre code').forEach(function(codeBlock) {
                 const pre = codeBlock.parentElement;
                 const lines = codeBlock.textContent.split('\n');
@@ -623,7 +623,32 @@
                     pre.appendChild(lineDiv);
                 });
             });
-        });
+        };
+        document.addEventListener('DOMContentLoaded', window.__formatRenderCode);
+        window.__clearRenderContent = function() {
+            if (window.MathJax && MathJax.typesetClear) MathJax.typesetClear();
+            document.querySelector('main.render-content').replaceChildren();
+        };
+        window.__replaceRenderContent = async function(content) {
+            window.__clearRenderContent();
+            window.__tikzFinished = 0;
+            window.__tikzFailed = 0;
+            window.__svgStats = [];
+            window.mermaidError = null;
+            window.mermaidReady = false;
+            window.mathJaxReady = false;
+            const main = document.querySelector('main.render-content');
+            main.innerHTML = content;
+            window.__formatRenderCode();
+            if (window.mathJaxRequired) {
+                MathJax.texReset();
+                await MathJax.typesetPromise([main]);
+            }
+            window.mathJaxReady = true;
+            const diagrams = main.querySelectorAll('pre.mermaid');
+            if (diagrams.length) await mermaid.run({nodes: diagrams});
+            window.mermaidReady = true;
+        };
     </script>
 </body>
 </html>
