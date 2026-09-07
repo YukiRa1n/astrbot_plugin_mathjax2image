@@ -123,6 +123,8 @@ class MathJax2ImagePlugin(Star):
             ),
             plot_max_points=_cfg_int("plot_max_points", 6400),
             max_concurrent_tikz=_cfg_int("max_concurrent_tikz", 1),
+            tikz_backend=str(self.config.get("tikz_backend", "wasm")),
+            native_tex_bin=str(self.config.get("native_tex_bin", "") or "").strip(),
             typography=self.config.get("typography", {}),
             resident_engines=bool(self.config.get("resident_engines", True)),
         )

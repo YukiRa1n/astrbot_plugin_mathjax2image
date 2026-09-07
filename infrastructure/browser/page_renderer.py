@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from ...domain.errors import RenderError
+from .native_tikz import NativeTikzRenderer
 from .tikz_worker import optimize_tikz_worker
 
 _GOTO_TIMEOUT_MS = 60_000
@@ -62,7 +63,14 @@ class PageRenderer:
         resident_engines: bool = True,
         compact_svg: bool = True,
         optimize_worker: bool = True,
+        tikz_backend: str = "wasm",
+        native_tex_bin: str = "",
     ):
+        if tikz_backend not in {"wasm", "native"}:
+            raise ValueError("tikz_backend must be wasm or native")
+        self._native_tikz = (
+            NativeTikzRenderer(native_tex_bin) if tikz_backend == "native" else None
+        )
         self._optimize_worker = optimize_worker
         self._compact_svg = compact_svg
         self._resident_engines = resident_engines
@@ -157,6 +165,16 @@ class PageRenderer:
             except asyncio.TimeoutError as exc:
                 raise RenderError("TikZ 编译队列等待超时，请稍后重试") from exc
         try:
+            if heavy and self._native_tikz is not None:
+                try:
+                    html = await self._native_tikz.render_html(
+                        html, self._tikz_timeout / 1000.0
+                    )
+                except (RenderError, OSError, ValueError) as exc:
+                    logger.warning(
+                        "[MathJax2Image] Native TikZ unavailable; falling back to WASM: %s",
+                        exc,
+                    )
             # 使用系统临时目录（插件目录可能因 pip 安装到 site-packages 而只读）
             # 使用 mkstemp 确保文件权限为 0600，避免其他本地用户读取渲染内容
             temp_dir = Path(tempfile.gettempdir()) / "astrbot_mathjax2image"

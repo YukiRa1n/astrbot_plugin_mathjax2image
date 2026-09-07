@@ -116,6 +116,22 @@
         "hint": "默认 30000。仅限制排队时间，不改变 MathJax、TikZ 和截图自身的超时",
         "default": 30000
     },
+    "tikz_backend": {
+        "description": "TikZ 编译后端",
+        "type": "string",
+        "options": [
+            "wasm",
+            "native"
+        ],
+        "default": "wasm",
+        "hint": "默认 WASM；native 使用自行安装的 TinyTeX/TeX Live（latex + dvisvgm），失败自动回退 WASM。原生模式应运行在隔离、低权限的部署环境；不自动下载 TeX。修改后重载插件。"
+    },
+    "native_tex_bin": {
+        "description": "原生 TeX 可执行文件目录",
+        "type": "string",
+        "default": "",
+        "hint": "填写包含 latex 和 dvisvgm 的目录，例如 /opt/TinyTeX/bin/x86_64-linux；留空从 PATH 查找。仅 native 模式使用。"
+    },
     "precompute_pgfplots": {
         "description": "预计算 PGFplots 曲面坐标",
         "type": "bool",

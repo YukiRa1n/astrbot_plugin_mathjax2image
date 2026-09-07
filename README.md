@@ -33,6 +33,27 @@ playwright install-deps chromium
 
 MathJax 3.2.2、TikZJax beta24 和 Mermaid 10.9.3 使用固定版本 CDN；字体来自阿里云 OSS。首次使用仍需联网，后续在插件进程内复用资源。
 
+### 3. 可选：使用 TinyTeX 原生绘图
+
+默认 `tikz_backend = wasm`，保持原来的安装方式。选择 `native` 后，TikZ 改用外部 TinyTeX / TeX Live 的 **latex（pdfTeX）→ DVI → dvisvgm → SVG**，普通公式仍由 MathJax 渲染。插件不附带、不自动下载 TeX，也不新增 Python 运行依赖。
+
+1. 自行安装 [TinyTeX](https://yihui.org/tinytex/) 或使用已有 TeX Live。精简安装可先补齐下面的绘图依赖：
+
+   ```bash
+   tlmgr option docfiles 0
+   tlmgr option srcfiles 0
+   tlmgr install latex-bin standalone pgfplots amsmath amsfonts dvisvgm dvips infwarerr ltxcmds iftex
+   ```
+
+2. 在插件配置中把 `tikz_backend` 设为 `native`，`native_tex_bin` 填写**同时包含 latex 和 dvisvgm 的目录**，例如 `/opt/TinyTeX/bin/x86_64-linux` 或 `C:/tools/TinyTeX/bin/windows`。留空则从 AstrBot 进程的 `PATH` 查找。
+3. 重载插件，用 `/render` 发送 TikZ 示例。原生模式依旧使用下方宏包 / 库白名单；需要时由管理员用 `tlmgr install tikz-cd tikz-3dplot hf-tikz` 等命令补装对应包。
+
+缺少可执行文件、宏包、转换依赖或编译超时时，会记录原因并将本次文档回退到 WASM。原生成功时不加载 TikZJax 脚本及字体，仍受 `max_concurrent_tikz` 控制；`tikz_timeout` 分别约束原生编译阶段和回退后的 WASM 阶段。取消任务会结束正在运行的原生编译进程。切回 `wasm` 并重载即可恢复默认路径。
+
+此后端使用已验证的普通 pdfTeX 路线，不需要安装 LuaLaTeX 或 Poppler。DVI 转 SVG 的 PGF 绘图可能需要 Ghostscript；本次 Windows TinyTeX 安装自带该依赖，其他平台需按发行版配置。下方约 232 MiB 是含 Lua 测试环境的磁盘占用，并非插件包增加的大小或所有平台的最低安装体积。
+
+**部署边界：** 原生 TeX 是本机程序。插件禁用 shell escape、限制文件访问、过滤常见危险指令并使用临时目录，但这些措施不构成完整沙箱。接收不可信用户输入时，应把启用原生后端的 AstrBot 部署在无敏感挂载、低权限的隔离容器中；默认 WASM 路线仍可直接使用。
+
 ## 命令
 
 - `/math <主题>` - 调用 LLM 生成数学文章，支持 LaTeX 公式渲染
@@ -80,11 +101,11 @@ $$\cancel{x} + \upalpha \centernot\implies y$$
 
 `physics` 会改变部分命令语法，须显式声明（或在公式中使用 `\require{physics}`）；此时使用完整的导数、括号与向量命令，并移除冲突的简化宏。`physics` 和 `braket` 不能同时声明：前者使用 `\braket{a}{b}`，后者使用 `\braket{a|b}`。
 
-这不是完整 TeX 安装，不能加载任意 CTAN 包；TikZ 可用包仍受 TikZJax 编译环境限制，`circuitikz` 仍不支持。参见 [MathJax 3.2 扩展文档](https://docs.mathjax.org/en/v3.2/input/tex/extensions.html)。
+这不是完整 TeX 安装，不能加载任意 CTAN 包；TikZ 可用包仍受插件白名单限制，`circuitikz` 仍不支持。参见 [MathJax 3.2 扩展文档](https://docs.mathjax.org/en/v3.2/input/tex/extensions.html)。
 
 ### TikZ / PGFplots 支持清单
 
-TikZ 与 MathJax 使用不同引擎。下面是当前 TikZJax 加载白名单，不表示每个库的全部高级功能都已逐项测试。常用依赖会自动检测；需要显式指定时，把声明写在 `tikzpicture` 环境内，插件会提取并加载：
+TikZ 与 MathJax 使用不同引擎。下面是两个 TikZ 后端共用的加载白名单，不表示每个库的全部高级功能都已逐项测试。常用依赖会自动检测；需要显式指定时，把声明写在 `tikzpicture` 环境内，插件会提取并加载：
 
 ```latex
 \begin{tikzpicture}
@@ -277,6 +298,56 @@ python scripts/benchmark_memory.py --tikz --output ./memory-tikz-output
 ```bash
 python scripts/benchmark_numeric_kernels.py --output ./numeric-kernels.json
 ```
+
+</details>
+
+
+### 原生引擎独立测试
+
+<details>
+<summary>TinyTeX / LuaLaTeX 独立对照结果与复现方法</summary>
+
+以下数据来自独立基准脚本；当前可选后端使用普通 pdfTeX，未提供 Lua 引擎选项。
+
+在同一台 Windows 机器上测试 TinyTeX `v2026.09`（TeX Live 2026）和现有 MiKTeX 25.4。使用画廊中相同的 48 × 48 损失曲面、48 × 24 圆环；每组先热身一次，再测三次取中位数。Lua 组启用 `lua debug=compileerror`，并检查日志中的后端激活信息，避免将静默回退当作 Lua 加速。
+
+**编译并转换为 SVG：**
+
+| 发行版与引擎 | 损失曲面 | 圆环 | 原生进程峰值 RSS |
+| --- | --- | --- | --- |
+| TinyTeX / pdfTeX，预计算坐标 | 6.34 s | 4.70 s | 56 MiB |
+| TinyTeX / LuaLaTeX，原始表达式 | 5.93 s | 4.51 s | 190 MiB |
+| TinyTeX / LuaLaTeX，预计算坐标 | 5.91 s | 4.53 s | 163 MiB |
+| MiKTeX / pdfTeX，预计算坐标 | 8.53 s | 5.92 s | 154 MiB |
+| MiKTeX / LuaLaTeX，原始表达式 | 7.23 s | 5.65 s | 275 MiB |
+| MiKTeX / LuaLaTeX，预计算坐标 | 7.19 s | 5.57 s | 271 MiB |
+
+**TinyTeX 输出 PDF，再用 Poppler 生成 PNG：**
+
+| 引擎 | 损失曲面 | 圆环 | 原生进程峰值 RSS |
+| --- | --- | --- | --- |
+| pdfTeX，预计算坐标 | 6.02 s | 4.66 s | 55 MiB |
+| LuaLaTeX，原始表达式 | 5.59 s | 4.44 s | 184 MiB |
+| LuaLaTeX，预计算坐标 | 5.48 s | 4.50 s | 159 MiB |
+
+时间包含坐标预处理、原生编译和转换，不包含 Markdown 页面排版。RSS 是每 10 ms 采样的原生编译 / 转换进程及其子进程，在三次计时和两个图形中取峰值；**不包含 Python、AstrBot 或 Chromium，不能与上方整个渲染进程树的 RSS 直接比较**。这不是服务器容量保证，也没有测量清空操作系统缓存后的冷启动。
+
+本次结果更支持先选择 **TinyTeX + 普通 pdfTeX + 坐标预计算**：Lua 在这两个例子中只额外快约 4%–9%，内存约为三倍。两个发行版的版本和配置不同，不能将差异全部归因于发行版名称。官方 Lua 加速说明与这里已预计算坐标的基线也不同，不能直接套用倍数。
+
+安装从 TinyTeX-0 开始：Windows 下载包约 23 MiB，补齐引擎、宏包、格式及缓存后约 **232 MiB**，不含额外 Poppler。仅安装所需包并关闭文档 / 源码包：`latex-bin`、`luatex`、`luahbtex`、`pgfplots`、`standalone`、`amsmath`、`amsfonts`、`dvisvgm`、`dvips`、`luatex85`、`infwarerr`、`ltxcmds`、`iftex`，以及自动依赖。Linux 体积与性能未在本次实测。
+
+本次 TinyTeX 自带 Ghostscript 10.07.1，`dvisvgm --pdf` 不支持该版本；DVI → SVG 正常，PDF → PNG 通过 Poppler 正常。不同引擎与转换器的颜色转换和抗锯齿存在差异，已检查曲面及圆环完整性，不承诺逐像素一致。
+
+复现脚本仅运行固定的可信示例，不安装软件、不切换插件后端，也不修改系统 PATH。将工具路径替换为实际安装目录；Linux 使用相应的 `bin/x86_64-linux` 或其他平台目录。
+
+```bash
+python scripts/benchmark_native_engines.py --tinytex-bin ./tools/TinyTeX/bin/windows --output ./native-svg --runs 3
+python scripts/benchmark_native_engines.py --tinytex-bin ./tools/TinyTeX/bin/windows --output-format pdf --pdf-rasterizer /path/to/pdftoppm --output ./native-png --runs 3
+```
+
+可用 `--miktex-bin` 加入 MiKTeX 对照，`--variants` 选择引擎分支。脚本保存源文件、日志、SVG / PDF / PNG 和 `native.json`；其中 `cold_run` 记录每组首轮热身。测试需要 `psutil` 和现有插件的 Python / Playwright 依赖。
+
+参考：[TinyTeX 发行说明](https://github.com/rstudio/tinytex-releases)、[PGFplots Lua 后端](https://tikz.dev/pgfplots/faster)。
 
 </details>
 
