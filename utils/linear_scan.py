@@ -12,7 +12,24 @@ work is O(n) regardless of how unbalanced the input is.
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_right
+
+# Runs of a single code-fence delimiter, located in C so the scan does not pay
+# Python-level per-character cost.
+_DELIMITER_RUN = re.compile(r"`+|~+")
+
+#: Environments whose spans are treated as math by ``scan_math_blocks``.
+_MATH_ENVIRONMENTS = frozenset(
+    """
+    equation* equation align* align alignat* alignat
+    gather* gather multline* multline flalign* flalign
+    CD numcases subnumcases
+    """.split()
+)
+# One match per \begin{X} / \end{X} boundary, so all environments are collected
+# in a single pass instead of one scan each.
+_ENV_BOUNDARY = re.compile(r"\\(?P<kind>begin|end)\{(?P<name>[^}]*)\}")
 
 # Inline code spans never need more ticks than this. Bounding the tick count
 # also bounds the work for a pathological run of a single delimiter.
@@ -173,53 +190,51 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
     Mirrors the previous fenced/inline alternation: a fence needs a run of at
     least three backticks or tildes followed by a line break and a matching
     closer; inline spans use a bounded tick run and may not cross a line break.
+
+    Delimiter runs are located with ``re.finditer`` so the per-character work
+    happens in C: a hand-written per-character Python loop costs several times
+    more than the C scanner it replaced on ordinary text, which showed up as a
+    measurable regression on prose-heavy documents.
     """
     spans: list[tuple[int, int]] = []
     length = len(text)
-    cursor = 0
-    while cursor < length:
-        char = text[cursor]
-        if char not in "`~":
-            cursor += 1
-            continue
-        # Measure the run once and consume it as a unit. Re-entering the run
-        # after an inner match would otherwise re-scan its tail, making a
-        # single long delimiter run quadratic.
-        run_end = cursor
-        while run_end < length and text[run_end] == char:
-            run_end += 1
-        run_length = run_end - cursor
+    consumed_until = 0
+    for match in _DELIMITER_RUN.finditer(text):
+        start = match.start()
+        if start < consumed_until:
+            continue  # already part of a block body or an inline span
+        char = match.group(0)[0]
+        run_length = match.end() - start
 
         if run_length >= 3:
             # Fenced block: "<fence>[rest of line]\n<body><same fence>".
             # Only three ticks are needed: a longer run matches identically.
-            line_end = text.find("\n", run_end)
+            line_end = text.find("\n", match.end())
             if line_end != -1:
                 fence = char * 3
                 close = text.find(fence, line_end + 1)
                 if close != -1:
-                    spans.append((cursor, close + len(fence)))
-                    cursor = close + len(fence)
-                    continue
+                    end = close + len(fence)
+                    spans.append((start, end))
+                    consumed_until = end
+                    continue  # inner delimiters are part of the block body
 
         if char == "`":
             # Inline spans: `+<no newline>`+, tick run bounded to stay O(1).
-            line_end = text.find("\n", cursor)
+            line_end = text.find("\n", start)
             limit = length if line_end == -1 else line_end
             ticks = min(run_length, INLINE_TICKS_MAX)
-            position = cursor
-            while ticks and position < run_end:
+            position = start
+            while ticks and position < match.end():
                 token = char * ticks
                 close = text.find(token, position + ticks)
                 if close != -1 and close + ticks <= limit:
-                    spans.append((position, close + ticks))
-                    position = close + ticks
+                    end = close + ticks
+                    spans.append((position, end))
+                    position = end
+                    consumed_until = end
                 else:
                     break
-            cursor = position if position > cursor else run_end
-            continue
-
-        cursor = run_end
     return spans
 
 
@@ -231,37 +246,46 @@ def scan_math_blocks(text: str) -> list[tuple[int, int]]:
     when its closer was missing, so a message of repeated ``\\(`` cost O(n^2).
     """
     spans: list[tuple[int, int]] = []
+    # Each find_pairs call costs a substring scan even when the delimiter is
+    # absent, and the environment list alone is 15 pairs. `str.__contains__` is
+    # a C-level scan that skips those calls outright, which matters on plain
+    # prose where none of these tokens appear.
     for open_token, close_token, allow_newline in (
         ("\\[", "\\]", True),
         ("\\(", "\\)", True),
         ("$$", "$$", False),
         ("$", "$", False),
     ):
-        spans.extend(find_pairs(text, open_token, close_token, allow_newline=allow_newline))
-    for environment in (
-        "equation*",
-        "equation",
-        "align*",
-        "align",
-        "alignat*",
-        "alignat",
-        "gather*",
-        "gather",
-        "multline*",
-        "multline",
-        "flalign*",
-        "flalign",
-        "CD",
-        "numcases",
-        "subnumcases",
-    ):
-        spans.extend(
-            find_pairs(
-                text,
-                "\\begin{" + environment + "}",
-                "\\end{" + environment + "}",
+        if open_token in text:
+            spans.extend(
+                find_pairs(text, open_token, close_token, allow_newline=allow_newline)
             )
-        )
+    if "\\begin{" in text and "\\end{" in text:
+        # One pass collects every \begin{X}/\end{X} offset; pairing then walks
+        # two short lists per environment. Calling find_pairs once per
+        # environment would re-scan the whole document fifteen times.
+        begins: dict[str, list[int]] = {}
+        ends: dict[str, list[int]] = {}
+        for match in _ENV_BOUNDARY.finditer(text):
+            environment = match.group("name")
+            if environment not in _MATH_ENVIRONMENTS:
+                continue
+            bucket = begins if match.group("kind") == "begin" else ends
+            bucket.setdefault(environment, []).append(match.start())
+        for environment, starts in begins.items():
+            closes = ends.get(environment)
+            if not closes:
+                continue
+            # Same rule as find_pairs: each opening takes the nearest end that
+            # follows it and has not been claimed yet.
+            cursor = 0
+            for start in starts:
+                while cursor < len(closes) and closes[cursor] <= start:
+                    cursor += 1
+                if cursor >= len(closes):
+                    break
+                spans.append((start, closes[cursor] + len(environment) + len("\\end{}")))
+                cursor += 1
     spans.sort()
     merged: list[tuple[int, int]] = []
     for start, end in spans:

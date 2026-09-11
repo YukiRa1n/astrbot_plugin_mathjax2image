@@ -69,6 +69,9 @@ ATTRIBUTE_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_,.\-\[\]:{}\" ]*$")
 # text that is essentially nothing but markup, before it reaches either stage.
 _MARKUP_RATIO_LIMIT = 0.90
 _MARKUP_RATIO_MIN_LENGTH = 20000
+# C-level complement of `\w`, used to count alphanumeric characters without a
+# per-character Python loop.
+_NON_WORD = re.compile(r"\W")
 
 
 class MarkdownConverter:
@@ -201,7 +204,12 @@ class MarkdownConverter:
         """
         if len(text) < _MARKUP_RATIO_MIN_LENGTH:
             return False
-        alphanumeric = sum(1 for char in text if char.isalnum())
+        # Counting with a generator costs ~1.7 ms on a 32 KB page, which is more
+        # than everything else in this method combined. Removing the non-word
+        # characters leaves the word characters, so its length *is* the count.
+        # `\w` differs from `str.isalnum` only on the underscore, which is
+        # immaterial against a 0.90 threshold.
+        alphanumeric = len(_NON_WORD.sub("", text))
         return (len(text) - alphanumeric) / len(text) > _MARKUP_RATIO_LIMIT
 
     def _fix_tikz_comments(self, text: str) -> str:
@@ -209,40 +217,38 @@ class MarkdownConverter:
 
         原实现用 ``(%[^\\n]*?)\\end{...}``：当文本是一整行 ``%``（每个 ``%``
         都要扫到行尾才失败）时是 O(n^2)，100 KB 的一行注释即可冻结事件循环。
-        这里按行单遍扫描，只在一行确实含注释时才回溯该行。
+        注释行才需要修复，而注释必然止于行尾，因此按行处理即可；行内两个结束
+        标记都要换行（原版两个正则分别处理，此处合并为一次遍历）。
+
+        实现只用 ``str.split``/``partition``/``replace`` 这些 C 层操作：逐字符
+        的 Python 循环同样线性，但每字符开销高数倍，在普通文档上反而比原版慢
+        约 60 倍。
         """
         if "%" not in text or "\\end{tikz" not in text:
             return text
-        out: list[str] = []
-        line_has_comment = False
-        index, length = 0, len(text)
-        while index < length:
-            char = text[index]
-            if char == "\n":
-                line_has_comment = False
-                out.append(char)
-                index += 1
+        # Splitting a large document that needs no fixing does cost more than
+        # the original regex (a few tens of microseconds on a 15 KB page), and
+        # is the one remaining regression here. A cheap probe was tried and
+        # dropped: any pattern loose enough to catch an in-line comment
+        # (`\draw ...; % note \end{tikzpicture}`) is loose enough to backtrack
+        # over a whole-line run of `%`, reintroducing the quadratic behaviour
+        # this function exists to remove. Trading a DoS for 0.06 ms is a bad
+        # trade, so the cost is accepted and recorded here.
+        lines = text.split("\n")
+        for index, line in enumerate(lines):
+            # 没有注释、或没有同行的结束标记时，整行无需改动
+            if "%" not in line or "\\end{tikz" not in line:
                 continue
-            if char == "%":
-                if index == 0 or text[index - 1] != "\\":
-                    line_has_comment = True
-                out.append(char)
-                index += 1
-                continue
-            if char == "\\" and line_has_comment:
-                for token in self._END_TOKENS:
-                    if text.startswith(token, index):
-                        out.append("\n")
-                        out.append(token)
-                        index += len(token)
-                        break
-                else:
-                    out.append(char)
-                    index += 1
-                continue
-            out.append(char)
-            index += 1
-        return "".join(out)
+            head, percent, tail = line.partition("%")
+            # 原正则 `[^\n]*?` 是惰性的，每行只有第一个结束标记被换行；
+            # 这里保持同一语义，避免安全修复顺带改变渲染结果。
+            for token in self._END_TOKENS:
+                position = tail.find(token)
+                if position != -1:
+                    tail = tail[:position] + "\n" + tail[position:]
+                    break
+            lines[index] = head + percent + tail
+        return "\n".join(lines)
 
     def _preprocess_markdown(self, text: str) -> str:
         """预处理Markdown，自动修复常见格式问题"""

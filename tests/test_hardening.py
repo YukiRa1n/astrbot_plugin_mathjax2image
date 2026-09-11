@@ -87,6 +87,41 @@ def test_degenerate_markup_does_not_hang(payload):
     assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
 
 
+@pytest.mark.parametrize(
+    "payload",
+    ["`" * 100_000, "\\(" * 50_000, "\\[" * 50_000, "%" * 100_000, "[" * 100_000,
+     "~" * 100_000, "*" * 100_000],
+    ids=["backticks", "math-parens", "math-brackets", "percent", "brackets",
+         "tildes", "stars"],
+)
+def test_degenerate_guard_is_not_inverted(payload):
+    """The ratio test must actually reject all-markup input.
+
+    An inverted count made the guard a no-op: the payloads above still reached
+    Python-Markdown and cost seconds each. Direct assertions on the predicate
+    keep that class of bug from passing again.
+    """
+    assert _converter()._is_degenerate_markup(payload) is True
+
+
+def test_repeated_environment_names_are_not_degenerate():
+    """`\\begin{tikzpicture}` repeats are mostly letters, so the guard lets them
+    through by design; the linear scanner is what keeps them fast."""
+    payload = "\\begin{tikzpicture}" * 5000
+    assert _converter()._is_degenerate_markup(payload) is False
+    started = time.perf_counter()
+    _preprocessor().preprocess(payload)
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_degenerate_guard_allows_real_documents():
+    """Ordinary prose must never trip the guard."""
+    converter = _converter()
+    assert converter._is_degenerate_markup("这是正文段落。" * 5000) is False
+    assert converter._is_degenerate_markup("plain ascii prose. " * 3000) is False
+    assert converter._is_degenerate_markup("short `code`") is False  # below min length
+
+
 def test_balanced_code_block_still_extracted():
     """The linear scanner keeps normal fenced blocks and inline spans intact."""
     text = "before `inline` after\n\n```python\nx = 1\n```\n"
