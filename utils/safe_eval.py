@@ -247,8 +247,13 @@ def compile_math_expression(
     """
     if not isinstance(expression, str) or len(expression) > 500:
         raise ValueError("Expression is too long")
+    # TikZ/PGF writes powers as `^`. In Python `^` is bitwise XOR, which parses
+    # cleanly and then silently computes the wrong value, so translating it here
+    # rather than at each call site keeps a caller that forgets from producing
+    # quietly incorrect curves.
+    source = expression.strip().replace("^", "**")
     try:
-        tree = ast.parse(expression.strip(), mode="eval")
+        tree = ast.parse(source, mode="eval")
     except (SyntaxError, RecursionError) as exc:
         raise ValueError("Invalid arithmetic expression") from exc
     if sum(1 for _ in ast.walk(tree)) > 100:
