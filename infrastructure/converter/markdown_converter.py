@@ -11,6 +11,8 @@ from pathlib import Path
 
 import markdown
 
+from ...utils.linear_scan import scan_fenced_code, scan_math_blocks, substitute_spans
+
 TRUSTED_HTML_PLACEHOLDER = "TRUSTEDHTML{}TRUSTEDHTML"
 # 注意：转换器生成的 TikZ 块可能带 data-tex-packages 属性
 # （<script type="text/tikz" data-tex-packages='...'>），正则必须允许
@@ -55,6 +57,18 @@ MATHJAX_PACKAGE_ALIASES = {
 
 LANGUAGE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 BG_COLOR_PATTERN = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+# Permitted values for the data-* attributes on a trusted TikZ block: a JSON
+# package map or a comma-separated library list. No braces, quotes, backslashes
+# or backticks, so nothing can escape into TeX or the worker template.
+ATTRIBUTE_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9_,.\-\[\]:{}\" ]*$")
+
+# Python-Markdown's own block and inline scanners are super-linear in runs of
+# bare markup characters (a single 100 KB line of `%` or `` ` `` costs seconds
+# even with no plugin code involved). Real documents sit far below this bound:
+# the plugin's own README is 0.17 and its densest example is 0.41. Reject only
+# text that is essentially nothing but markup, before it reaches either stage.
+_MARKUP_RATIO_LIMIT = 0.90
+_MARKUP_RATIO_MIN_LENGTH = 20000
 
 
 class MarkdownConverter:
@@ -82,6 +96,12 @@ class MarkdownConverter:
 
     def convert_to_html(self, md_text: str, bg_color: str = "#FDFBF0") -> str:
         """将Markdown转换为完整HTML"""
+        # 预处理前先做退化输入检查：纯标记字符的长文本会让 Python-Markdown
+        # 自身的扫描器退化成超线性，且没有任何渲染价值。
+        if self._is_degenerate_markup(md_text):
+            raise ValueError(
+                "内容几乎全为 Markdown/LaTeX 标记字符，无法渲染；请提供正文文本"
+            )
         # 预处理
         md_text = self._fix_tikz_comments(md_text)
         md_text = self._preprocess_markdown(md_text)
@@ -166,13 +186,63 @@ class MarkdownConverter:
             )
         return result
 
+    _END_TOKENS = ("\\end{tikzpicture}", "\\end{tikzcd}")
+
+    @staticmethod
+    def _is_degenerate_markup(text: str) -> bool:
+        """Detect text that is almost entirely markup characters.
+
+        Args:
+            text: Preprocessed document text.
+
+        Returns:
+            True when the content is long enough to matter and almost no
+            character is alphanumeric, so it carries no renderable prose.
+        """
+        if len(text) < _MARKUP_RATIO_MIN_LENGTH:
+            return False
+        alphanumeric = sum(1 for char in text if char.isalnum())
+        return (len(text) - alphanumeric) / len(text) > _MARKUP_RATIO_LIMIT
+
     def _fix_tikz_comments(self, text: str) -> str:
-        """修复TikZ代码中注释与\\end{tikzpicture}同行的问题"""
-        text = re.sub(
-            r"(%[^\n]*?)\\end\{tikzpicture\}", r"\1\n\\end{tikzpicture}", text
-        )
-        text = re.sub(r"(%[^\n]*?)\\end\{tikzcd\}", r"\1\n\\end{tikzcd}", text)
-        return text
+        """修复TikZ代码中注释与\\end{tikzpicture}同行的问题
+
+        原实现用 ``(%[^\\n]*?)\\end{...}``：当文本是一整行 ``%``（每个 ``%``
+        都要扫到行尾才失败）时是 O(n^2)，100 KB 的一行注释即可冻结事件循环。
+        这里按行单遍扫描，只在一行确实含注释时才回溯该行。
+        """
+        if "%" not in text or "\\end{tikz" not in text:
+            return text
+        out: list[str] = []
+        line_has_comment = False
+        index, length = 0, len(text)
+        while index < length:
+            char = text[index]
+            if char == "\n":
+                line_has_comment = False
+                out.append(char)
+                index += 1
+                continue
+            if char == "%":
+                if index == 0 or text[index - 1] != "\\":
+                    line_has_comment = True
+                out.append(char)
+                index += 1
+                continue
+            if char == "\\" and line_has_comment:
+                for token in self._END_TOKENS:
+                    if text.startswith(token, index):
+                        out.append("\n")
+                        out.append(token)
+                        index += len(token)
+                        break
+                else:
+                    out.append(char)
+                    index += 1
+                continue
+            out.append(char)
+            index += 1
+        return "".join(out)
 
     def _preprocess_markdown(self, text: str) -> str:
         """预处理Markdown，自动修复常见格式问题"""
@@ -224,41 +294,24 @@ class MarkdownConverter:
         return "\n".join(result)
 
     def _extract_math_blocks(self, text: str) -> tuple[str, list[str]]:
-        """提取数学公式块"""
+        """提取数学公式块（线性扫描，避免未闭合定界符触发二次复杂度）"""
         blocks = []
 
-        def substitute(match):
-            placeholder = f"MATHBLOCK{len(blocks)}MATHBLOCK"
-            blocks.append(match.group(0))
-            return placeholder
+        def substitute(index, block):
+            blocks.append(block)
+            return f"MATHBLOCK{index}MATHBLOCK"
 
-        text = re.sub(r"\\\[[\s\S]*?\\\]", substitute, text)
-        text = re.sub(r"\\\([\s\S]*?\\\)", substitute, text)
-        text = re.sub(r"\$\$.*?\$\$", substitute, text, flags=re.DOTALL)
-        text = re.sub(r"\$.*?\$", substitute, text)
-        text = re.sub(
-            r"\\begin\{(equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|flalign\*?|CD|numcases|subnumcases)\}[\s\S]*?\\end\{\1\}",
-            substitute,
-            text,
-        )
-
-        return text, blocks
+        return substitute_spans(text, scan_math_blocks(text), substitute), blocks
 
     def _extract_code_blocks(self, text: str) -> tuple[str, list[str]]:
-        """提取代码块"""
+        """提取代码块（线性扫描，避免未闭合定界符触发二次复杂度）"""
         blocks = []
 
-        def substitute(match):
-            placeholder = f"CODEBLOCK{len(blocks)}CODEBLOCK"
-            blocks.append(match.group(0))
-            return placeholder
+        def substitute(index, block):
+            blocks.append(block)
+            return f"CODEBLOCK{index}CODEBLOCK"
 
-        text = re.sub(
-            r"(?P<fence>`{3,}|~{3,})[^\n]*\n[\s\S]*?(?P=fence)|(?P<ticks>`+)[^\n]*?(?P=ticks)",
-            substitute,
-            text,
-        )
-        return text, blocks
+        return substitute_spans(text, scan_fenced_code(text), substitute), blocks
 
     def _extract_trusted_html_blocks(self, text: str) -> tuple[str, list[str]]:
         """提取插件转换器生成的受控HTML块"""
@@ -275,6 +328,62 @@ class MarkdownConverter:
 
         return TRUSTED_HTML_PATTERN.sub(substitute, text), blocks
 
+    def _tokenize_attributes(self, source: str) -> dict[str, str] | None:
+        """严格解析标签属性串；出现任何未白名单化的内容即返回 None。
+
+        HTML 允许 ``/`` 作为属性分隔符（``data-x='1' /onerror=alert(1)``），
+        因此不能只按空白切分再回头找残留。这里逐字符消费，要求每个属性都
+        形如 ``name="value"`` / ``name='value'`` 且名字在白名单内，任何多余
+        字符（含 ``/``）都判定为不可信。
+        """
+        allowed = {
+            "data-tex-packages",
+            "data-tikz-libraries",
+            "data-disable-cache",
+        }
+        attributes: dict[str, str] = {}
+        cursor, length = 0, len(source)
+        while True:
+            while cursor < length and source[cursor].isspace():
+                cursor += 1
+            if cursor >= length:
+                return attributes
+            start = cursor
+            while cursor < length and (
+                source[cursor].isalnum() or source[cursor] in "-_:."
+            ):
+                cursor += 1
+            if cursor == start:
+                return None  # 非属性字符（含 '/'、'<' 等）
+            name = source[start:cursor].lower()
+            if name not in allowed:
+                return None
+            while cursor < length and source[cursor].isspace():
+                cursor += 1
+            if cursor >= length or source[cursor] != "=":
+                return None
+            cursor += 1
+            while cursor < length and source[cursor].isspace():
+                cursor += 1
+            if cursor >= length or source[cursor] not in "\"'":
+                return None
+            quote = source[cursor]
+            cursor += 1
+            value_start = cursor
+            while cursor < length and source[cursor] != quote:
+                cursor += 1
+            if cursor >= length:
+                return None
+            value = source[value_start:cursor]
+            # A permitted name does not make an arbitrary value safe. These
+            # values are interpolated into TeX preamble (and, for the WASM
+            # path, into the worker's \usetikzlibrary{} template), so keep them
+            # to what a package or library list can contain.
+            if not ATTRIBUTE_VALUE_PATTERN.fullmatch(value):
+                return None
+            attributes[name] = value
+            cursor += 1
+
     def _is_trusted_html_block(self, block: str) -> bool:
         """校验受控HTML块，避免用户闭合标签后注入脚本"""
         tikz_match = re.fullmatch(
@@ -285,26 +394,7 @@ class MarkdownConverter:
             # 内容中不允许出现 script 标签(防闭合注入)
             if re.search(r"</?script", tikz_match.group(2), re.IGNORECASE):
                 return False
-            # 属性白名单: 只允许 data-tex-packages/data-tikz-libraries,
-            # 禁止 onerror/onload 等事件属性和任意 data-x(防属性注入)。
-            attrs = tikz_match.group(1).strip()
-            if not attrs:
-                return True
-            # 逐个解析属性,只允许白名单名
-            allowed_names = {
-                "data-tex-packages",
-                "data-tikz-libraries",
-                "data-disable-cache",
-            }
-            for name, _, _ in re.findall(
-                r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(['\"])(.*?)\2", attrs
-            ):
-                if name not in allowed_names:
-                    return False
-            # 拒绝残留的无值属性或异常字符
-            if re.search(r"\s(?:on\w+)\s*=", attrs, re.IGNORECASE):
-                return False
-            return True
+            return self._tokenize_attributes(tikz_match.group(1)) is not None
 
         mermaid_match = re.fullmatch(
             r'<pre class="mermaid">\n([\s\S]*?)\n</pre>', block

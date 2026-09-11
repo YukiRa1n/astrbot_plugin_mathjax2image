@@ -6,6 +6,8 @@ TikZ环境转换器
 import re
 from typing import TYPE_CHECKING
 
+from ...utils.linear_scan import find_brace_arguments, find_pairs, substitute_spans
+
 try:
     from astrbot.api import logger
 except ModuleNotFoundError:  # pragma: no cover - standalone test support
@@ -44,26 +46,36 @@ class TikzConverter:
 
     def __init__(self, plot_converter: "TikzPlotConverter"):
         self._plot_converter = plot_converter
+        self._plot_budget = [plot_converter.MAX_EVAL_POINTS]
+        self._surface_budget = [plot_converter.max_plot_points]
+
+    #: Rejected environments and the message shown in their place.
+    _REJECTED_ENVIRONMENTS = {
+        "circuitikz": "circuitikz 不支持（TikZJax 无此包），请用 TikZ 原生命令",
+        "chemfig": "chemfig 不支持（TikZJax 无此包），请用 TikZ 原生命令",
+    }
 
     def convert(self, text: str) -> str:
         """转换所有TikZ环境"""
-        # 匹配各种TikZ环境
-        text = re.sub(
-            r"\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}",
-            self._convert_tikz_block,
-            text,
-        )
-        text = re.sub(
-            r"\\begin\{tikzcd\}[\s\S]*?\\end\{tikzcd\}", self._convert_tikz_block, text
-        )
-        # circuitikz 不在 TikZJax(beta24) 的包清单中,明确拒绝
-        text = re.sub(
-            r"\\begin\{circuitikz\}[\s\S]*?\\end\{circuitikz\}",
-            lambda m: (
-                '<div class="error">circuitikz 不支持（TikZJax 无此包），请用 TikZ 原生命令</div>'
-            ),
-            text,
-        )
+        # 采样预算跨图共享：否则每张图都能各自领满 plot_max_points，
+        # 一条消息即可把配置上限乘以图数。
+        self._plot_budget = [self._plot_converter.MAX_EVAL_POINTS]
+        self._surface_budget = [self._plot_converter.max_plot_points]
+        # 线性扫描配对环境：未闭合的 \begin{tikzpicture} 若交给惰性正则，
+        # 每个起点都要扫到文末，O(n^2) 会冻结事件循环。
+        for environment in ("tikzpicture", "tikzcd", "circuitikz", "chemfig"):
+            open_token = f"\\begin{{{environment}}}"
+            close_token = f"\\end{{{environment}}}"
+            spans = find_pairs(text, open_token, close_token)
+            if environment in self._REJECTED_ENVIRONMENTS:
+                message = (
+                    '<div class="error">'
+                    + self._REJECTED_ENVIRONMENTS[environment]
+                    + "</div>"
+                )
+                text = substitute_spans(text, spans, lambda _i, _block: message)
+            else:
+                text = substitute_spans(text, spans, self._convert_tikz_block_span)
 
         # 匹配独立的chemfig命令。
         # 注意: 转换后的 HTML 块含 <script type="text/tikz" data-...>,
@@ -72,13 +84,19 @@ class TikzConverter:
         if r"\chemfig{" in text and not re.search(
             r'<script\s+type=["\']text/tikz["\']', text
         ):
-            text = re.sub(
-                r"\\chemfig\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}",
-                self._convert_chemfig_block,
+            text = substitute_spans(
                 text,
+                find_brace_arguments(text, "\\chemfig"),
+                lambda _i, block: self._convert_chemfig_block(
+                    re.match(r"[\s\S]*", block)
+                ),
             )
 
         return text
+
+    def _convert_tikz_block_span(self, _index: int, block: str) -> str:
+        """Adapter: the span scanner hands over the matched source text."""
+        return self._convert_tikz_block(re.match(r"[\s\S]*", block))
 
     def _convert_tikz_block(self, match: re.Match) -> str:
         """转换TikZ代码块"""
@@ -105,7 +123,9 @@ class TikzConverter:
         tikz_code = self._strip_preamble_directives(tikz_code)
 
         # 预处理plot命令
-        tikz_code = self._plot_converter.convert(tikz_code)
+        tikz_code = self._plot_converter.convert(
+            tikz_code, self._plot_budget, self._surface_budget
+        )
 
         # 检测需要的包和库，并合并用户显式声明（白名单过滤）。
         packages = list(

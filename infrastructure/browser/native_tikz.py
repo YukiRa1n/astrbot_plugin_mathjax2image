@@ -17,14 +17,42 @@ from ..converter.tikz_converter import TikzConverter
 _TIKZ_SCRIPT = re.compile(
     r'<script\b(?=[^>]*\btype="text/tikz")([^>]*)>(.*?)</script>', re.S
 )
-# These checks reject common file/process primitives, but are not an OS sandbox.
-_UNSAFE_TEX = re.compile(
-    r"\^\^|\\(?:input|include|includeonly|includegraphics|openin|openout|read|readline|write|"
-    r"catcode|csname|endcsname|directlua|latelua|special|immediate|pdfobj|pdffiledump|"
-    r"pdfximage|pdfcatalog|pdfannot|pdfextension|usepackage|RequirePackage|documentclass|"
-    r"newread|newwrite|scantokens|everyjob|everyeof|loop|repeat)\b",
-    re.I,
+# A name blocklist cannot hold: the original one omitted `\file_input:n` (expl3)
+# and `\@@input`, and `openin_any=p` does not stop absolute paths on every TeX
+# engine. Two structural rules replace guesswork about individual names:
+#   * any expl3-style name (contains `_` or `:`) is refused wholesale, which
+#     covers the whole \file_*/\ior_*/\tl_* file and IO namespace at once;
+#   * any name starting with `@` is refused, which covers TeX internals such as
+#     \@@input that the old blocklist missed.
+# A short explicit list still covers plain-TeX file and process primitives.
+_DENIED_TEX_COMMANDS = frozenset(
+    """
+    input include includeonly includegraphics openin openout closein closeout
+    read readline write message errmessage immediate special catcode csname
+    endcsname directlua latelua scantokens everyjob everyeof everypar
+    newread newwrite loop repeat usepackage requirepackage documentclass
+    afterassignment aftergroup expandafter noexpand futurelet
+    pdfobj pdffiledump pdfximage pdfcatalog pdfannot pdfextension pdfunescapehex
+    primitive ifx ifnum while
+    """.split()
 )
+# Control *symbols* (backslash + one non-letter) that drawing code may use.
+_ALLOWED_TEX_SYMBOLS = frozenset("\\{}%$&_#@,;:! -'\"|./^~=*+<>()[?")
+_BEGIN_ENVIRONMENT = re.compile(r"\\begin\{([^}]*)\}")
+_ALLOWED_ENVIRONMENTS = frozenset(
+    """
+    tikzpicture tikzcd scope axis document semiverbatim picture pgfpicture
+    """.split()
+)
+# The converter only ever writes these three data-* attributes onto a block.
+_ALLOWED_BLOCK_ATTRIBUTES = frozenset(
+    {"data-tex-packages", "data-tikz-libraries", "data-disable-cache"}
+)
+# How much of a failed stage log may travel back to the requester. The tail of
+# a TeX log can contain file contents pulled in via \input-family primitives,
+# so only a short machine-level summary is exposed, never the raw tail.
+_FAILURE_TAIL_BYTES = 2000
+_FAILURE_DETAIL_CHARS = 200
 
 
 class NativeTikzRenderer:
@@ -34,6 +62,91 @@ class NativeTikzRenderer:
         self.binary_dir = (
             Path(binary_dir).expanduser().resolve() if binary_dir else None
         )
+
+    @staticmethod
+    def _screen_block_attributes(source: str) -> bool:
+        """Allow only the attributes the converter itself emits.
+
+        The previous regex merely looked for known-bad names, so a crafted block
+        (``data-tikz-libraries='x} \\file_input:n{...}'``) parsed as trusted.
+        """
+        pattern = r"([^\s=/>]+)\s*=\s*(\"([^\"]*)\"|'([^']*)')"
+        for match in re.finditer(pattern, source):
+            name = match.group(1).lower()
+            value = match.group(3) if match.group(3) is not None else match.group(4)
+            if name == "type":
+                if value != "text/tikz":
+                    return False
+                continue
+            if name not in _ALLOWED_BLOCK_ATTRIBUTES:
+                return False
+            # Values become TeX preamble or a worker concatenation; keep them to
+            # the characters a package/library list can legitimately contain.
+            if not re.fullmatch(r"[A-Za-z0-9_,.\-\[\]:{}\" ]*", value):
+                return False
+        # Whatever is left after removing balanced attributes must be whitespace.
+        return not re.sub(pattern, "", source).strip()
+
+    @staticmethod
+    def _reject_unsafe_tex(code: str) -> None:
+        """Reject file/process/metaprogramming TeX by structure, not by name list.
+
+        Args:
+            code: Body of one ``text/tikz`` block.
+
+        Raises:
+            RenderError: The code contains a file, process, or metaprogramming
+                primitive, an unknown environment, or a TeX character escape.
+                Legitimate diagrams only ever fail here through an unusual macro;
+                the caller then falls back to the WASM backend.
+        """
+        index, length = 0, len(code)
+        while index < length:
+            if code[index] != "\\":
+                index += 1
+                continue
+            index += 1
+            if index >= length:
+                break
+            char = code[index]
+            if char == "@":
+                # \@ internals and the \@@input alias of \input.
+                raise RenderError(
+                    "Native TikZ rejected a file, process, or metaprogramming command"
+                )
+            if not (char.isascii() and char.isalpha()):
+                # Control symbol: only the small set TikZ syntax uses.
+                if char not in _ALLOWED_TEX_SYMBOLS:
+                    raise RenderError(
+                        "Native TikZ rejected an unexpected TeX control symbol"
+                    )
+                index += 1
+                continue
+            start = index
+            while index < length and code[index].isascii() and (
+                code[index].isalnum() or code[index] == "_"
+            ):
+                index += 1
+            name = code[start:index]
+            # An expl3 verb is a name immediately followed by `:` — that covers
+            # the whole \file_*/\ior_*/\tl_* file and IO namespace (\file_input:n,
+            # \file_get:nnN, ...) without rejecting ordinary `\my_style` macros.
+            if index < length and code[index] == ":":
+                raise RenderError(
+                    "Native TikZ rejected a file, process, or metaprogramming command"
+                )
+            # \openout1 / \read2 carry a register number.
+            if name.lower().rstrip("0123456789") in _DENIED_TEX_COMMANDS:
+                raise RenderError(
+                    "Native TikZ rejected a file, process, or metaprogramming command"
+                )
+        for match in _BEGIN_ENVIRONMENT.finditer(code):
+            if match.group(1) not in _ALLOWED_ENVIRONMENTS:
+                raise RenderError(
+                    "Native TikZ rejected an environment outside the drawing allowlist"
+                )
+        if "^^" in code:
+            raise RenderError("Native TikZ rejected a TeX character escape")
 
     async def render_html(self, html: str, timeout: float) -> str:
         """Replace TikZ scripts with SVGs within one bounded compilation deadline.
@@ -68,6 +181,11 @@ class NativeTikzRenderer:
         matches = list(_TIKZ_SCRIPT.finditer(html))
         if not matches:
             return html
+        # A block the native path must refuse (unknown command, unexpected
+        # attribute) is not a render failure: PageRenderer falls back to the
+        # WASM backend when RenderError is raised, so legitimate diagrams that
+        # merely use an unlisted macro still render.
+
         executables = []
         for name in ("latex", "dvisvgm"):
             executable = (
@@ -119,10 +237,9 @@ class NativeTikzRenderer:
             parser.handle_starttag = lambda tag, values: attrs.update(values)
             parser.feed("<script" + match.group(1) + ">")
             code = match.group(2)
-            if _UNSAFE_TEX.search(code):
-                raise RenderError(
-                    "Native TikZ rejected a file/process or TeX metaprogramming command"
-                )
+            if not self._screen_block_attributes(match.group(1)):
+                raise RenderError("Native TikZ rejected an unexpected block attribute")
+            self._reject_unsafe_tex(code)
             try:
                 packages = json.loads(attrs.get("data-tex-packages", "{}"))
                 libraries = [
@@ -262,9 +379,19 @@ class NativeTikzRenderer:
                     process.kill()
                     await process.wait()
         if process.returncode:
+            # Summarise rather than forward the log tail. The tail is shaped by
+            # attacker-controlled TeX and can carry file contents pulled in via
+            # \input-family primitives straight back to the requester.
             with (work / "stage.log").open("rb") as log:
-                log.seek(max(0, (work / "stage.log").stat().st_size - 2000))
-                detail = log.read().decode(errors="replace")
+                log.seek(max(0, (work / "stage.log").stat().st_size - _FAILURE_TAIL_BYTES))
+                tail = log.read().decode(errors="replace")
+            first_error = ""
+            for line in tail.splitlines():
+                if line.startswith("!"):
+                    first_error = line.lstrip("! ").strip()
+                    break
+            summary = (first_error or "compilation failed")[:_FAILURE_DETAIL_CHARS]
             raise RenderError(
-                f"Native TikZ {Path(command[0]).name} failed ({process.returncode}): {detail}"
+                f"Native TikZ {Path(command[0]).name} failed "
+                f"({process.returncode}): {summary}"
             )

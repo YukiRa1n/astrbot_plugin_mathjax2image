@@ -23,17 +23,35 @@ class TikzPlotConverter:
         self._precompute_pgfplots = precompute_pgfplots
         self._max_plot_points = max(4, int(max_plot_points))
 
-    def convert(self, tikz_code: str) -> str:
-        """Precompute plots with a budget local to this conversion.
+    @property
+    def max_plot_points(self) -> int:
+        """Per-document 3D surface point ceiling."""
+        return self._max_plot_points
+
+    def convert(
+        self,
+        tikz_code: str,
+        budget: list[int] | None = None,
+        surface_budget: list[int] | None = None,
+    ) -> str:
+        """Precompute plots, charging samples against caller-owned budgets.
+
+        The 2D curve allowance (``MAX_EVAL_POINTS``) and the 3D surface
+        allowance (``max_plot_points``) are separate quantities, so they get
+        separate accumulators. Callers converting a whole document pass one of
+        each so neither ceiling can be multiplied by the picture count.
 
         Args:
             tikz_code: A single TikZ picture.
+            budget: Mutable 2D sample budget; defaults to a fresh allowance.
+            surface_budget: Mutable 3D point budget; defaults to a fresh one.
 
         Returns:
             TikZ with supported expressions replaced by sampled coordinates.
         """
         tikz_code = self._clean_html_entities(tikz_code)
-        budget = [self.MAX_EVAL_POINTS]
+        if budget is None:
+            budget = [self.MAX_EVAL_POINTS]
         pattern = (
             r"\\draw\s*\[([^\]]*)\]\s*plot\s*\(\s*([^,]+)\s*,\s*\{([^}]+)\}\s*\)\s*;"
         )
@@ -43,7 +61,9 @@ class TikzPlotConverter:
         if self._precompute_pgfplots and re.search(r"\\addplot\s*3", tikz_code):
             from .pgfplots_preprocessor import PgfplotsPreprocessor
 
-            tikz_code = PgfplotsPreprocessor(self._max_plot_points).convert(tikz_code)
+            tikz_code = PgfplotsPreprocessor(
+                self._max_plot_points, surface_budget
+            ).convert(tikz_code)
         if len(tikz_code) > 512000:
             raise PreprocessError("采样后的 TikZ 内容超过 512000 字符，请拆分图形")
         return tikz_code

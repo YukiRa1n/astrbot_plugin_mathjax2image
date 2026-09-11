@@ -6,6 +6,8 @@ LaTeX预处理器
 import re
 from typing import TYPE_CHECKING
 
+from ...utils.linear_scan import find_pairs, scan_fenced_code
+
 if TYPE_CHECKING:
     from .list_converter import ListConverter
     from .mermaid_converter import MermaidConverter
@@ -51,25 +53,68 @@ class LatexPreprocessor:
 
         return text
 
+    #: Ordered ``(open, close, allow_newline)`` protected ranges. Scanned in one
+    #: linear pass instead of a lazy-regex alternation: an unmatched opening
+    #: delimiter used to cost O(n) at every occurrence, so a message made only
+    #: of ``\begin{tikzpicture}`` (or backticks) burned O(n^2) and froze the loop.
+    _PROTECTED_PAIRS = (
+        ("$$", "$$", True),
+        ("\\[", "\\]", True),
+        ("\\(", "\\)", True),
+        ("$", "$", False),
+        ("\\begin{tikzpicture}", "\\end{tikzpicture}", True),
+        ("\\begin{tikzcd}", "\\end{tikzcd}", True),
+        ("\\begin{align*}", "\\end{align*}", True),
+        ("\\begin{align}", "\\end{align}", True),
+        ("\\begin{equation*}", "\\end{equation*}", True),
+        ("\\begin{equation}", "\\end{equation}", True),
+        ("\\begin{gather*}", "\\end{gather*}", True),
+        ("\\begin{gather}", "\\end{gather}", True),
+    )
+    _MARKER_PAIRS = (("\\[", "\\]"), ("\\(", "\\)"))
+    _TEXT_COMMAND = re.compile(r"\\(textbf|textit|emph)\{([^{}]*)\}")
+
+    def _protected_ranges(self, text: str) -> list[tuple[int, int]]:
+        """Linear scan of protected (non-transformable) ranges."""
+        spans: list[tuple[int, int]] = list(scan_fenced_code(text))
+        for open_token, close_token, allow_newline in self._PROTECTED_PAIRS:
+            spans.extend(
+                find_pairs(text, open_token, close_token, allow_newline=allow_newline)
+            )
+        spans.sort()
+        merged: list[tuple[int, int]] = []
+        for start, end in spans:
+            if merged and start < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
     def _convert_text_commands(self, text: str) -> str:
         """将LaTeX文本命令转换为Markdown格式"""
-        pattern = (
-            r"(?P<protected>```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`"
-            r"|\\begin\{tikzpicture\}[\s\S]*?\\end\{tikzpicture\}"
-            r"|\\begin\{tikzcd\}[\s\S]*?\\end\{tikzcd\}"
-            r"|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)"
-            r"|\$\$[\s\S]*?\$\$|\$[^$\n]*\$"
-            r"|\\begin\{(?P<env>align\*?|equation\*?|gather\*?)\}[\s\S]*?\\end\{(?P=env)\})"
-            r"|\\(?P<command>textbf|textit|emph)\{(?P<body>[^{}]*)\}"
-        )
+        ranges = self._protected_ranges(text)
+        pieces: list[str] = []
+        position = 0
+        for start, end in ranges:
+            pieces.append(self._transform_segment(text[position:start]))
+            pieces.append(text[start:end])
+            position = end
+        pieces.append(self._transform_segment(text[position:]))
+        return "".join(pieces)
 
-        def replace(match):
-            if match.group("protected") is not None:
-                return match.group(0)
-            marker = "**" if match.group("command") == "textbf" else "*"
-            return marker + match.group("body") + marker
+    def _transform_segment(self, segment: str) -> str:
+        """Apply text-command rewrites and set-notation only outside math ranges."""
+        if not segment:
+            return segment
+        if segment.startswith(("\\[", "\\(")):
+            return segment
+        segment = self._TEXT_COMMAND.sub(self._replace_text_command, segment)
+        return self._fix_set_notation(segment)
 
-        return re.sub(pattern, replace, text)
+    @staticmethod
+    def _replace_text_command(match: re.Match) -> str:
+        marker = "**" if match.group(1) == "textbf" else "*"
+        return marker + match.group(2) + marker
 
     def _fix_set_notation(self, text: str) -> str:
         """修复集合表示法 {... \\mid ...}

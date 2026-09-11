@@ -52,8 +52,14 @@ def _split(source: str) -> list[str]:
 class PgfplotsPreprocessor:
     """Sample supported expression surfaces once in Python, without subsampling."""
 
-    def __init__(self, max_points: int = 6400):
+    def __init__(self, max_points: int = 6400, budget: list[int] | None = None):
         self.max_points = max_points
+        # Caller-owned point budget shared across every picture in a document.
+        # Without it, each picture gets a fresh allowance and a message can
+        # multiply the configured ceiling by its picture count.
+        self._budget = budget if budget is not None else [max_points]
+        # Points already spent by earlier pictures in this document.
+        self._spent = max(0, max_points - self._budget[0])
 
     def convert(self, source: str) -> str:
         """Replace simple expression surfaces with an equivalent coordinate mesh.
@@ -93,7 +99,7 @@ class PgfplotsPreprocessor:
         inherited, picture = {}, {}
         in_axis = False
         edits = []
-        used = 0
+        used = self._spent
         while match := token.search(source, cursor):
             cursor = match.end()
             line_start = source.rfind("\n", 0, match.start()) + 1
@@ -224,6 +230,9 @@ class PgfplotsPreprocessor:
                     raise PreprocessError(
                         f"3D 曲面需要 {used + count} 个采样点，超过当前上限 {self.max_points}；请调高 plot_max_points 或拆分图形"
                     )
+                # Charge the shared allowance so later pictures see less.
+                self._budget[0] = max(0, self._budget[0] - count)
+                self._spent = used + count
                 x_values = [
                     domains[0][0] + (domains[0][1] - domains[0][0]) * i / (n - 1)
                     for i in range(n)
