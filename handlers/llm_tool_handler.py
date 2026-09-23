@@ -6,7 +6,7 @@ LLM工具处理器
 import asyncio
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
@@ -34,6 +34,7 @@ class LLMToolHandler:
 
         self._pending_images: dict[str, tuple[Path, float]] = {}
         self._pending_lock = asyncio.Lock()
+        self._pending_cleanup_timer: Optional[asyncio.TimerHandle] = None
 
     async def handle_render_math(self, event: AstrMessageEvent, content: str) -> str:
         """处理 render_math 工具调用
@@ -61,6 +62,7 @@ class LLMToolHandler:
                         old_path, _ = old_entry
                         remove_artifact(old_path)
                     self._pending_images[session_key] = (image_path, time.time())
+                    self._schedule_pending_image_cleanup()
                 return "渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
                 remove_artifact(image_path)
@@ -81,8 +83,10 @@ class LLMToolHandler:
             self._cleanup_expired_images()
             entry = self._pending_images.get(session_key)
             if not entry:
+                self._schedule_pending_image_cleanup()
                 return "没有可发送的图片,请先使用 render_math 渲染内容"
             image_path, _ = self._pending_images.pop(session_key)
+            self._schedule_pending_image_cleanup()
 
         if not image_path.exists():
             return f"图片文件不存在: {image_path}"
@@ -101,12 +105,36 @@ class LLMToolHandler:
         finally:
             remove_artifact(image_path)
 
+    def _schedule_pending_image_cleanup(self) -> None:
+        """Schedule cleanup for the next pending image to reach its TTL."""
+        timer = getattr(self, "_pending_cleanup_timer", None)
+        if timer is not None:
+            timer.cancel()
+            self._pending_cleanup_timer = None
+        if not self._pending_images:
+            return
+
+        next_expiry = min(
+            timestamp + self._IMAGE_TTL_SECONDS
+            for _, timestamp in self._pending_images.values()
+        )
+        delay = max(0.0, next_expiry - time.time())
+        self._pending_cleanup_timer = asyncio.get_running_loop().call_later(
+            delay, self._expire_pending_images
+        )
+
+    def _expire_pending_images(self) -> None:
+        """Remove expired artifacts and schedule the next pending expiry."""
+        self._pending_cleanup_timer = None
+        self._cleanup_expired_images()
+        self._schedule_pending_image_cleanup()
+
     def _cleanup_expired_images(self) -> None:
         """清理过期的图片缓存"""
         now = time.time()
         expired = [
             k for k, (_, ts) in self._pending_images.items()
-            if now - ts > self._IMAGE_TTL_SECONDS
+            if now >= ts + self._IMAGE_TTL_SECONDS
         ]
         for k in expired:
             path, _ = self._pending_images.pop(k)
@@ -114,6 +142,10 @@ class LLMToolHandler:
 
     async def close(self) -> None:
         """回收所有尚未发送的渲染产物。"""
+        timer = getattr(self, "_pending_cleanup_timer", None)
+        if timer is not None:
+            timer.cancel()
+            self._pending_cleanup_timer = None
         async with self._pending_lock:
             entries = list(self._pending_images.values())
             self._pending_images.clear()
