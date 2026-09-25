@@ -39,6 +39,9 @@
             font-display: swap;
         }
     </style>
+    <!-- 真粗体中文与 EB Garamond 斜体（fontsource 按 unicode-range 分片，只下载用到的字） -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.3.0/600.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.3.0/400-italic.css">
 
     <!-- MathJax 配置 -->
     <script id="MathJax-config">
@@ -201,15 +204,18 @@
             --h2-scale: 1.25;
             --h3-scale: 1.10;
             --line-height: 1.7;
-            --text-color: #2c2c2c;      /* 深炭灰（不用纯黑） */
-            --heading-color: #000000;   /* 标题用纯黑 */
-            --code-bg: #f5f2f0;         /* 代码块背景 */
-            --code-border: #e0e0e0;     /* 细边框 */
-            --line-num-color: #999999;
-            --line-num-border: #e0e0e0;
+            --text-color: #2b2b2b;      /* 深炭灰（不用纯黑） */
+            --heading-color: #1a1a1a;
+            --muted-color: #6b6558;
+            --accent-color: #8b3a3a;    /* 暗红强调色（classicthesis 风格） */
+            --accent-soft: rgba(139, 58, 58, 0.06);
+            --rule-color: rgba(60, 50, 30, 0.22);
+            --code-bg: rgba(90, 70, 40, 0.05);
+            --code-border: rgba(60, 50, 30, 0.14);
+            --gutter-bg: rgba(90, 70, 40, 0.05);
+            --line-num-color: #a39e93;
 
-            /* LaTeX 风格字体栈 */
-            /* 英文优先 EB Garamond，中文后备 Noto Serif SC */
+            /* LaTeX 风格字体栈：英文优先 EB Garamond，中文后备 Noto Serif SC */
             --font-main: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
 
             /* 代码：打字机风格 */
@@ -231,14 +237,16 @@
             line-height: var(--line-height);
             padding: 56px 72px;
             font-size: var(--body-font-size);
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
         }
 
         h1, h2, h3, h4, h5, h6 {
-            font-weight: 700;
+            font-weight: 600;
             color: var(--heading-color);
             line-height: 1.3;
             /* LaTeX 排版：标题字间距收紧 */
-            letter-spacing: -0.01em;
+            letter-spacing: 0.01em;
             /* LaTeX 排版：标题上方留白要大，体现层级 */
             margin-top: 1.3em;
             margin-bottom: 0.55em;
@@ -256,19 +264,23 @@
             margin-bottom: 0;
         }
 
+        /* 一级标题：论文标题式粗细双线 */
         h1 {
             font-size: calc(1em * var(--h1-scale));
-            border-bottom: none;
+            padding-bottom: 0.3em;
+            border-bottom: 3px double var(--rule-color);
         }
 
+        /* 二级标题：左侧强调色竖条 */
         h2 {
             font-size: calc(1em * var(--h2-scale));
-            border-bottom: 1px solid #ccc;
-            padding-bottom: 8px;
+            padding-left: 0.55em;
+            border-left: 0.16em solid var(--accent-color);
         }
 
         h3 {
             font-size: calc(1em * var(--h3-scale));
+            color: var(--accent-color);
         }
 
         h4, h5, h6 {
@@ -286,70 +298,82 @@
             margin: 0 0 0.9em 0;
         }
 
+        /* 分隔线：两端渐隐 */
         hr {
             border: 0;
-            border-top: 1px solid #999;
-            margin: 30px 0;
+            height: 1px;
+            background: linear-gradient(to right, transparent, var(--rule-color) 15%, var(--rule-color) 85%, transparent);
+            margin: 1.4em 0;
         }
 
         /* --- 列表样式 --- */
+        ul, ol {
+            padding-left: 1.6em;
+            margin: 0.5em 0 0.9em;
+        }
+
+        li {
+            margin-bottom: 0.3em;
+            padding-left: 0.25em;
+        }
+
+        li::marker {
+            color: var(--accent-color);
+        }
+
+        ol > li::marker {
+            font-weight: 600;
+        }
+
         ul {
             list-style-type: disc;
-            list-style-position: outside;
-            padding-left: 50px;
-            margin: 15px 0;
         }
 
-        ul li {
-            margin-bottom: 10px;
-            padding-left: 10px;
-        }
-
-        /* 嵌套列表使用空心圆 */
+        /* 嵌套列表使用空心圆 / 方块 */
         ul ul {
             list-style-type: circle;
         }
 
-        ol {
-            padding-left: 40px;
-            margin: 15px 0;
+        ul ul ul {
+            list-style-type: square;
         }
 
-        ol li {
-            margin-bottom: 10px;
+        li > ul, li > ol {
+            margin: 0.3em 0;
         }
 
-        /* --- 引用样式 (单线条) --- */
+        /* --- 引用样式：正体（中文不做伪斜体），强调色竖线 + 浅底 --- */
         blockquote {
-            border-left: 4px solid #666;
-            margin: 25px 0;
-            padding: 15px 25px;
-            font-style: italic;
-            color: #333;
-            background: rgba(0,0,0,0.02);
+            margin: 1em 0;
+            padding: 0.55em 1em;
+            border-left: 0.14em solid var(--accent-color);
+            border-radius: 0 8px 8px 0;
+            background: var(--accent-soft);
+            color: #3a3631;
         }
 
         blockquote p {
-            margin: 10px 0;
+            margin: 0.3em 0;
         }
 
-        /* --- 代码块样式 --- */
+        /* --- 代码块样式：左侧行号栏由背景渐变铺满整个高度 --- */
         pre {
-            background-color: var(--code-bg);
+            --gutter-width: 3em;
+            background:
+                linear-gradient(to right,
+                    var(--gutter-bg) 0 var(--gutter-width),
+                    var(--code-border) var(--gutter-width) calc(var(--gutter-width) + 1px),
+                    transparent calc(var(--gutter-width) + 1px)),
+                var(--code-bg);
             border: 1px solid var(--code-border);
-            border-radius: 4px;
-            padding: 16px 0;
+            border-radius: 10px;
+            padding: 0.75em 0;
             font-family: var(--font-code);
-            font-size: 0.65em;
-            margin: 25px 0;
-            box-shadow: 2px 2px 8px rgba(0,0,0,0.06);
+            font-size: 0.62em;
+            margin: 1em 0;
             overflow: hidden;
             /* LaTeX 排版：代码块不两端对齐 */
             text-align: left;
-            /* LaTeX 排版：视觉缩进，像嵌入在纸张里 */
-            margin-left: 1em;
-            margin-right: 1em;
-            border-left: 3px solid #ddd;
         }
 
         /* 每行代码容器 */
@@ -360,22 +384,21 @@
 
         /* 行号 */
         .line-num {
-            min-width: 50px;
+            box-sizing: border-box;
+            width: var(--gutter-width);
             text-align: right;
-            padding-right: 12px;
+            padding-right: 0.8em;
             color: var(--line-num-color);
             line-height: 1.6;
             user-select: none;
             flex-shrink: 0;
-            border-right: 1px solid var(--line-num-border);
-            background-color: rgba(0,0,0,0.02);
         }
 
         /* 代码内容 */
         .line-content {
             flex: 1;
-            padding-left: 16px;
-            padding-right: 16px;
+            padding-left: 1em;
+            padding-right: 1em;
             line-height: 1.6;
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -384,57 +407,55 @@
 
         code {
             font-family: var(--font-code);
-            background-color: rgba(0,0,0,0.04);
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 0.85em;
+            background-color: rgba(90, 70, 40, 0.07);
+            color: #7a3328;
+            padding: 0.1em 0.35em;
+            border-radius: 5px;
+            font-size: 0.8em;
         }
 
         pre code {
             background: none;
+            color: inherit;
             padding: 0;
             font-size: 1em;
         }
 
-        /* --- 表格样式 --- */
+        /* --- 表格样式：booktabs 三线表 --- */
         table {
             border-collapse: collapse;
             width: 100%;
-            margin: 25px 0;
+            margin: 1em 0;
             font-size: 0.9em;
+            border-top: 2px solid var(--heading-color);
+            border-bottom: 2px solid var(--heading-color);
         }
 
         th, td {
-            border: 1px solid #999;
-            padding: 12px 15px;
+            padding: 0.45em 0.9em;
             text-align: left;
         }
 
-        th {
-            background-color: rgba(0,0,0,0.05);
+        thead th {
             font-weight: 600;
+            border-bottom: 1px solid var(--heading-color);
         }
 
-        tr:nth-child(even) {
-            background-color: rgba(0,0,0,0.02);
+        tbody tr:nth-child(even) {
+            background-color: rgba(90, 70, 40, 0.035);
         }
 
         /* --- 链接样式 --- */
         a {
-            color: #1a5276;
+            color: var(--accent-color);
             text-decoration: none;
-            border-bottom: 1px dotted #1a5276;
-        }
-
-        a:hover {
-            color: #2980b9;
-            border-bottom-style: solid;
+            border-bottom: 1px solid rgba(139, 58, 58, 0.35);
         }
 
         /* --- 强调样式 --- */
         strong {
             font-weight: 600;
-            color: #000;
+            color: var(--heading-color);
         }
 
         em {
@@ -447,7 +468,7 @@
         }
 
         mjx-container[jax="CHTML"][display="true"] {
-            margin: 20px 0 !important;
+            margin: 0.75em 0 !important;
         }
 
         /* MathJax 中文文本字体对齐正文 */

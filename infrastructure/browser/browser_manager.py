@@ -24,9 +24,21 @@ except ModuleNotFoundError:  # pragma: no cover - standalone test support
     logger = logging.getLogger("astrbot")
 from ...domain.errors import BrowserError
 
-_browser_install_locks = {
-    engine: asyncio.Lock() for engine in ("chromium", "firefox", "webkit")
-}
+# A module-level ``asyncio.Lock`` binds to the first loop that awaits it, but this
+# class explicitly survives hot reloads and loop changes; reuse after such a
+# change would raise "bound to a different event loop". Key the lock on the
+# running loop so a new loop gets a fresh one.
+_browser_install_locks: dict[str, tuple[object, asyncio.Lock]] = {}
+
+
+def _install_lock(engine: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    entry = _browser_install_locks.get(engine)
+    if entry is None or entry[0] is not loop:
+        lock = asyncio.Lock()
+        _browser_install_locks[engine] = (loop, lock)
+        return lock
+    return entry[1]
 
 
 async def _install_browser(engine: str) -> None:
@@ -38,7 +50,7 @@ async def _install_browser(engine: str) -> None:
     Raises:
         BrowserError: The installer fails or exceeds its time budget.
     """
-    async with _browser_install_locks[engine]:
+    async with _install_lock(engine):
         command = [sys.executable, "-m", "playwright", "install", engine]
         if engine == "chromium":
             command.append("--only-shell")
@@ -292,9 +304,20 @@ class BrowserManager:
         """
         if page is None:
             return
+        # ``is_closed()`` talks to the driver and can raise. Probing it outside
+        # the try/finally below skipped both disposal and the active-page
+        # decrement, leaking the page slot until shutdown; treat a failed probe
+        # as "must discard" so cleanup always runs.
+        try:
+            page_closed = page.is_closed()
+        except Exception as exc:
+            logger.warning(
+                "[MathJax2Image] Page state probe failed, discarding: %s", exc
+            )
+            page_closed = True
         discard = (
             exception_occurred
-            or page.is_closed()
+            or page_closed
             or self._closed
             or self._max_idle_pages == 0
         )

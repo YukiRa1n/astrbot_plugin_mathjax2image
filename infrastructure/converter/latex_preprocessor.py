@@ -35,8 +35,8 @@ class LatexPreprocessor:
         # 1. 转换LaTeX文本命令为Markdown
         text = self._convert_text_commands(text)
 
-        # 2. 处理集合表示法
-        text = self._fix_set_notation(text)
+        # 2. 处理集合表示法（数学区间受保护，需再过一遍，但代码围栏必须跳过）
+        text = self._fix_set_notation_outside_code(text)
 
         # 3. 处理LaTeX列表
         text = self._list_converter.convert(text)
@@ -110,6 +110,25 @@ class LatexPreprocessor:
             return segment
         segment = self._TEXT_COMMAND.sub(self._replace_text_command, segment)
         return self._fix_set_notation(segment)
+
+    def _fix_set_notation_outside_code(self, text: str) -> str:
+        """在全文中应用集合表示法改写，但绝不进入代码围栏/行内代码。
+
+        第 1 步的文本命令改写会跳过受保护的数学区间，所以集合表示法需要
+        再整体跑一遍；而那时也顺便改到了代码示例，`{a \\mid b}` 会被改成
+        `\\lbrace a \\mid b\\rbrace`，示例源码就不再是源码。
+        """
+        spans = scan_fenced_code(text)
+        if not spans:
+            return self._fix_set_notation(text)
+        pieces: list[str] = []
+        position = 0
+        for start, end in spans:
+            pieces.append(self._fix_set_notation(text[position:start]))
+            pieces.append(text[start:end])
+            position = end
+        pieces.append(self._fix_set_notation(text[position:]))
+        return "".join(pieces)
 
     @staticmethod
     def _replace_text_command(match: re.Match) -> str:

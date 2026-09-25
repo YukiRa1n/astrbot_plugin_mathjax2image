@@ -11,6 +11,7 @@ test_*.py
 !tests/test_*.py
 test_*.png
 *.log
+.pytest_tmp/
 
 # IDE
 .vscode/

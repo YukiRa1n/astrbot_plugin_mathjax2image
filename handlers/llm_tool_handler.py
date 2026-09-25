@@ -34,6 +34,7 @@ class LLMToolHandler:
 
         self._pending_images: dict[str, tuple[Path, float]] = {}
         self._pending_lock = asyncio.Lock()
+        self._pending_cleanup_timer: Optional[asyncio.TimerHandle] = None
         self._last_rendered_image: Optional[Path] = None
         self._closed = False
         self._active_renders: set[asyncio.Task] = set()
@@ -54,7 +55,7 @@ class LLMToolHandler:
         if getattr(self, '_closed', False):
             return "插件已卸载，无法渲染"
 
-        if not content:
+        if not content or not content.strip():
             return "错误：content 参数不能为空"
 
         if len(content) > MAX_RENDER_LENGTH:
@@ -63,8 +64,26 @@ class LLMToolHandler:
         session_key = self._get_session_key(event)
 
         try:
-            # 直接渲染（render_orchestrator内部会进行预处理）
-            image_path = await self._render_orchestrator.render(content)
+            # 直接渲染（render_orchestrator内部会进行预处理）。
+            # 登记为活动任务，close() 才能取消并等待进行中的渲染。
+            active = getattr(self, "_active_renders", None)
+            if active is None:
+                active = self._active_renders = set()
+            task = asyncio.ensure_future(self._render_orchestrator.render(content))
+            active.add(task)
+            try:
+                image_path = await task
+            except asyncio.CancelledError:
+                if getattr(self, "_closed", False):
+                    return "插件已卸载，渲染已取消"
+                raise
+            finally:
+                active.discard(task)
+
+            # 渲染完成时插件已卸载：产物不会再被发送或清理，立即回收
+            if getattr(self, "_closed", False):
+                remove_artifact(image_path)
+                return "插件已卸载，渲染结果已丢弃"
 
             if image_path and image_path.exists():
                 logger.info(f"[MathJax2Image] LLM工具渲染成功: {image_path}")
@@ -76,12 +95,17 @@ class LLMToolHandler:
 
                 # auto_send=False: 保存到 pending,等待后续 send_image 调用
                 async with self._pending_lock:
+                    # 等锁期间 close() 可能已清空 pending，不能再放入新产物
+                    if getattr(self, "_closed", False):
+                        remove_artifact(image_path)
+                        return "插件已卸载，渲染结果已丢弃"
                     old_entry = self._pending_images.pop(session_key, None)
                     if old_entry:
                         old_path, _ = old_entry
                         remove_artifact(old_path)
                     self._pending_images[session_key] = (image_path, time.time())
                     self._last_rendered_image = image_path
+                    self._schedule_pending_image_cleanup()
                 return "渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
                 remove_artifact(image_path)
@@ -124,11 +148,17 @@ class LLMToolHandler:
         session_key = self._get_session_key(event)
 
         async with self._pending_lock:
+            # 等锁期间 close() 可能已开始卸载：重新确认后再取产物
+            if getattr(self, "_closed", False):
+                self._schedule_pending_image_cleanup()
+                return "插件已卸载，无法发送"
             self._cleanup_expired_images()
             entry = self._pending_images.get(session_key)
             if not entry:
+                self._schedule_pending_image_cleanup()
                 return "没有可发送的图片,请先使用 render_math 渲染内容"
             image_path, _ = self._pending_images.pop(session_key)
+            self._schedule_pending_image_cleanup()
 
         if not image_path.exists():
             self._last_rendered_image = None
@@ -137,13 +167,16 @@ class LLMToolHandler:
         try:
             image_name = image_path.name
             image_bytes = await consume_artifact(image_path)
+            # 读盘期间可能开始卸载；产物已回收，不再向平台投递
+            if getattr(self, "_closed", False):
+                return "插件已卸载，未发送图片"
             chain = [Comp.Image.fromBytes(image_bytes)]
             result = await self._context.send_message(
                 event.unified_msg_origin, MessageChain(chain)
             )
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
-                return f"发送图片失败: 平台不可用或已断开"
+                return "发送图片失败: 平台不可用或已断开"
             return f"图片已发送: {image_name}"
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
@@ -157,13 +190,16 @@ class LLMToolHandler:
         try:
             image_name = image_path.name
             image_bytes = await consume_artifact(image_path)
+            # 读盘期间可能开始卸载；产物已回收，不再向平台投递
+            if getattr(self, "_closed", False):
+                return "插件已卸载，未发送图片"
             chain = [Comp.Image.fromBytes(image_bytes)]
             result = await self._context.send_message(
                 event.unified_msg_origin, MessageChain(chain)
             )
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
-                return f"发送图片失败: 平台不可用或已断开"
+                return "发送图片失败: 平台不可用或已断开"
             return f"图片已发送: {image_name}"
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
@@ -172,20 +208,53 @@ class LLMToolHandler:
             remove_artifact(image_path)
             self._last_rendered_image = None
 
+    def _schedule_pending_image_cleanup(self) -> None:
+        """Schedule cleanup for the next pending image to reach its TTL."""
+        timer = getattr(self, "_pending_cleanup_timer", None)
+        if timer is not None:
+            timer.cancel()
+            self._pending_cleanup_timer = None
+
+        if getattr(self, "_closed", False) or not self._pending_images:
+            return
+
+        next_expiry = min(
+            timestamp + self._IMAGE_TTL_SECONDS
+            for _, timestamp in self._pending_images.values()
+        )
+        delay = max(0.0, next_expiry - time.time())
+        self._pending_cleanup_timer = asyncio.get_running_loop().call_later(
+            delay, self._expire_pending_images
+        )
+
+    def _expire_pending_images(self) -> None:
+        """Remove expired artifacts and schedule the next pending expiry."""
+        self._pending_cleanup_timer = None
+        if getattr(self, "_closed", False):
+            return
+        self._cleanup_expired_images()
+        self._schedule_pending_image_cleanup()
+
     def _cleanup_expired_images(self) -> None:
         """清理过期的图片缓存"""
         now = time.time()
         expired = [
             k for k, (_, ts) in self._pending_images.items()
-            if now - ts > self._IMAGE_TTL_SECONDS
+            if now >= ts + self._IMAGE_TTL_SECONDS
         ]
         for k in expired:
             path, _ = self._pending_images.pop(k)
+            if getattr(self, "_last_rendered_image", None) == path:
+                self._last_rendered_image = None
             remove_artifact(path)
 
     async def close(self) -> None:
         """回收所有尚未发送的渲染产物。先标记关闭，再等待进行中的渲染完成，最后清理。"""
         self._closed = True
+        timer = getattr(self, "_pending_cleanup_timer", None)
+        if timer is not None:
+            timer.cancel()
+            self._pending_cleanup_timer = None
         # 等待进行中的渲染任务完成（或取消）
         active = getattr(self, '_active_renders', set())
         if active:

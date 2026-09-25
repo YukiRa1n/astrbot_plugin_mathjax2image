@@ -13,7 +13,7 @@ work is O(n) regardless of how unbalanced the input is.
 from __future__ import annotations
 
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 
 # Runs of a single code-fence delimiter, located in C so the scan does not pay
 # Python-level per-character cost.
@@ -86,21 +86,30 @@ def find_pairs(
     if not opens:
         return spans
     closes = _occurrences(text, close_token)
-    # Drop closers wholly contained in the first opener, then walk both lists
-    # together; the head of `closes` is a usable candidate for `opens[0]`
-    # because a closer cannot start at or before its own opener.
-    while closes and closes[0] < opens[0] + len(open_token):
-        closes.pop(0)
+    # Walk both lists with monotonic cursors. `closes` must never be shifted:
+    # `pop(0)` costs O(len(closes)) and `pop(index)` costs O(len(closes)-index),
+    # which made an ordinary document such as `\(x\)` repeated -- or many
+    # closers sitting before a single opener -- quadratic despite the module's
+    # O(n) contract. Closers are claimed strictly left to right, so a single
+    # lower bound is enough and the list is left intact.
+    #
+    # `first_usable` replaces the old drain of closers contained in the first
+    # opener (`closes[0] < opens[0] + len(open_token)`): a closer cannot start
+    # at or before its own opener, so everything left of that bound is dead.
+    first_usable = bisect_left(closes, opens[0] + len(open_token))
     cursor = 0
     for start in opens:
         if start < cursor:
             continue  # consumed by the previous pair
-        index = bisect_right(closes, start)
+        index = bisect_right(closes, start, first_usable)
         while index < len(closes) and closes[index] < start + len(open_token):
             index += 1
         if index >= len(closes):
             break
-        close = closes.pop(index)
+        close = closes[index]
+        # Claimed by this opener in every branch below, exactly like the old
+        # `closes.pop(index)` -- including the `allow_newline` rejection.
+        first_usable = index + 1
         if not allow_newline:
             line_end = text.find("\n", start)
             if line_end != -1 and close > line_end:

@@ -6,7 +6,12 @@ TikZ环境转换器
 import re
 from typing import TYPE_CHECKING
 
-from ...utils.linear_scan import find_brace_arguments, find_pairs, substitute_spans
+from ...utils.linear_scan import (
+    find_brace_arguments,
+    find_pairs,
+    scan_fenced_code,
+    substitute_spans,
+)
 
 try:
     from astrbot.api import logger
@@ -66,7 +71,11 @@ class TikzConverter:
         for environment in ("tikzpicture", "tikzcd", "circuitikz", "chemfig"):
             open_token = f"\\begin{{{environment}}}"
             close_token = f"\\end{{{environment}}}"
-            spans = find_pairs(text, open_token, close_token)
+            # 代码围栏内部的 TikZ 是示例源码，必须原样保留：若当成真图转换，
+            # 代码块内容会变成插件生成的 HTML 片段，读者看到的就不是用户写的代码。
+            spans = self._outside_code_fences(
+                find_pairs(text, open_token, close_token), text
+            )
             if environment in self._REJECTED_ENVIRONMENTS:
                 message = (
                     '<div class="error">'
@@ -86,13 +95,37 @@ class TikzConverter:
         ):
             text = substitute_spans(
                 text,
-                find_brace_arguments(text, "\\chemfig"),
+                self._outside_code_fences(
+                    find_brace_arguments(text, "\\chemfig"), text
+                ),
                 lambda _i, block: self._convert_chemfig_block(
                     re.match(r"[\s\S]*", block)
                 ),
             )
 
         return text
+
+    @staticmethod
+    def _outside_code_fences(
+        spans: list[tuple[int, int]], text: str
+    ) -> list[tuple[int, int]]:
+        """丢弃落在代码围栏或行内代码里的区间。
+
+        ``spans``（find_pairs/find_brace_arguments）与 ``scan_fenced_code`` 都是
+        从左到右不重叠的，因此一个单调游标即可，无需二次扫描。
+        """
+        fenced = scan_fenced_code(text)
+        if not fenced:
+            return spans
+        kept: list[tuple[int, int]] = []
+        index = 0
+        for start, end in spans:
+            while index < len(fenced) and fenced[index][1] <= start:
+                index += 1
+            if index < len(fenced) and fenced[index][0] <= start < fenced[index][1]:
+                continue
+            kept.append((start, end))
+        return kept
 
     def _convert_tikz_block_span(self, _index: int, block: str) -> str:
         """Adapter: the span scanner hands over the matched source text."""

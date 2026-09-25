@@ -2,7 +2,6 @@
 
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,6 +17,7 @@ from astrbot_plugin_mathjax2image.infrastructure.converter.list_converter import
 )
 from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
     MarkdownConverter,
+    iter_trusted_html_spans,
 )
 from astrbot_plugin_mathjax2image.infrastructure.converter.mermaid_converter import (
     MermaidConverter,
@@ -72,6 +72,7 @@ BOMBS = {
     "run of dollars": "$" * BOMB_LENGTH,
     "run of brackets": "[" * BOMB_LENGTH,
     "run of stars": "*" * BOMB_LENGTH,
+    "unclosed tabular": "\\begin{tabular}{c}" * (BOMB_LENGTH // 18),
 }
 
 
@@ -267,3 +268,190 @@ def test_single_large_surface_still_allowed():
         "\n\\end{axis}\n\\end{tikzpicture}\n"
     )
     assert "tikz-diagram" in _preprocessor().preprocess(surface)
+
+
+# ---- 2024 review fixes: linear scans, fence awareness, placeholder collisions ----
+
+
+def test_paired_math_delimiters_stay_linear():
+    """成对的 ``\\(x\\)`` 正是旧实现退化的形态。
+
+    每个配对都通过 ``list.pop(index)`` 消耗一个 closer，N 对要搬动 O(N^2) 个
+    列表元素；旧实现下 100 000 对需要数十秒。这里用远超单条消息上限的规模
+    确认扫描器仍然线性。
+    """
+    payload = "\\(x\\)" * 100_000
+    started = time.perf_counter()
+    spans = scan_math_blocks(payload)
+    assert len(spans) == 100_000
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_many_closers_before_one_opener_stay_linear():
+    """大量 closer 堆在单个 opener 之前时不得退化。
+
+    旧实现先 ``closes.pop(0)`` 排掉 opener 之前的 closer，每次 pop 都要整体
+    左移：16000 个 closer 花 293 ms，10 万个接近 12 秒。
+    """
+    payload = "\\end{tikzpicture}" * 100_000 + "\\begin{tikzpicture}"
+    started = time.perf_counter()
+    spans = find_pairs(payload, "\\begin{tikzpicture}", "\\end{tikzpicture}")
+    assert spans == []
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_unclosed_trusted_block_prefix_is_linear():
+    """受控 HTML 块只有前缀、没有结束标记时不得退化。
+
+    旧的惰性交替正则在每个候选前缀处都会重扫文档剩余部分，约 200 KB 的
+    重复前缀要 5.5 秒。这里只测提取阶段：整条 ``convert_to_html`` 在 200 KB
+    上主要由 Python-Markdown 自身的行内扫描占据，会掩盖这一段的目标。
+    """
+    payload = '<div class="tikz-diagram"><script type="text/tikz">\n' * 3_773
+    started = time.perf_counter()
+    text, blocks = _converter()._extract_trusted_html_blocks(payload, "token")
+    assert blocks == []
+    assert text == payload
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_tabular_separator_follows_first_emitted_row():
+    """内容以 ``\\\\`` 开头时表头仍必须拿到分隔行。
+
+    旧实现用原始切分的下标判断表头，被跳过的空行让 ``i == 0`` 落到第二行，
+    整个 Markdown 表格因此失效。
+    """
+    out = TableConverter().convert(
+        "\\begin{tabular}{cc}\\\\ a & b \\\\ c & d \\end{tabular}"
+    )
+    assert out.splitlines() == ["| a | b |", "|---|---|", "| c | d |"]
+
+
+def test_tabular_column_spec_with_nested_braces():
+    """列格式声明内可以嵌套花括号（``>{\\bfseries}l``）。"""
+    out = TableConverter().convert(
+        "\\begin{tabular}{>{\\bfseries}lc} a & b \\\\ c & d \\end{tabular}"
+    )
+    assert out.splitlines()[0] == "| a | b |"
+    assert "\\bfseries" not in out
+    assert "}" not in out
+
+
+def test_trusted_html_span_scanner_matches_all_three_forms():
+    """线性扫描器必须覆盖三种受控块形式，且区间与旧正则一致。"""
+    tikz = (
+        '<div class="tikz-diagram"><script type="text/tikz" data-disable-cache="true">\n'
+        "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n</script></div>"
+    )
+    mermaid = '<pre class="mermaid">\ngraph TD; A-->B;\n</pre>'
+    error = '<div class="error">boom</div>'
+    text = "a" + tikz + "b" + mermaid + "c" + error + "d"
+    spans = list(iter_trusted_html_spans(text))
+    assert [text[start:end] for start, end in spans] == [tikz, mermaid, error]
+
+
+def test_trusted_html_span_scanner_rejects_markup_inside_error_block():
+    """``<div class="error">`` 的块体不允许尖括号，语义与旧正则相同。"""
+    text = '<div class="error">x<div class="error">boom</div>'
+    spans = list(iter_trusted_html_spans(text))
+    assert [text[start:end] for start, end in spans] == [
+        '<div class="error">boom</div>'
+    ]
+
+
+def test_tikz_inside_a_code_fence_is_left_as_source():
+    """代码围栏里的 TikZ 是示例源码，不能被转换成图。
+
+    旧行为会把围栏内容换成插件生成的 ``<div class="tikz-diagram">`` HTML，
+    读者看到的就不再是用户写的代码。
+    """
+    payload = "```\n\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n```"
+    out = _preprocessor().preprocess(payload)
+    assert out == payload
+    assert "tikz-diagram" not in out
+
+
+def test_real_tikz_outside_a_fence_is_still_converted():
+    """跳过围栏不能顺手把围栏外的真图也跳过。"""
+    payload = (
+        "```\nnot tikz\n```\n\n"
+        "\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}"
+    )
+    assert "tikz-diagram" in _preprocessor().preprocess(payload)
+
+
+def test_set_notation_inside_a_code_fence_is_left_as_source():
+    """集合表示法改写同样不得进入代码围栏。"""
+    payload = "```\n{a \\mid b}\n```"
+    assert _preprocessor().preprocess(payload) == payload
+
+
+def test_set_notation_inside_math_is_still_rewritten():
+    """数学区间受文本命令改写保护，集合表示法在这里仍要生效。"""
+    out = _preprocessor().preprocess("$${x \\mid x > 0}$$")
+    assert "\\lbrace" in out and "\\rbrace" in out
+
+
+def test_forged_block_placeholder_cannot_displace_a_real_block():
+    """用户正文里的 ``MATHBLOCK0MATHBLOCK`` 不能顶替插件的占位符。
+
+    占位符现在带每次转换随机的 token，用户无法预测，因此真块一定留在自己的
+    位置，也不会留下未还原的字面占位符。
+    """
+    import re
+
+    html = _converter().convert_to_html("forged MATHBLOCK0MATHBLOCK\n\n$$x^2$$")
+    body = re.search(r'<main class="render-content">([\s\S]*?)</main>', html).group(1)
+    assert "MATHBLOCK0MATHBLOCK" in body
+    assert body.count("$$x^2$$") == 1
+    assert body.index("MATHBLOCK0MATHBLOCK") < body.index("$$x^2$$")
+
+
+def test_many_inline_math_blocks_restore_in_one_pass():
+    """上万个小公式的还原必须是单次遍历。
+
+    旧实现每个块一次 ``str.replace``，整体是 O(块数 × 文档长度)：40 000 个
+    ``$x$`` 光还原阶段就要十秒。
+    """
+    payload = "$x$ " * 40_000
+    started = time.perf_counter()
+    html = _converter().convert_to_html(payload)
+    assert html.count("$x$") == 40_000
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_placeholder_pattern_is_not_confused_by_a_digit_leading_token():
+    """相邻占位符 token 以数字开头时，下标也不得被贪婪吞并。
+
+    这是修复过程中真实踩到的坑：占位符以数字结尾、下一个 token 又以数字开头时，
+    还原正则的 ``\\d+`` 会读出一个越界下标并抛 IndexError。token 随机时表现为
+    间歇性崩溃，因此这里用固定 token 复现。
+    """
+    from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
+        _block_placeholder,
+        _placeholder_pattern,
+    )
+
+    token = "0123abcd"  # 以数字开头：正是会触发贪婪吞并的形态
+    text = "".join(_block_placeholder(token, "MATH", i) for i in range(12)) + " tail"
+    assert [
+        int(value) for value in _placeholder_pattern(token, "MATH").findall(text)
+    ] == list(range(12))
+    restored = _placeholder_pattern(token, "MATH").sub(
+        lambda match: f"<{match.group('index')}>", text
+    )
+    assert restored == "".join(f"<{i}>" for i in range(12)) + " tail"
+
+
+def test_paragraph_wrapped_html_placeholder_is_unwrapped():
+    """受控 HTML 块还原时要连 Markdown 加的 ``<p>`` 一起去掉。"""
+    from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
+        _block_placeholder,
+        _placeholder_pattern,
+    )
+
+    token = "ff00ff00"
+    placeholder = _block_placeholder(token, "HTML", 0)
+    pattern = _placeholder_pattern(token, "HTML", paragraph_wrapped=True)
+    assert pattern.sub("BLOCK", f"<p>{placeholder}</p>") == "BLOCK"
+    assert pattern.sub("BLOCK", placeholder) == "BLOCK"

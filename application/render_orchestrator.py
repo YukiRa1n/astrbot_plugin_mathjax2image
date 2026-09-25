@@ -83,6 +83,10 @@ class RenderOrchestrator:
         self._pending_renders = 0
         self._queue_timeout = max(1, int(render_queue_timeout)) / 1000.0
         self._closed = False
+        # 已进入 render() 的调用任务。close() 先等待它们（有上限），超时才取消，
+        # 然后才关浏览器；否则浏览器可能在某个页面仍在使用时被关闭。
+        self._inflight: set[asyncio.Task] = set()
+        self._drain_timeout = 5.0
 
         # 依赖安装器
         self._dependency_installer = PlaywrightDependencyInstaller()
@@ -161,6 +165,9 @@ class RenderOrchestrator:
         content_len = len(content)
         logger.info(f"[MathJax2Image] 开始渲染，内容长度: {content_len}")
 
+        if not content.strip():
+            raise RenderError("渲染内容为空")
+
         if content_len > MAX_RENDER_LENGTH:
             logger.warning(
                 f"[MathJax2Image] 内容过长被拒绝，长度: {content_len}, 限制: {MAX_RENDER_LENGTH}"
@@ -173,6 +180,9 @@ class RenderOrchestrator:
         if self._pending_renders >= self._max_pending_renders:
             raise RenderError("渲染队列已满，请稍后重试")
         self._pending_renders += 1
+        task = asyncio.current_task()
+        if task is not None:
+            self._inflight.add(task)
         acquired = False
         try:
             try:
@@ -189,6 +199,8 @@ class RenderOrchestrator:
                 raise RenderError("渲染引擎已关闭")
             return await self._render_locked(content, skip_preprocess)
         finally:
+            if task is not None:
+                self._inflight.discard(task)
             if acquired:
                 self._render_semaphore.release()
             self._pending_renders -= 1
@@ -248,10 +260,37 @@ class RenderOrchestrator:
             raise RenderError(f"渲染失败: {e}")
 
     async def close(self) -> None:
-        """释放资源"""
+        """释放资源。
+
+        先停止接收新请求，再给已进入 ``render()`` 的调用一段宽限时间；只有
+        超时仍未结束的才取消，最后才关闭浏览器管理器。命令路径（``/render``
+        等）不像 LLM 工具路径那样由调用方跟踪任务，若不在这里排空，浏览器会
+        在活动页面渲染到一半时被关闭。
+        """
         self._closed = True
+        await self._drain_inflight()
         await self._browser_manager.close()
         logger.info("[MathJax2Image] 编排器资源已释放")
+
+    async def _drain_inflight(self) -> None:
+        """等待进行中的渲染，超时的部分取消并等待回收。"""
+        current = asyncio.current_task()
+        pending = {
+            task for task in self._inflight if task is not current and not task.done()
+        }
+        if not pending:
+            return
+        _, still_running = await asyncio.wait(pending, timeout=self._drain_timeout)
+        if not still_running:
+            return
+        logger.warning(
+            "[MathJax2Image] 关闭前仍有 %d 个渲染超过 %.1fs，已取消",
+            len(still_running),
+            self._drain_timeout,
+        )
+        for task in still_running:
+            task.cancel()
+        await asyncio.gather(*still_running, return_exceptions=True)
 
     def set_bg_color(self, color: str) -> None:
         """设置背景颜色"""

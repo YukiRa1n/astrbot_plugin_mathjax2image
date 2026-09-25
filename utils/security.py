@@ -6,7 +6,11 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 
-LOCAL_CDP_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
+#: Hosts that reach the local machine without leaving it. ``0.0.0.0`` is the
+#: IPv4 unspecified address (a bind target), not a loopback address, so it is
+#: deliberately absent: connecting to it can reach a local service on some
+#: stacks and must go through ``allow_remote``.
+LOCAL_CDP_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def validate_cdp_url(url: str, allow_remote: bool = False) -> str:

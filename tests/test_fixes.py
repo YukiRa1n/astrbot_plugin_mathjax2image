@@ -280,6 +280,34 @@ class TestPendingImagesTTL:
         assert "s1" in handler._pending_images
         assert fresh_path.exists()
 
+    @pytest.mark.asyncio
+    async def test_pending_image_expires_without_send_image(self, tmp_path):
+        import asyncio
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+
+        handler = LLMToolHandler(MagicMock(), MagicMock())
+        handler._IMAGE_TTL_SECONDS = 0.02
+        handler._get_session_key = MagicMock(return_value="session1")
+
+        image_path = tmp_path / "pending.png"
+        image_path.write_bytes(b"fake")
+        handler._render_orchestrator.render = AsyncMock(return_value=image_path)
+
+        result = await handler.handle_render_math(
+            MagicMock(), "render me", auto_send=False
+        )
+        assert "渲染成功" in result
+        assert image_path.exists()
+        assert "session1" in handler._pending_images
+
+        try:
+            await asyncio.sleep(0.05)
+            assert "session1" not in handler._pending_images
+            assert not image_path.exists()
+            assert handler.last_rendered_image is None
+        finally:
+            await handler.close()
+
 
 class TestInjectScriptUsesSetTimeout:
     """Fix 5: setInterval replaced with setTimeout"""
@@ -312,12 +340,13 @@ class TestPendingImagesLock:
         import asyncio
         from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
 
-        handler = LLMToolHandler.__new__(LLMToolHandler)
-        handler._pending_images = {}
-        handler._pending_lock = asyncio.Lock()
-        handler._last_rendered_image = None
+        # 真正跑 __init__：旧写法用 __new__ 再自己赋值，再断言自己赋的值，
+        # 即使实现删掉这把锁也照样通过。
+        handler = LLMToolHandler(MagicMock(), MagicMock())
 
         assert isinstance(handler._pending_lock, asyncio.Lock)
+        assert isinstance(handler._active_renders, set)
+        assert handler._pending_cleanup_timer is None
 
     @pytest.mark.asyncio
     async def test_handle_render_math_uses_lock(self, tmp_path, monkeypatch):
@@ -638,35 +667,67 @@ class TestSimpleMacrosWordBoundary:
 
 
 class TestTikzPlotXReplacement:
-    """Fix 2: \\x replacement must not corrupt \\xi or other \\x-prefixed macros."""
+    """Fix 2: \\x replacement must not corrupt \\xi or other \\x-prefixed macros.
+
+    旧测试把 re.sub 抄到测试里再断言自己的输出，生产代码怎么改都能通过；
+    这里走 TikzPlotConverter.convert 的真实路径。
+    """
 
     def test_x_does_not_corrupt_xi(self):
-        import re
-        expr = r"\xi + \x"
-        x_val = 3.14
-        result = re.sub(r'\\x(?![a-zA-Z])', str(x_val), expr)
+        from astrbot_plugin_mathjax2image.infrastructure.converter.tikz_plot_converter import (
+            TikzPlotConverter,
+        )
+
+        converter = TikzPlotConverter()
+        tikz = (
+            r"\begin{tikzpicture}"
+            r"\draw[domain=0:1,samples=2] plot(\x, {\xi + \x});"
+            r"\end{tikzpicture}"
+        )
+        result = converter.convert(tikz)
+        # \xi 里的 \x 不是变量，含它的表达式无法安全数值化，必须整体保留
+        assert result == tikz
         assert r"\xi" in result
-        assert str(x_val) in result
 
     def test_x_standalone_replaced(self):
-        import re
-        expr = r"\x^2 + \x"
-        x_val = 2.0
-        result = re.sub(r'\\x(?![a-zA-Z])', str(x_val), expr)
+        from astrbot_plugin_mathjax2image.infrastructure.converter.tikz_plot_converter import (
+            TikzPlotConverter,
+        )
+
+        converter = TikzPlotConverter()
+        tikz = (
+            r"\begin{tikzpicture}"
+            r"\draw[domain=0:1,samples=3] plot(\x, {\x^2});"
+            r"\end{tikzpicture}"
+        )
+        result = converter.convert(tikz)
         assert r"\x" not in result
-        assert "2.0^2 + 2.0" == result
+        assert "(0,0) -- (0.5,0.25) -- (1,1)" in result
 
 
 class TestHandleSendImageUsesLock:
     """Fix 3: handle_send_image must guard _pending_images with _pending_lock."""
 
-    def test_handle_send_image_source_uses_lock(self):
-        import inspect
+    @pytest.mark.asyncio
+    async def test_send_refuses_after_close(self, tmp_path):
+        """卸载后不得再投递；旧测试只 inspect 源码文本，实现改坏也会通过。"""
+        import time
         from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
 
-        source = inspect.getsource(LLMToolHandler.handle_send_image)
-        assert "_pending_lock" in source
-        assert "async with" in source
+        handler = LLMToolHandler(MagicMock(), MagicMock())
+        handler._get_session_key = MagicMock(return_value="session-close")
+        image = tmp_path / "pending.png"
+        image.write_bytes(b"png")
+        handler._pending_images["session-close"] = (image, time.time())
+        handler._context = MagicMock()
+        handler._context.send_message = AsyncMock()
+
+        await handler.close()
+        result = await handler.handle_send_image(MagicMock())
+
+        assert "卸载" in result
+        handler._context.send_message.assert_not_awaited()
+        assert not image.exists()
 
     @pytest.mark.asyncio
     async def test_handle_send_image_no_pending(self):
@@ -870,7 +931,6 @@ async def test_llm_send_removes_artifact_after_embedding(tmp_path, monkeypatch):
 
 def test_network_policy_file_logic_is_correct():
     """验证 file:// 放行逻辑：仅当前页面 URI 放行，其余中止。"""
-    import asyncio
     from urllib.parse import urlparse
 
     # 复现 page_renderer 中的判定逻辑
@@ -928,3 +988,178 @@ def test_tikz_foreach_limits_blocked():
     # 正常代码通过
     normal = r"\draw (0,0) -- (1,1);"
     assert conv._validate_tikz_complexity(normal) is True
+
+
+# ---- review fixes: config normalisation, CDP allowlist, teardown drain ----
+
+
+def test_config_helpers_normalise_junk_values():
+    """配置归一化必须拒绝畸形值，且不依赖 astrbot。"""
+    from astrbot_plugin_mathjax2image.utils.config import (
+        normalized_choice,
+        safe_bool,
+        safe_int,
+    )
+
+    assert safe_bool("false") is False
+    assert safe_bool(" TRUE ") is True
+    assert safe_bool("yes") is True
+    # 既有契约：只信 bool 与字符串，其他类型一律 False
+    assert safe_bool(1) is False
+    assert safe_bool(None) is False
+
+    assert safe_int("abc", 7) == 7
+    assert safe_int(None, 7) == 7
+    assert safe_int(float("nan"), 7) == 7  # int(nan) -> ValueError
+    assert safe_int(float("inf"), 7) == 7  # int(inf) -> OverflowError
+    assert safe_int("42", 7) == 42
+
+    assert normalized_choice(None, "wasm") == "wasm"
+    assert normalized_choice("", "wasm") == "wasm"
+    assert normalized_choice(" NATIVE ", "wasm") == "native"
+
+
+def test_unknown_tikz_backend_never_reaches_page_renderer():
+    """非法 tikz_backend 必须在入口归一化，否则 PageRenderer 构造期抛错。"""
+    from astrbot_plugin_mathjax2image.utils.config import normalized_choice
+
+    for raw in (None, "", "nonsense", "NATIVE", " wasm "):
+        value = normalized_choice(raw, "wasm")
+        assert (value if value in ("wasm", "native") else "wasm") in ("wasm", "native")
+
+
+def test_cdp_allowlist_excludes_unspecified_address():
+    """``0.0.0.0`` 是未指定地址而非环回地址，默认不得放行。"""
+    from astrbot_plugin_mathjax2image.utils.security import validate_cdp_url
+
+    with pytest.raises(ValueError):
+        validate_cdp_url("http://0.0.0.0:9222")
+    # 显式开启远程 CDP 后才允许
+    assert (
+        validate_cdp_url("http://0.0.0.0:9222", allow_remote=True)
+        == "http://0.0.0.0:9222"
+    )
+    assert validate_cdp_url("http://127.0.0.1:9222") == "http://127.0.0.1:9222"
+    assert validate_cdp_url("http://[::1]:9222") == "http://[::1]:9222"
+
+
+@pytest.mark.asyncio
+async def test_render_orchestrator_rejects_blank_content(tmp_path):
+    """只有空白的输入不该走到渲染管线。"""
+    from astrbot_plugin_mathjax2image.application.render_orchestrator import (
+        RenderOrchestrator,
+    )
+    from astrbot_plugin_mathjax2image.domain.errors import RenderError
+
+    orchestrator = RenderOrchestrator(tmp_path)
+    with pytest.raises(RenderError, match="为空"):
+        await orchestrator.render("   \n\t ")
+
+
+@pytest.mark.asyncio
+async def test_close_drains_inflight_render_before_closing_browser(tmp_path):
+    """close() 必须先等待进行中的渲染，再关浏览器。
+
+    命令路径（``/render``）不像 LLM 工具路径那样由调用方跟踪任务，旧实现会
+    在页面仍在使用时直接关闭浏览器管理器。
+    """
+    import asyncio
+    from astrbot_plugin_mathjax2image.application.render_orchestrator import (
+        RenderOrchestrator,
+    )
+
+    orchestrator = RenderOrchestrator(tmp_path, max_concurrent_renders=1)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_locked(content, skip_preprocess):
+        started.set()
+        await release.wait()
+        return tmp_path / "ok.png"
+
+    orchestrator._render_locked = slow_locked
+    orchestrator._browser_manager.close = AsyncMock()
+
+    render_task = asyncio.create_task(orchestrator.render("hello"))
+    await started.wait()
+    closer = asyncio.create_task(orchestrator.close())
+    await asyncio.sleep(0.05)
+
+    assert not closer.done()
+    orchestrator._browser_manager.close.assert_not_awaited()
+
+    release.set()
+    await render_task
+    await closer
+    orchestrator._browser_manager.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_close_cancels_a_render_that_overruns_the_grace_period(tmp_path):
+    """宽限期后仍未结束的渲染要被取消，卸载不能无限挂住。"""
+    import asyncio
+    from astrbot_plugin_mathjax2image.application.render_orchestrator import (
+        RenderOrchestrator,
+    )
+
+    orchestrator = RenderOrchestrator(tmp_path, max_concurrent_renders=1)
+    orchestrator._drain_timeout = 0.05
+    started = asyncio.Event()
+
+    async def stuck_locked(content, skip_preprocess):
+        started.set()
+        await asyncio.Event().wait()  # 永不结束
+
+    orchestrator._render_locked = stuck_locked
+    orchestrator._browser_manager.close = AsyncMock()
+
+    render_task = asyncio.create_task(orchestrator.render("hello"))
+    await started.wait()
+    await asyncio.wait_for(orchestrator.close(), timeout=2)
+    assert render_task.cancelled() or render_task.done()
+    orchestrator._browser_manager.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_release_page_disposes_when_state_probe_raises():
+    """``is_closed()`` 抛错时也必须回收页面并归还计数。"""
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
+
+    manager = BrowserManager(max_pages=1)
+    page = MagicMock()
+    page.is_closed = MagicMock(side_effect=RuntimeError("driver gone"))
+    page.context.close = AsyncMock()
+    manager._active_pages_count = 1
+
+    await manager.release_page(page)
+
+    page.context.close.assert_awaited_once()
+    assert manager._active_pages_count == 0
+
+
+def test_install_lock_is_rebound_when_the_event_loop_changes():
+    """模块级 asyncio.Lock 会绑定首个 loop；换 loop 后必须换新锁。"""
+    import asyncio
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        _install_lock,
+    )
+
+    async def same_loop():
+        return _install_lock("chromium"), _install_lock("chromium")
+
+    first, second = asyncio.run(same_loop())
+    assert first is second  # 同一 loop 内复用
+
+    after_reload = asyncio.run(same_loop())[0]
+    assert after_reload is not first  # 新 loop 必须是新锁
+
+
+@pytest.mark.asyncio
+async def test_render_math_rejects_whitespace_only_content():
+    """只有空白的 content 不该触发渲染。"""
+    from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+
+    handler = LLMToolHandler(MagicMock(), MagicMock())
+    result = await handler.handle_render_math(MagicMock(), "  \n\t ", auto_send=False)
+    assert "不能为空" in result
