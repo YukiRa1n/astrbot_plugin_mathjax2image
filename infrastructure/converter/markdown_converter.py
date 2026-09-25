@@ -219,6 +219,30 @@ def bracket_rescan_cost(text: str, budget: int) -> int:
     return cost
 
 
+#: 遮罩代码区间时用的占位字符。必须是词字符，这样代码块不会拉高“几乎全是
+#: 标记字符”的比例；同时不是 ``[``/``]``，不计入括号预算。
+_CODE_MASK_CHAR = "x"
+
+
+def _mask_code_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    """用等长占位字符替换 ``spans``（围栏/行内代码）。
+
+    转换器先把代码换成占位符再交给 markdown，所以两个退化判断都必须在“markdown
+    真正会处理的部分”上做，否则一段放在代码块里的内容会把正文判成攻击：
+    代码块里的标点不算“几乎全是标记字符”，里面的 ``[`` 也根本不会进入 markdown。
+    """
+    if not spans:
+        return text
+    parts: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        parts.append(text[cursor:start])
+        parts.append(_CODE_MASK_CHAR * (end - start))
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 class MarkdownConverter:
     """Markdown转换器"""
 
@@ -246,9 +270,11 @@ class MarkdownConverter:
         """将Markdown转换为完整HTML"""
         # 预处理前先做退化输入检查：纯标记字符的长文本会让 Python-Markdown
         # 自身的扫描器退化成超线性；大量未配对的 `[` 同样会让它的链接/引用
-        # 扫描器反复回扫（100 KB 实测 100 秒以上）。两者都没有渲染价值。
-        if self._is_degenerate_markup(md_text) or (
-            bracket_rescan_cost(md_text, _BRACKET_RESCAN_BUDGET)
+        # 扫描器反复回扫（100 KB 实测 100 秒以上）。两个判据都只在 markdown
+        # 真正会处理的部分上计算（围栏/行内代码已被换成占位符）。
+        checked = _mask_code_spans(md_text, scan_fenced_code(md_text))
+        if self._is_degenerate_markup(checked) or (
+            bracket_rescan_cost(checked, _BRACKET_RESCAN_BUDGET)
             > _BRACKET_RESCAN_BUDGET
         ):
             raise ValueError(
@@ -621,12 +647,15 @@ class MarkdownConverter:
 
     def _render_code_block(self, block: str) -> str:
         """把一个代码块源码渲染为 ``<pre><code>`` HTML。"""
-        fence = re.fullmatch(r"(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\1", block)
+        # 闭合符允许比开启符长（CommonMark），也允许缩进：``\2(?:\1)*`` 表示
+        # “同类字符、且不短于开启符”。用固定三反引号的 ``\1`` 会把 4 反引号
+        # 围栏里那行 3 反引号误当成闭合符，把代码截断。
+        fence = re.fullmatch(r"([`~])(\1{2,})([^\n]*)\n([\s\S]*?)\n *\2(?:\1)*", block)
         if fence is None:
             return "<code>" + html_lib.escape(block.strip("`")) + "</code>"
-        language = self._sanitize_language(fence.group(2).strip())
+        language = self._sanitize_language(fence.group(3).strip())
         lang_class = f' class="language-{language}"' if language else ""
-        escaped_code = html_lib.escape(fence.group(3))
+        escaped_code = html_lib.escape(fence.group(4))
         return f"<pre><code{lang_class}>{escaped_code}</code></pre>"
 
     def _sanitize_language(self, language: str) -> str:

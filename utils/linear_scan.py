@@ -194,12 +194,38 @@ def find_brace_arguments(text: str, command: str) -> list[tuple[int, int]]:
             return spans  # unbalanced: nothing after this can be a full command
 
 
+def _at_line_start(text: str, start: int) -> bool:
+    """``start`` 前面只有空格（可缩进），再往前是换行或文本开头。
+
+    CommonMark 要求围栏标记位于行首；少了这一条，正文里的行内 `` ``` ``
+    （例如「见 ```mermaid 代码块」）会被当成围栏开启符，与真正的围栏错配。
+    不限制缩进宽度：4 个空格缩进的围栏在 CommonMark 里算缩进代码块，但内容仍
+    旧应受保护，所以只要前面全是空格就算行首。
+    """
+    index = start - 1
+    while index >= 0 and text[index] == " ":
+        index -= 1
+    return index < 0 or text[index] == "\n"
+
+
 def scan_fenced_code(text: str) -> list[tuple[int, int]]:
     """Locate fenced code blocks and inline code spans in a single pass.
 
-    Mirrors the previous fenced/inline alternation: a fence needs a run of at
-    least three backticks or tildes followed by a line break and a matching
-    closer; inline spans use a bounded tick run and may not cross a line break.
+    Two CommonMark rules the first version missed are applied here:
+
+    * a fence marker must sit at the start of a line (allowing indentation), so
+      a run in the middle of prose is ordinary text, not a fence;
+    * the closing run must use the same character and be at least as long as the
+      opening one.
+
+    Without them, a document that merely *mentions* a fence (「见 ```mermaid
+    代码块」) mis-paired every later fence: code samples were rendered as prose
+    (LaTeX rewritten, TikZ compiled as a live figure), real code blocks were
+    swallowed into the surrounding paragraph, and ``\\usepackage{...}`` inside a
+    sample leaked to the MathJax allowlist and failed the whole render.
+
+    Inline spans keep their previous behaviour: a bounded tick run that may not
+    cross a line break. An unclosed fence still yields no span.
 
     Delimiter runs are located with ``re.finditer`` so the per-character work
     happens in C: a hand-written per-character Python loop costs several times
@@ -213,25 +239,41 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
     #: delimiter run on the same line: re-finding the newline per run made a
     #: single long line of inline spans quadratic.
     line_limit = -1
-    for match in _DELIMITER_RUN.finditer(text):
-        start = match.start()
+    runs = [
+        (match.start(), match.end() - match.start(), match.group(0)[0])
+        for match in _DELIMITER_RUN.finditer(text)
+    ]
+    # 每个字符的“行首 run 长度后缀最大值”：判断“后面没有够长的闭合符”是 O(1)，
+    # 否则每个未闭合的开启符都要扫到文末，又变回 O(n^2)。
+    longest_after = [0] * len(runs)
+    longest = {"`": 0, "~": 0}
+    for index in range(len(runs) - 1, -1, -1):
+        start, run_length, char = runs[index]
+        longest_after[index] = longest[char]
+        if run_length >= 3 and _at_line_start(text, start):
+            longest[char] = max(longest[char], run_length)
+
+    for index, (start, run_length, char) in enumerate(runs):
         if start < consumed_until:
             continue  # already part of a block body or an inline span
-        char = match.group(0)[0]
-        run_length = match.end() - start
 
-        if run_length >= 3:
-            # Fenced block: "<fence>[rest of line]\n<body><same fence>".
-            # Only three ticks are needed: a longer run matches identically.
-            line_end = text.find("\n", match.end())
-            if line_end != -1:
-                fence = char * 3
-                close = text.find(fence, line_end + 1)
-                if close != -1:
-                    end = close + len(fence)
+        if (
+            run_length >= 3
+            and longest_after[index] >= run_length
+            and _at_line_start(text, start)
+        ):
+            for candidate in range(index + 1, len(runs)):
+                close_start, close_length, close_char = runs[candidate]
+                if (
+                    close_char == char
+                    and close_length >= run_length
+                    and _at_line_start(text, close_start)
+                ):
+                    end = close_start + close_length
                     spans.append((start, end))
                     consumed_until = end
-                    continue  # inner delimiters are part of the block body
+                    break
+            continue  # inner delimiters are part of the block body
 
         if char == "`":
             # Inline spans: `+<no newline>`+, tick run bounded to stay O(1).
@@ -241,7 +283,7 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
             limit = line_limit
             ticks = min(run_length, INLINE_TICKS_MAX)
             position = start
-            while ticks and position < match.end():
+            while ticks and position < start + run_length:
                 token = char * ticks
                 close = text.find(token, position + ticks)
                 if close != -1 and close + ticks <= limit:

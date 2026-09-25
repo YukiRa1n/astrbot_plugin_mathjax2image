@@ -524,6 +524,29 @@ def test_bracket_rescan_guard_rejects_unpaired_openers():
     assert "<a href" in html or "https://x" in html
 
 
+def test_bracket_guard_ignores_brackets_inside_code_fences():
+    """围栏/行内代码里的 ``[`` 不会进入 markdown，不应触发任何退化判据。
+
+    转换器先把代码换成占位符再交给 markdown，所以两个判据都必须在遮掉代码块
+    之后计算，否则一段代码样例会把正文判成攻击。
+    """
+    converter = _converter()
+    # 代码块里大量未配对的 `[`：正常内容，必须能渲染
+    fenced = "正文段落。" + "\n\n```\n" + "list.append[item = 1\n" * 3_000 + "```\n"
+    assert "list.append[item" in converter.convert_to_html(fenced)
+    # 全是标点的代码块也不该被比例判据拒绝（markdown 看不到它）
+    punctuation = "正文" + "\n\n```\n" + "[" * 49_000 + "\n```\n"
+    assert "[" * 50 in converter.convert_to_html(punctuation)
+    # 行内代码同理
+    inline = "正文 " + "`" + "[" * 5_000 + "`" + " 结尾"
+    assert "[" * 50 in converter.convert_to_html(inline)
+    # 同样的括号放在正文里就必须拒绝
+    with pytest.raises(ValueError):
+        converter.convert_to_html("word [word " * 5_000)
+    with pytest.raises(ValueError):
+        converter.convert_to_html("[" * 49_000)
+
+
 def test_bracket_cost_model_matches_the_rescan_work():
     from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
         bracket_rescan_cost,
@@ -679,3 +702,84 @@ def test_native_svg_insertion_is_single_pass():
     doc2 = "a<script>1</script>b"
     matches2 = list(re.finditer(r"<script>.*?</script>", doc2))
     assert _insert_replacements(doc2, matches2, ["[svg]"]) == "a[svg]b"
+
+
+# ---- third review round: CommonMark fence pairing ----
+
+
+def test_inline_fence_mention_is_not_a_fence():
+    """正文里的 ``` 不是围栏开启符（围栏必须在行首）。
+
+    旧实现只要求“run 后面有换行”，于是「见 ```mermaid 写法」会和后面真正的
+    围栏错配：正文里的行内 run 被当成开启符，真正的代码块丢失。
+    """
+    text = "见 ```mermaid 的写法\n\n```python\nx = 1\n```\n"
+    spans = scan_fenced_code(text)
+    assert [text[a:b] for a, b in spans] == ["```python\nx = 1\n```"]
+
+
+def test_closing_fence_must_be_at_least_as_long_as_the_opener():
+    """4 反引号围栏里的 3 反引号行不是闭合符（CommonMark）。"""
+    outer = "````\n```\ncode\n```\n````\n"
+    spans = scan_fenced_code(outer)
+    assert len(spans) == 1
+    # 区间止于闭合符末尾（不含其后的换行），与既有语义一致
+    assert spans[0] == (0, len(outer) - 1)
+
+
+def test_closing_fence_longer_than_the_opener_is_accepted():
+    """闭合符比开启符长是合法的，不能因此丢掉整个代码块。"""
+    text = "```\ncode\n````\n"
+    spans = scan_fenced_code(text)
+    assert [text[a:b] for a, b in spans] == ["```\ncode\n````"]
+    html = _converter().convert_to_html(text)
+    assert "<pre><code>code</code></pre>" in html
+
+
+def test_indented_and_unclosed_fences():
+    """缩进围栏照旧识别；未闭合围栏照旧不产出区间（保持既有语义）。"""
+    indented = "  ```python\n  x = 1\n  ```\n"
+    spans = scan_fenced_code(indented)
+    assert len(spans) == 1
+    assert indented[spans[0][0] : spans[0][1]].endswith("  ```")
+    html = _converter().convert_to_html(indented)
+    assert "language-python" in html
+
+    assert scan_fenced_code("```\ncode\n") == []
+    # 行内 `~~~` 不是代码（CommonMark 只允许反引号做行内代码）
+    assert scan_fenced_code("prose ~~~ more\n") == []
+
+
+def test_nested_longer_fence_renders_as_one_block():
+    """4 反引号外层 + 3 反引号内层：整块作为一个代码块，内层原样保留。"""
+    html = _converter().convert_to_html("````\n```\ncode\n````\n")
+    assert html.count("<pre><code") == 1
+    assert "```\ncode" in html
+
+
+def test_code_sample_survives_an_inline_fence_mention():
+    """回归：正文提到 ``` 之后，后面的代码块不能再被拆成正文。
+
+    修复前渲染出来是（已人工看图核对）：``\\textbf{bold text}`` 被改写成真正的
+    粗体、集合被改成裸文本 ``\\lbrace a \\mid b\\rbrace``，还多出一个空代码块
+    和孤零零的 ```。
+    """
+    sample = "\\textbf{bold text} 和集合 {a \\mid b}"
+    payload = "正文里提到 ```tex 代码块：\n\n```\n" + sample + "\n```\n"
+    html = _converter().convert_to_html(_preprocessor().preprocess(payload))
+    assert "**bold text**" not in html
+    assert "\\lbrace" not in html
+    assert sample in html
+    assert html.count("<pre><code") == 1
+    assert "正文里提到 ```tex 代码块：" in html
+
+
+def test_usepackage_inside_a_fence_is_protected_after_an_inline_mention():
+    """回归：代码块里的 ``\\usepackage`` 不得泄漏（泄漏会让整条渲染失败）。
+
+    README 就是这样挂的：正文里出现过行内反引号围栏，导致后面的 ```latex 块
+    没有被识别，``\\usepackage{pgfplots}`` 落到 MathJax 白名单上抛 ValueError。
+    """
+    payload = "正文提到 ```tex 代码块：\n\n```latex\n\\usepackage{pgfplots}\n```\n"
+    html = _converter().convert_to_html(_preprocessor().preprocess(payload))
+    assert "\\usepackage{pgfplots}" in html
