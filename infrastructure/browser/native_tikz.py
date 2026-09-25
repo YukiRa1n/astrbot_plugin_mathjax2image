@@ -55,6 +55,23 @@ _FAILURE_TAIL_BYTES = 2000
 _FAILURE_DETAIL_CHARS = 200
 
 
+def _insert_replacements(html: str, matches, replacements: list[str]) -> str:
+    """Splice compiled SVGs into the document in one pass.
+
+    Rebuilding the whole string per replacement copied the rest of the document
+    k times, which is O(k x n) for k blocks in an n-sized document.
+    ``matches`` and ``replacements`` are aligned and in ascending order.
+    """
+    parts: list[str] = []
+    cursor = 0
+    for match, svg in zip(matches, replacements):
+        parts.append(html[cursor : match.start()])
+        parts.append(svg)
+        cursor = match.end()
+    parts.append(html[cursor:])
+    return "".join(parts)
+
+
 class NativeTikzRenderer:
     """Compile existing validated TikZ blocks with an external TeX Live installation."""
 
@@ -342,8 +359,7 @@ class NativeTikzRenderer:
                 ET.register_namespace("", "http://www.w3.org/2000/svg")
                 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
                 replacements.append(ET.tostring(svg, encoding="unicode"))
-        for match, svg in reversed(list(zip(matches, replacements))):
-            html = html[: match.start()] + svg + html[match.end() :]
+        html = _insert_replacements(html, matches, replacements)
         return re.sub(
             r'<(?:script|link)[^>]+(?:src|href)="[^" ]*/@drgrice1/tikzjax[^" ]+"[^>]*>(?:</script>)?',
             "",

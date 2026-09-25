@@ -23,6 +23,9 @@ class LLMToolHandler:
     """LLM工具处理器"""
 
     _IMAGE_TTL_SECONDS = 300
+    #: 待发送产物的硬上限。只靠 TTL 时，不同会话可以在 300 秒内累积任意多张图；
+    #: 而且 _schedule_pending_image_cleanup 会遍历全部条目，表必须保持很小。
+    _MAX_PENDING_IMAGES = 32
 
     def __init__(
         self,
@@ -105,6 +108,8 @@ class LLMToolHandler:
                         remove_artifact(old_path)
                     self._pending_images[session_key] = (image_path, time.time())
                     self._last_rendered_image = image_path
+                    while len(self._pending_images) > self._MAX_PENDING_IMAGES:
+                        self._evict_oldest_pending_image()
                     self._schedule_pending_image_cleanup()
                 return "渲染成功，图片已生成。请调用 send_image 工具发送图片。"
             else:
@@ -207,6 +212,16 @@ class LLMToolHandler:
         finally:
             remove_artifact(image_path)
             self._last_rendered_image = None
+
+    def _evict_oldest_pending_image(self) -> None:
+        """丢弃最早的一张待发送产物（调用方持有 _pending_lock）。"""
+        oldest = min(
+            self._pending_images, key=lambda key: self._pending_images[key][1]
+        )
+        path, _ = self._pending_images.pop(oldest)
+        if getattr(self, "_last_rendered_image", None) == path:
+            self._last_rendered_image = None
+        remove_artifact(path)
 
     def _schedule_pending_image_cleanup(self) -> None:
         """Schedule cleanup for the next pending image to reach its TTL."""

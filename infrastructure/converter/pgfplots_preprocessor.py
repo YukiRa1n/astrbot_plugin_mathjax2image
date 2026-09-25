@@ -2,9 +2,37 @@
 
 import math
 import re
+from bisect import bisect_left
 
 from ...domain.errors import PreprocessError
 from ...utils.safe_eval import compile_math_expression
+
+
+def _positions(source: str, char: str) -> list[int]:
+    """``source`` 中每个 ``char`` 的偏移（C 层 ``str.find``，只扫一遍）。"""
+    positions: list[int] = []
+    at = source.find(char)
+    while at != -1:
+        positions.append(at)
+        at = source.find(char, at + 1)
+    return positions
+
+
+def _has_unescaped_percent(
+    positions: list[int], source: str, start: int, end: int
+) -> bool:
+    """``source[start:end]`` 里是否有未被反斜杠转义的 ``%``（即注释起点）。
+
+    取代 ``re.search(r"(?<!\\)%", source[start:end])``：每个 token 都切一次
+    并重扫整行，单行图形里成千上万个 token 就是 O(n^2)（50 KB 实测 2.0 秒）。
+    偏移表只建一次，查找用二分，既不复制也不回扫。
+    """
+    index = bisect_left(positions, start)
+    while index < len(positions) and positions[index] < end:
+        if positions[index] == start or source[positions[index] - 1] != "\\":
+            return True
+        index += 1
+    return False
 
 
 def _group(source: str, start: int) -> tuple[str, int]:
@@ -100,10 +128,19 @@ class PgfplotsPreprocessor:
         in_axis = False
         edits = []
         used = self._spent
+        percent_positions = _positions(source, "%")
+        # 行首偏移用偏移表 + 二分，而不是每个 token 都 rfind 一遍整行：
+        # 单行图形里 rfind 同样会退化成 O(n^2)。
+        newline_positions = _positions(source, "\n")
         while match := token.search(source, cursor):
             cursor = match.end()
-            line_start = source.rfind("\n", 0, match.start()) + 1
-            if re.search(r"(?<!\\)%", source[line_start : match.start()]):
+            newline_index = bisect_left(newline_positions, match.start())
+            line_start = (
+                newline_positions[newline_index - 1] + 1 if newline_index else 0
+            )
+            if _has_unescaped_percent(
+                percent_positions, source, line_start, match.start()
+            ):
                 continue
             try:
                 options = ""

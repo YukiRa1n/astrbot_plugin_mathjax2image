@@ -455,3 +455,227 @@ def test_paragraph_wrapped_html_placeholder_is_unwrapped():
     pattern = _placeholder_pattern(token, "HTML", paragraph_wrapped=True)
     assert pattern.sub("BLOCK", f"<p>{placeholder}</p>") == "BLOCK"
     assert pattern.sub("BLOCK", placeholder) == "BLOCK"
+
+
+# ---- second review round: remaining super-linear scans ----
+
+
+def test_usepackage_declarations_stay_linear():
+    """大量未闭合的 ``\\usepackage[`` 不得回扫。
+
+    旧的 ``re.sub(r"\\usepackage(?:\\[([^\\]]*)\\])?\\{([^{}]+)\\}")`` 在每个
+    ``\\usepackage[`` 处都要找 ``]``，找不到就扫到文末：实测 25/50/100 KB 为
+    215 ms / 846 ms / 3.75 s（每次都约 4 倍）。
+    """
+    from astrbot_plugin_mathjax2image.utils.linear_scan import (
+        strip_usepackage_declarations,
+    )
+
+    payload = "\\usepackage[" * 9_000
+    started = time.perf_counter()
+    out = strip_usepackage_declarations(payload, lambda names: None)
+    assert out == payload  # 未闭合 => 不是声明，原文保留
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_usepackage_declaration_semantics_are_preserved():
+    """线性扫描必须与旧正则同语义：收集、拒绝选项、跳过非声明。"""
+    from astrbot_plugin_mathjax2image.utils.linear_scan import (
+        strip_usepackage_declarations,
+    )
+
+    seen: list[str] = []
+    assert (
+        strip_usepackage_declarations("a\\usepackage{physics,mhchem}b", seen.append)
+        == "ab"
+    )
+    assert seen == ["physics,mhchem"]
+
+    with pytest.raises(ValueError, match="package options"):
+        strip_usepackage_declarations(
+            "\\usepackage[italicdiff]{physics}", lambda names: None
+        )
+
+    # 未闭合的 `[`：不是声明
+    unclosed = "x\\usepackage[ y"
+    assert strip_usepackage_declarations(unclosed, lambda names: None) == unclosed
+
+    # `[^{}]+` 不能跨越 `{`，但后面的合法声明仍要被收集
+    mixed = "\\usepackage{a{b}\\usepackage{ok}"
+    collected: list[str] = []
+    out = strip_usepackage_declarations(mixed, collected.append)
+    assert collected == ["ok"]
+    assert out == "\\usepackage{a{b}"
+
+
+def test_bracket_rescan_guard_rejects_unpaired_openers():
+    """大量未配对的 ``[`` 会让 Python-Markdown 反复回扫，必须被拒绝。
+
+    实测（仅 markdown，无插件代码）：``\\usepackage[`` 100 KB 约 100 s，
+    ``word [word `` 100 KB 约 115 s。
+    """
+    converter = _converter()
+    with pytest.raises(ValueError, match="未配对"):
+        converter.convert_to_html(("word [word " * 12_000)[:100_000])
+    with pytest.raises(ValueError, match="未配对"):
+        converter.convert_to_html(("\\usepackage[" * 9_000)[:100_000])
+    # 配平的普通内容不受影响
+    html = converter.convert_to_html("见 [文档](https://x) 与 [1] 注记 $x$")
+    assert "<a href" in html or "https://x" in html
+
+
+def test_bracket_cost_model_matches_the_rescan_work():
+    from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
+        bracket_rescan_cost,
+    )
+
+    assert bracket_rescan_cost("plain prose", 10) == 0
+    assert bracket_rescan_cost("a[b]c", 10) == 2
+    assert bracket_rescan_cost("[ab", 10) == 3  # 到文本末尾
+    assert bracket_rescan_cost("[" * 1_000, 10) == 1_000  # 超预算即提前返回
+    assert bracket_rescan_cost("a\\%[b", 10) == 2  # 与 `%` 无关，只看括号
+
+
+def test_bracket_guard_accepts_every_real_document_in_the_repo():
+    """守卫不能把仓库里的真实文档判成攻击。"""
+    from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
+        _BRACKET_RESCAN_BUDGET,
+        bracket_rescan_cost,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    converter = _converter()
+    checked = 0
+    for pattern in ("*.md", "examples/*.md", "templates/*.html"):
+        for path in root.glob(pattern):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            assert (
+                bracket_rescan_cost(text, _BRACKET_RESCAN_BUDGET)
+                <= _BRACKET_RESCAN_BUDGET
+            ), path
+            assert converter._is_degenerate_markup(text) is False, path
+            checked += 1
+    assert checked >= 8
+
+
+def test_table_wrapper_and_caption_scan_is_linear():
+    """``\\begin{table}[`` 与 ``\\caption{`` 的惰性回扫已限长。
+
+    旧模式（``(\\[.*?\\])?`` / ``\\caption\\{.*?\\}``）在缺少闭合符时每个
+    出现位置都扫到行尾：50 KB 实测 946 ms / 905 ms。
+    """
+    converter = TableConverter()
+    # `\begin{table}` 本身总是被移除（可选参数组是可选的），只是不再为了
+    # 找 `]` 而回扫；`\caption{` 因为没有 `}` 而整体保留。
+    for payload, expected in (
+        ("\\begin{table}[" * 5_500, "[" * 5_500),
+        ("\\caption{" * 6_500, "\\caption{" * 6_500),
+    ):
+        started = time.perf_counter()
+        assert converter.convert(payload) == expected
+        assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_over_long_table_arguments_are_left_alone():
+    """超过限长的参数按“不是环境/命令”处理，而不是付出平方级代价。"""
+    from astrbot_plugin_mathjax2image.infrastructure.converter.table_converter import (
+        _MAX_ARGUMENT,
+    )
+
+    converter = TableConverter()
+    assert converter.convert("\\caption{short}") == ""
+    long_caption = "\\caption{" + "x" * (_MAX_ARGUMENT + 10) + "}"
+    assert converter.convert(long_caption) == long_caption
+    assert converter.convert("\\begin{table}[h]x") == "x"
+    assert converter.convert("\\begin{table}[" + "h" * (_MAX_ARGUMENT + 10) + "]") == (
+        "[" + "h" * (_MAX_ARGUMENT + 10) + "]"
+    )
+
+
+def test_preamble_directives_are_bounded():
+    """TikZ 声明抽取/剥离的字符类已限长（块内 50 KB 全是 ``\\usepackage[`` 时旧版约 1 s）。"""
+    converter = TikzConverter(TikzPlotConverter())
+    payload = "\\usepackage[" * 6_000
+    started = time.perf_counter()
+    converter._strip_preamble_directives(payload)
+    converter._extract_preamble_directives(payload)
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+    assert converter._extract_preamble_directives(
+        "\\usepackage{pgfplots}\\usetikzlibrary{calc}"
+    ) == (["pgfplots"], ["calc"])
+    assert converter._strip_preamble_directives("\\usepackage{pgfplots}") == ""
+    assert converter._strip_preamble_directives("\\begin{document}x\\end{document}") == "x"
+
+
+def test_think_tag_filter_is_linear_and_keeps_semantics():
+    """``<think>.*?</think>``（DOTALL）在未闭合时每个标签都扫到文末，100 KB 要 6.6 s。"""
+    from astrbot_plugin_mathjax2image.application.llm_orchestrator import (
+        LLMOrchestrator,
+    )
+
+    llm = LLMOrchestrator(context=None)
+    assert llm._filter_think_tags(None) is None
+    assert llm._filter_think_tags("") is None
+    assert llm._filter_think_tags("plain") == "plain"
+    assert llm._filter_think_tags("<think>a</think>b") == "b"
+    assert llm._filter_think_tags("<think>a</think>  b") == "b"
+    assert llm._filter_think_tags("x<think>a</think>y<think>b</think>z") == "xyz"
+    assert llm._filter_think_tags("keep <think>unclosed") == "keep <think>unclosed"
+
+    payload = "<think>" * 16_000
+    started = time.perf_counter()
+    assert llm._filter_think_tags(payload) == payload
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+
+def test_pgfplots_percent_probe_is_linear():
+    """注释判定不得每个 token 重扫一遍整行（50 KB 单行实测 2.0 s）。"""
+    from astrbot_plugin_mathjax2image.infrastructure.converter.pgfplots_preprocessor import (
+        PgfplotsPreprocessor,
+        _has_unescaped_percent,
+        _positions,
+    )
+
+    one_line = "\\addplot3" * 5_500
+    started = time.perf_counter()
+    PgfplotsPreprocessor(6400).convert(one_line)
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+
+    text = "a\\%b%c"
+    positions = _positions(text, "%")
+    assert positions == [2, 4]
+    assert _has_unescaped_percent(positions, text, 0, 3) is False  # 转义的 % 不算注释
+    assert _has_unescaped_percent(positions, text, 0, 5) is True
+    assert _has_unescaped_percent(positions, text, 3, 5) is True
+    assert _has_unescaped_percent([0], "%x", 0, 2) is True  # 行首 % 就是注释
+
+
+def test_inline_code_line_limit_is_looked_up_once():
+    """行内代码的行尾只求一次（旧版每个反引号 run 都重扫到行尾，400 KB 约 1.4 s）。"""
+    payload = ("`a` " * 100_000)[:800_000]
+    started = time.perf_counter()
+    spans = scan_fenced_code(payload)
+    assert len(spans) == 100_000
+    assert time.perf_counter() - started < BOMB_BUDGET_SECONDS
+    # 跨行的行内代码仍然不成立
+    assert scan_fenced_code("`a\nb`") == []
+
+
+def test_native_svg_insertion_is_single_pass():
+    """SVG 回填必须一次拼接，不能逐个重建整个文档（O(k x n)）。"""
+    import re
+
+    from astrbot_plugin_mathjax2image.infrastructure.browser.native_tikz import (
+        _insert_replacements,
+    )
+
+    doc = "".join(f"<script>{index}</script>" for index in range(1_000))
+    matches = list(re.finditer(r"<script>.*?</script>", doc))
+    assert len(matches) == 1_000
+    assert _insert_replacements(doc, matches, ["<svg/>"] * 1_000) == "<svg/>" * 1_000
+
+    # 未匹配的原文必须原样保留
+    doc2 = "a<script>1</script>b"
+    matches2 = list(re.finditer(r"<script>.*?</script>", doc2))
+    assert _insert_replacements(doc2, matches2, ["[svg]"]) == "a[svg]b"

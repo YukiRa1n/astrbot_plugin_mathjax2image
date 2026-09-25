@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
+from collections.abc import Callable
 
 # Runs of a single code-fence delimiter, located in C so the scan does not pay
 # Python-level per-character cost.
@@ -208,6 +209,10 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     length = len(text)
     consumed_until = 0
+    #: End of the line that ``line_limit`` was computed for. Reused by every
+    #: delimiter run on the same line: re-finding the newline per run made a
+    #: single long line of inline spans quadratic.
+    line_limit = -1
     for match in _DELIMITER_RUN.finditer(text):
         start = match.start()
         if start < consumed_until:
@@ -230,8 +235,10 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
 
         if char == "`":
             # Inline spans: `+<no newline>`+, tick run bounded to stay O(1).
-            line_end = text.find("\n", start)
-            limit = length if line_end == -1 else line_end
+            if line_limit < start:
+                found = text.find("\n", start)
+                line_limit = length if found == -1 else found
+            limit = line_limit
             ticks = min(run_length, INLINE_TICKS_MAX)
             position = start
             while ticks and position < match.end():
@@ -303,3 +310,91 @@ def scan_math_blocks(text: str) -> list[tuple[int, int]]:
         else:
             merged.append((start, end))
     return merged
+
+
+#: Command whose declaration ``strip_usepackage_declarations`` removes.
+_USEPACKAGE = "\\usepackage"
+
+
+def _char_positions(text: str, char: str) -> list[int]:
+    """Every offset of ``char`` in ``text``, ascending (C-level ``str.find``)."""
+    positions: list[int] = []
+    at = text.find(char)
+    while at != -1:
+        positions.append(at)
+        at = text.find(char, at + 1)
+    return positions
+
+
+def _first_after(positions: list[int], offset: int) -> int:
+    """First recorded offset strictly greater than ``offset``, else -1."""
+    index = bisect_right(positions, offset)
+    return positions[index] if index < len(positions) else -1
+
+
+def strip_usepackage_declarations(text: str, collect: Callable[[str], None]) -> str:
+    """Remove ``\\usepackage{...}`` / ``\\usepackage[...]{...}`` declarations.
+
+    ``collect`` receives the brace argument of each matched declaration and may
+    raise to reject it (the caller validates the package allowlist).
+
+    This replaces
+    ``re.sub(r"\\\\usepackage(?:\\[([^\\]]*)\\])?\\{([^{}]+)\\}")``. Its
+    ``[^\\]]*`` / ``[^{}]+`` rescan the rest of the document at every
+    ``\\usepackage`` whose closer is absent, so a 100 KB message of repeated
+    ``\\usepackage[`` cost about 148 seconds. Closer offsets are collected once
+    and looked up with ``bisect``, so each declaration costs O(log n) and no
+    region is ever rescanned.
+
+    Args:
+        text: Document text.
+        collect: Called with the brace argument of each matched declaration.
+
+    Returns:
+        ``text`` with every matched declaration removed.
+    """
+    if _USEPACKAGE not in text:
+        return text
+    brackets = _char_positions(text, "]")
+    opening = _char_positions(text, "{")
+    closing = _char_positions(text, "}")
+    pieces: list[str] = []
+    cursor = 0
+    length = len(text)
+    while True:
+        start = text.find(_USEPACKAGE, cursor)
+        if start < 0:
+            break
+        after = start + len(_USEPACKAGE)
+        body_start = after
+        options: str | None = None
+        # `[^\]]*` stops only at `]`, so the optional group needs one after it.
+        if after < length and text[after] == "[":
+            bracket_end = _first_after(brackets, after)
+            if bracket_end != -1:
+                options = text[after + 1 : bracket_end]
+                body_start = bracket_end + 1
+        end = -1
+        if body_start < length and text[body_start] == "{":
+            brace_end = _first_after(closing, body_start)
+            first_open = _first_after(opening, body_start)
+            # `[^{}]+` needs at least one character and may not cross a `{`;
+            # `brace_end` is the first `}` after the opener, so no `}` can sit
+            # inside the candidate body.
+            if brace_end > body_start + 1 and (
+                first_open == -1 or first_open > brace_end
+            ):
+                end = brace_end + 1
+        if end == -1:
+            # Not a declaration: keep the command text and resume after it, like
+            # a regex engine advancing past a failed match.
+            pieces.append(text[cursor:after])
+            cursor = after
+            continue
+        if options is not None:
+            raise ValueError("MathJax package options are not supported")
+        collect(text[body_start + 1 : end - 1])
+        pieces.append(text[cursor:start])
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)

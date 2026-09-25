@@ -7,6 +7,19 @@ import re
 
 from ...utils.linear_scan import find_pairs, substitute_spans
 
+#: 参数（`\begin{table}[...]` 选项、`\caption{...}`）允许的最大长度。
+#: 限长后字符类不会在缺少闭合符时回扫到行尾：100 KB 全是
+#: `\begin{table}[` 或 `\caption{` 时，惰性 `.*?` 版本要数秒。真实参数远短于此，
+#: 超过上限的按“不是环境/命令”处理（原文保留）。
+_MAX_ARGUMENT = 200
+
+_TABLE_BEGIN = re.compile(
+    r"\\begin\{table\}(?:\[[^\n]{0," + str(_MAX_ARGUMENT) + r"}?\])?"
+)
+_TABLE_END = re.compile(r"\\end\{table\}")
+_TABLE_CENTERING = re.compile(r"\\centering")
+_TABLE_CAPTION = re.compile(r"\\caption\{[^\n]{0," + str(_MAX_ARGUMENT) + r"}?\}")
+
 
 class TableConverter:
     """LaTeX表格转换器"""
@@ -16,11 +29,11 @@ class TableConverter:
 
     def convert(self, text: str) -> str:
         """将LaTeX表格转换为Markdown格式"""
-        # 移除table环境包装
-        text = re.sub(r"\\begin\{table\}(\[.*?\])?", "", text)
-        text = re.sub(r"\\end\{table\}", "", text)
-        text = re.sub(r"\\centering", "", text)
-        text = re.sub(r"\\caption\{.*?\}", "", text)
+        # 移除table环境包装（模式已限长，见 _MAX_ARGUMENT）
+        text = _TABLE_BEGIN.sub("", text)
+        text = _TABLE_END.sub("", text)
+        text = _TABLE_CENTERING.sub("", text)
+        text = _TABLE_CAPTION.sub("", text)
 
         # 处理tabular环境。配对交给线性扫描器：惰性正则
         # `\\begin\{tabular\}([\s\S]*?)\\end\{tabular\}` 在 \end{tabular} 缺失时

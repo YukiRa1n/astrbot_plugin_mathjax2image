@@ -723,21 +723,18 @@ class PageRenderer:
                     // 不能用子元素数量(真实内容可能就是 1 个 g)。
                     const containers = Array.from(document.querySelectorAll('.tikz-diagram'));
                     if (containers.length === 0) return null;
-                    for (const container of containers) {
-                        const svg = container.querySelector('svg');
-                        if (!svg) return null;
-                        const inner = svg.innerHTML;
-                        // spinner 特征: 半透明黑色圆角矩形
-                        if (inner.includes('fill-opacity="0.2"') && inner.includes('<animate')) return null;
-                        // Collapsed SVG paint scopes may leave no group nodes.
-                        if (!svg.querySelector('path,line,text,circle,ellipse,rect,polygon,polyline,use')) return null;
-                    }
                     let totalElements = 0;
                     for (const container of containers) {
                         const svg = container.querySelector('svg');
-                        if (svg) {
-                            totalElements += svg.querySelectorAll('path,line,text,circle,ellipse,rect,polygon,polyline,g,use').length;
-                        }
+                        if (!svg) return null;
+                        // spinner 特征: 半透明黑色圆角矩形 + SMIL 动画。改用选择器：
+                        // 把整段 SVG 序列化成字符串再查子串的写法，每一轮轮询都要重做
+                        // 一次，几十 KB 的图在 60 s 等待里开销很可观。
+                        if (svg.querySelector('animate') &&
+                            svg.querySelector('[fill-opacity="0.2"]')) return null;
+                        // Collapsed SVG paint scopes may leave no group nodes.
+                        if (!svg.querySelector('path,line,text,circle,ellipse,rect,polygon,polyline,use')) return null;
+                        totalElements += svg.querySelectorAll('path,line,text,circle,ellipse,rect,polygon,polyline,g,use').length;
                     }
                     return {success: true, diagrams: containers.length, count: totalElements};
                 }""",

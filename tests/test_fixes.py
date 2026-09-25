@@ -1163,3 +1163,64 @@ async def test_render_math_rejects_whitespace_only_content():
     handler = LLMToolHandler(MagicMock(), MagicMock())
     result = await handler.handle_render_math(MagicMock(), "  \n\t ", auto_send=False)
     assert "不能为空" in result
+
+
+# ---- second review round: bounded caches and per-frame browser work ----
+
+
+@pytest.mark.asyncio
+async def test_pending_images_are_hard_capped(tmp_path):
+    """待发送产物必须有条数上限。
+
+    TTL 单独存在时，不同会话可以在 300 秒窗口内累积任意多张图，而且
+    ``_schedule_pending_image_cleanup`` 会遍历全表。
+    """
+    from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+
+    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler._MAX_PENDING_IMAGES = 3
+    paths = []
+    try:
+        for index in range(6):
+            handler._get_session_key = MagicMock(return_value=f"s{index}")
+            image = tmp_path / f"pending{index}.png"
+            image.write_bytes(b"png")
+            paths.append(image)
+            handler._render_orchestrator.render = AsyncMock(return_value=image)
+            result = await handler.handle_render_math(
+                MagicMock(), "content", auto_send=False
+            )
+            assert "渲染成功" in result
+
+        assert len(handler._pending_images) == 3
+        assert set(handler._pending_images) == {"s3", "s4", "s5"}
+        # 被挤掉的产物必须已经回收
+        assert not paths[0].exists() and not paths[1].exists() and not paths[2].exists()
+        assert paths[3].exists() and paths[4].exists() and paths[5].exists()
+    finally:
+        await handler.close()
+
+
+def test_tikz_ready_predicate_does_not_serialize_every_svg():
+    """TikZ 等待断言每一帧都会执行，不得对每个图做 ``svg.innerHTML`` 序列化。
+
+    旧写法每帧把整段 SVG 重新序列化一次，几十 KB 的图在最长 60 秒的等待期间
+    开销很可观；用选择器判定 spinner 即可。（断言的是 ``wait_for_function`` 的
+    谓词源码：JavaScript 只能通过源码文本把关。）
+    """
+    import inspect
+
+    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
+        PageRenderer,
+    )
+
+    predicate = inspect.getsource(PageRenderer._wait_for_tikz)
+
+    assert "svg.innerHTML" not in predicate
+    assert "inner.includes(" not in predicate
+    assert "querySelector('animate')" in predicate
+    assert 'fill-opacity="0.2"' in predicate
+    # 完成判定、失败检测与计数仍然保留
+    assert "totalElements" in predicate
+    assert "invalid.site" in predicate
+    assert "tikz-diagram" in predicate

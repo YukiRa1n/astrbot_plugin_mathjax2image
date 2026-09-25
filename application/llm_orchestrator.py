@@ -3,7 +3,6 @@ LLM编排器
 管理与LLM的交互
 """
 
-import re
 import traceback
 from typing import Optional, Any
 
@@ -90,10 +89,33 @@ class LLMOrchestrator:
         return provider
 
     def _filter_think_tags(self, text: Optional[str]) -> Optional[str]:
-        """过滤LLM响应中的<think>标签"""
+        """过滤LLM响应中的<think>标签。
+
+        用前向扫描代替 ``re.sub(r"<think>.*?</think>\\s*", ...)``：惰性 ``.*?``
+        在找不到闭合标签时，每个 ``<think>`` 都会把剩余文本扫一遍，一段
+        100 KB 的响应里塞满未闭合标签就要 6.6 秒。
+        """
         if not text:
             return None
-        return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
+        closing = "</think>"
+        pieces: list[str] = []
+        position = 0
+        length = len(text)
+        while True:
+            start = text.find("<think>", position)
+            if start < 0:
+                break
+            end = text.find(closing, start + len("<think>"))
+            if end < 0:
+                # 这个标签之后没有闭合标记，更靠后的标签也不可能有。
+                break
+            pieces.append(text[position:start])
+            position = end + len(closing)
+            # 与 ``\\s*`` 一致：吃掉闭合标签后的空白。
+            while position < length and text[position].isspace():
+                position += 1
+        pieces.append(text[position:])
+        return "".join(pieces)
 
     def set_provider_id(self, provider_id: str) -> None:
         """设置提供商ID"""

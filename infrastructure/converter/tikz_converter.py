@@ -31,6 +31,24 @@ MAX_TIKZ_COMMANDS = 1000  # 最大命令数量
 MAX_TIKZ_FOREACH = 20  # 最大 \foreach 数量
 MAX_TIKZ_FOREACH_DEPTH = 2  # 最大 \foreach 嵌套深度
 
+# 声明参数（宏包选项、宏包名列表、pagestyle 名）允许的最大长度，即下面各
+# 模式里的 {0,200}。不设上限时，字符类在缺少 `]`/`}` 时会回扫到块尾：块内
+# 50 KB 全是 `\usepackage[` 实测 1.0 秒（`_extract` 0.7 秒）。真实声明远短于此，
+# 超过上限的声明按“未匹配”处理（原文保留）。
+_PREAMBLE_PACKAGE = re.compile(
+    r"\\usepackage(?:\[([^\]]{0,200})\])?\{([^{}]{0,200})\}"
+)
+_PREAMBLE_LIBRARY = re.compile(r"\\usetikzlibrary\{([^{}]{0,200})\}")
+_STRIP_PACKAGE = re.compile(
+    r"\\usepackage(\[[^\]]{0,200}\])?\{[^}]{0,200}\}"
+)
+_STRIP_DOCUMENTCLASS = re.compile(
+    r"\\documentclass(\[[^\]]{0,200}\])?\{[^}]{0,200}\}"
+)
+_STRIP_LIBRARY = re.compile(r"\\usetikzlibrary\{[^}]{0,200}\}")
+_STRIP_DOCUMENT = re.compile(r"\\(?:begin|end)\{document\}")
+_STRIP_PAGESTYLE = re.compile(r"\\(this)?pagestyle\{[^}]{0,200}\}")
+
 
 class TikzConverter:
     """TikZ环境转换器"""
@@ -189,16 +207,14 @@ class TikzConverter:
     ) -> tuple[list[str], list[str]]:
         """提取并白名单过滤用户的宏包和 TikZ 库声明。"""
         packages: list[str] = []
-        for match in re.finditer(
-            r"\\usepackage(?:\[([^\]]*)\])?\{([^{}]*)\}", tikz_code
-        ):
+        for match in _PREAMBLE_PACKAGE.finditer(tikz_code):
             for package in match.group(2).split(","):
                 package = package.strip()
                 if package in cls.SUPPORTED_PACKAGES and package not in packages:
                     packages.append(package)
 
         libraries: list[str] = []
-        for match in re.finditer(r"\\usetikzlibrary\{([^{}]*)\}", tikz_code):
+        for match in _PREAMBLE_LIBRARY.finditer(tikz_code):
             for library in match.group(1).split(","):
                 library = library.strip()
                 if library in cls.SUPPORTED_LIBRARIES and library not in libraries:
@@ -207,19 +223,12 @@ class TikzConverter:
 
     @staticmethod
     def _strip_preamble_directives(tikz_code: str) -> str:
-        """剥离用户输入中的 preamble 指令。"""
-        # 移除 \documentclass{...} 整行
-        code = re.sub(r"\\documentclass(\[[^\]]*\])?\{[^}]*\}", "", tikz_code)
-        # 移除 \usepackage[...]{...} 整行(含可选参数)
-        code = re.sub(r"\\usepackage(\[[^\]]*\])?\{[^}]*\}", "", code)
-        # 移除 \usetikzlibrary{...} 整行
-        code = re.sub(r"\\usetikzlibrary\{[^}]*\}", "", code)
-        # 移除 \begin{document}/\end{document} 行
-        code = re.sub(r"\\begin\{document\}", "", code)
-        code = re.sub(r"\\end\{document\}", "", code)
-        # 移除 \pagestyle/\thispagestyle 行
-        code = re.sub(r"\\(this)?pagestyle\{[^}]*\}", "", code)
-        return code
+        """剥离用户输入中的 preamble 指令（模式已限长，见 _PREAMBLE_PACKAGE）。"""
+        code = _STRIP_DOCUMENTCLASS.sub("", tikz_code)
+        code = _STRIP_PACKAGE.sub("", code)
+        code = _STRIP_LIBRARY.sub("", code)
+        code = _STRIP_DOCUMENT.sub("", code)
+        return _STRIP_PAGESTYLE.sub("", code)
 
     def _convert_chemfig_block(self, match: re.Match) -> str:
         """转换chemfig命令。

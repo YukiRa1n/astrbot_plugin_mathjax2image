@@ -12,7 +12,12 @@ from pathlib import Path
 
 import markdown
 
-from ...utils.linear_scan import scan_fenced_code, scan_math_blocks, substitute_spans
+from ...utils.linear_scan import (
+    scan_fenced_code,
+    scan_math_blocks,
+    strip_usepackage_declarations,
+    substitute_spans,
+)
 
 # 受控 HTML 块的起始字面量。转换器生成的 TikZ 块可能带 data-* 属性
 # （<script type="text/tikz" data-tex-packages='...'>），因此起始字面量只覆盖到
@@ -32,7 +37,7 @@ _TRUSTED_HTML_ENDS = (_TIKZ_HTML_END, _MERMAID_HTML_END, _ERROR_HTML_END)
 
 
 def _block_placeholder(token: str, kind: str, index: int) -> str:
-    """每次转换独立的块占位符。
+    r"""每次转换独立的块占位符。
 
     token 让占位符不可预测：用户正文里恰好含有 `MATHBLOCK0MATHBLOCK` 之类的
     旧式定长标记时，不会被误认成插件自己的占位符而在还原阶段顶替/复制内容。
@@ -47,7 +52,7 @@ def _block_placeholder(token: str, kind: str, index: int) -> str:
 def _placeholder_pattern(
     token: str, kind: str, *, paragraph_wrapped: bool = False
 ) -> re.Pattern[str]:
-    """匹配 ``token + kind + index + kind``。
+    r"""匹配 ``token + kind + index + kind``。
 
     收尾的 ``kind`` 让下标不可能跨到下一个占位符：相邻 token 是十六进制字符，
     可能以数字开头，没有终止符时 ``\d+`` 会把它们吞进下标。
@@ -171,6 +176,47 @@ _MARKUP_RATIO_MIN_LENGTH = 20000
 # C-level complement of `\w`, used to count alphanumeric characters without a
 # per-character Python loop.
 _NON_WORD = re.compile(r"\W")
+_OPEN_BRACKET = re.compile(r"\[")
+_CLOSE_BRACKET = re.compile(r"\]")
+
+#: How much forward rescanning Python-Markdown may be asked to do from ``[``.
+#: Its link/reference scanners look ahead for ``]`` from every ``[``
+#: (``LinkInlineProcessor.getText``) and its tree processor re-walks the
+#: remaining text for every inline match, so this is the quantity that decides
+#: whether a render is linear or quadratic. Calibrated against real content and
+#: measurements: the repo's densest document (examples/neural_network.md) scores
+#: 4 252 and the README a few hundred, while 100 KB of repeated
+#: ``\\usepackage[`` scores 4.2e8 and costs over 100 s of markdown time
+#: (about 4e6 cost units per second).
+_BRACKET_RESCAN_BUDGET = 10_000_000
+
+
+def bracket_rescan_cost(text: str, budget: int) -> int:
+    """Sum over ``[`` of the distance to the next ``]``, or to the end.
+
+    Stops once ``budget`` is exceeded, so pathological input is rejected after
+    O(brackets walked) work instead of a full pass.
+
+    Args:
+        text: Document text.
+        budget: Stop accumulating past this value.
+
+    Returns:
+        The accumulated cost, capped just above ``budget``.
+    """
+    length = len(text)
+    closes = _CLOSE_BRACKET.finditer(text)
+    upcoming = next(closes, None)
+    cost = 0
+    for match in _OPEN_BRACKET.finditer(text):
+        position = match.start()
+        while upcoming is not None and upcoming.start() < position:
+            upcoming = next(closes, None)
+        limit = upcoming.start() if upcoming is not None else length
+        cost += limit - position
+        if cost > budget:
+            break
+    return cost
 
 
 class MarkdownConverter:
@@ -199,10 +245,15 @@ class MarkdownConverter:
     def convert_to_html(self, md_text: str, bg_color: str = "#FDFBF0") -> str:
         """将Markdown转换为完整HTML"""
         # 预处理前先做退化输入检查：纯标记字符的长文本会让 Python-Markdown
-        # 自身的扫描器退化成超线性，且没有任何渲染价值。
-        if self._is_degenerate_markup(md_text):
+        # 自身的扫描器退化成超线性；大量未配对的 `[` 同样会让它的链接/引用
+        # 扫描器反复回扫（100 KB 实测 100 秒以上）。两者都没有渲染价值。
+        if self._is_degenerate_markup(md_text) or (
+            bracket_rescan_cost(md_text, _BRACKET_RESCAN_BUDGET)
+            > _BRACKET_RESCAN_BUDGET
+        ):
             raise ValueError(
-                "内容几乎全为 Markdown/LaTeX 标记字符，无法渲染；请提供正文文本"
+                "内容几乎全为 Markdown/LaTeX 标记字符，或含大量未配对的 '['，"
+                "无法渲染；请提供正文文本"
             )
         # 预处理
         md_text = self._fix_tikz_comments(md_text)
@@ -215,24 +266,19 @@ class MarkdownConverter:
         md_text, trusted_html_blocks = self._extract_trusted_html_blocks(md_text, token)
         declared_packages = set()
 
-        def collect_packages(match):
-            if match.group(1) is not None:
-                raise ValueError("MathJax package options are not supported")
-            names = {
+        def collect_packages(names):
+            resolved = {
                 MATHJAX_PACKAGE_ALIASES.get(name.strip(), name.strip())
-                for name in match.group(2).split(",")
+                for name in names.split(",")
             }
-            unsupported = names - MATHJAX_PACKAGES
+            unsupported = resolved - MATHJAX_PACKAGES
             if unsupported:
                 raise ValueError(
                     "Unsupported MathJax packages: " + ", ".join(sorted(unsupported))
                 )
-            declared_packages.update(names)
-            return ""
+            declared_packages.update(resolved)
 
-        md_text = re.sub(
-            r"\\usepackage(?:\[([^\]]*)\])?\{([^{}]+)\}", collect_packages, md_text
-        )
+        md_text = strip_usepackage_declarations(md_text, collect_packages)
         md_text, math_blocks = self._extract_math_blocks(md_text, token)
 
         # Python-Markdown默认保留原始HTML，这里显式转义用户输入中的标签
