@@ -32,7 +32,7 @@ _TIKZ_BACKENDS = ("wasm", "native")
     "astrbot_plugin_mathjax2image",
     "Willixrain",
     "调用 LLM 生成支持 MathJax 渲染的文章图片",
-    "3.2.0",
+    "3.2.1",
 )
 class MathJax2ImagePlugin(Star):
     """MathJax 转图片插件 - 洋葱架构版本"""
@@ -59,7 +59,7 @@ class MathJax2ImagePlugin(Star):
         # 依赖注入 - 创建组件
         self._init_components()
 
-        logger.info("[MathJax2Image] 插件已加载 v3.2.0")
+        logger.info("[MathJax2Image] 插件已加载 v3.2.1")
 
     def _init_components(self):
         """初始化组件 - 依赖注入"""
