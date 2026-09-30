@@ -27,6 +27,7 @@ from ..infrastructure.converter import (
     TikzPlotConverter,
 )
 from ..utils.artifacts import cleanup_stale_artifacts, remove_artifact
+from ..utils.async_tasks import run_in_thread
 
 MAX_RENDER_LENGTH = 100000  # 渲染内容最大长度（字符）
 
@@ -118,6 +119,8 @@ class RenderOrchestrator:
             resident_engines=resident_engines,
             tikz_backend=tikz_backend,
             native_tex_bin=native_tex_bin,
+            render_semaphore=self._render_semaphore,
+            render_queue_timeout=self._queue_timeout,
         )
 
         # 转换器组合
@@ -183,8 +186,17 @@ class RenderOrchestrator:
         task = asyncio.current_task()
         if task is not None:
             self._inflight.add(task)
-        acquired = False
         try:
+            return await self._render_locked(content, skip_preprocess)
+        finally:
+            if task is not None:
+                self._inflight.discard(task)
+            self._pending_renders -= 1
+
+    async def _render_locked(self, content: str, skip_preprocess: bool) -> Path:
+        output_path = None
+        try:
+            # Bound CPU work and browser work with the same resource allowance.
             try:
                 if self._render_semaphore.locked():
                     await asyncio.wait_for(
@@ -194,43 +206,30 @@ class RenderOrchestrator:
                     await self._render_semaphore.acquire()
             except asyncio.TimeoutError as exc:
                 raise RenderError("等待渲染超时，请稍后重试") from exc
-            acquired = True
-            if self._closed:
-                raise RenderError("渲染引擎已关闭")
-            return await self._render_locked(content, skip_preprocess)
-        finally:
-            if task is not None:
-                self._inflight.discard(task)
-            if acquired:
+            try:
+                if self._closed:
+                    raise RenderError("渲染引擎已关闭")
+                if not await self._dependency_installer.check_and_install():
+                    raise DependencyError(
+                        "Playwright系统依赖未安装",
+                        install_command="playwright install-deps chromium",
+                    )
+                if skip_preprocess:
+                    processed = content
+                else:
+                    processed = await run_in_thread(
+                        self._latex_preprocessor.preprocess, content
+                    )
+                    logger.debug("[MathJax2Image] LaTeX预处理完成")
+                html_content = await run_in_thread(
+                    self._markdown_converter.convert_to_html,
+                    processed,
+                    self._bg_color,
+                )
+                logger.debug("[MathJax2Image] Markdown转HTML完成")
+            finally:
+                # TikZ queueing happens before PageRenderer takes this slot again.
                 self._render_semaphore.release()
-            self._pending_renders -= 1
-
-    async def _render_locked(self, content: str, skip_preprocess: bool) -> Path:
-        output_path = None
-        try:
-            # 1. 检查并安装依赖
-            if not await self._dependency_installer.check_and_install():
-                raise DependencyError(
-                    "Playwright系统依赖未安装",
-                    install_command="playwright install-deps chromium",
-                )
-
-            # 2. LaTeX预处理（纯 CPU 密集，放到线程池避免阻塞事件循环）
-            if skip_preprocess:
-                processed = content
-            else:
-                processed = await asyncio.to_thread(
-                    self._latex_preprocessor.preprocess, content
-                )
-                logger.debug("[MathJax2Image] LaTeX预处理完成")
-
-            # 3. Markdown转HTML（同步 CPU 密集，放到线程池避免阻塞事件循环）
-            html_content = await asyncio.to_thread(
-                self._markdown_converter.convert_to_html,
-                processed,
-                self._bg_color,
-            )
-            logger.debug("[MathJax2Image] Markdown转HTML完成")
 
             # 4. 生成输出路径
             output_dir = StarTools.get_data_dir("astrbot_plugin_mathjax2image")

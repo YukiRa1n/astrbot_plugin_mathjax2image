@@ -4,17 +4,18 @@
 """
 
 import traceback
-from typing import TYPE_CHECKING, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
+import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-import astrbot.api.message_components as Comp
 
 from ..application.render_orchestrator import MAX_RENDER_LENGTH
 from ..utils.artifacts import consume_artifact, remove_artifact
 
 if TYPE_CHECKING:
-    from ..application import RenderOrchestrator, LLMOrchestrator
+    from ..application import LLMOrchestrator, RenderOrchestrator
 
 
 # 安全限制常量
@@ -63,7 +64,9 @@ class CommandHandler:
         logger.info(f"[MathJax2Image] /math 请求，输入长度: {len(math_content)}")
 
         llm_result = await self._llm_orchestrator.call_llm(
-            math_content, self._math_prompt
+            math_content,
+            self._math_prompt,
+            umo=getattr(event, "unified_msg_origin", "") or "",
         )
         if not llm_result:
             yield event.plain_result(
@@ -97,7 +100,9 @@ class CommandHandler:
         logger.info(f"[MathJax2Image] /art 请求，输入长度: {len(art_content)}")
 
         llm_result = await self._llm_orchestrator.call_llm(
-            art_content, self._article_prompt
+            art_content,
+            self._article_prompt,
+            umo=getattr(event, "unified_msg_origin", "") or "",
         )
         if not llm_result:
             yield event.plain_result(

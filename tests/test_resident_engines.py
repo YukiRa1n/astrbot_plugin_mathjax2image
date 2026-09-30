@@ -28,6 +28,7 @@ window.__replaceRenderContent = content => {
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_resident_content_is_cleared_and_idle_engine_is_disposed(tmp_path):
     manager = BrowserManager(max_pages=1, idle_timeout=0)
     renderer = PageRenderer(manager, ROOT, image_cache_max_mb=0)
@@ -73,6 +74,7 @@ async def test_resident_content_is_cleared_and_idle_engine_is_disposed(tmp_path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_stateful_tex_and_changed_shell_reload(tmp_path):
     manager = BrowserManager(max_pages=1, idle_timeout=0)
     renderer = PageRenderer(manager, ROOT, image_cache_max_mb=0)
@@ -124,6 +126,7 @@ def test_worker_patch_is_exactly_versioned(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_wasm_compiled_code_is_shared_but_instances_are_fresh():
     manager = BrowserManager(max_pages=1)
     try:
@@ -149,6 +152,7 @@ async def test_wasm_compiled_code_is_shared_but_instances_are_fresh():
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_sparse_snapshot_restores_all_bytes_without_retaining_source():
     manager = BrowserManager(max_pages=1)
     try:
@@ -173,6 +177,7 @@ async def test_sparse_snapshot_restores_all_bytes_without_retaining_source():
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_worker_package_cache_is_bounded_and_does_not_share_mutations():
     manager = BrowserManager(max_pages=1)
     try:
@@ -199,6 +204,7 @@ async def test_worker_package_cache_is_bounded_and_does_not_share_mutations():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["", '<?xml version="1.0"?>\n<!-- generated -->\n'])
+@pytest.mark.browser
 async def test_streamed_svg_matches_xml_path_with_clips_and_opacity(prefix):
     manager = BrowserManager(max_pages=1)
     source = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -226,6 +232,7 @@ async def test_streamed_svg_matches_xml_path_with_clips_and_opacity(prefix):
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_worker_only_caches_missing_files_not_transient_failures():
     manager = BrowserManager(max_pages=1)
     try:
@@ -248,6 +255,7 @@ async def test_worker_only_caches_missing_files_not_transient_failures():
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_streaming_snapshot_rejects_truncation_and_oversize():
     manager = BrowserManager(max_pages=1)
     try:

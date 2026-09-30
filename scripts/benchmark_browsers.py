@@ -18,7 +18,6 @@ import psutil
 from PIL import Image, ImageStat
 from playwright.async_api import BrowserType, Page, async_playwright
 
-
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = PLUGIN_DIR.parent
 VOCAB_DIR = WORKSPACE_DIR / "astrbot_plugin_vocabcard"

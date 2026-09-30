@@ -200,6 +200,7 @@ def test_typography_clamps_invalid_values_and_preserves_content():
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_dense_svg_keeps_nested_paint_scopes_and_html_parser(tmp_path):
     from astrbot_plugin_mathjax2image.infrastructure.browser import (
         BrowserManager,

@@ -5,7 +5,6 @@ MathJax2Image 类型定义
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class RenderMode(Enum):
@@ -33,8 +32,8 @@ class RenderResult:
     """渲染结果（需要可变以设置 image_path）"""
 
     success: bool
-    image_path: Optional[Path] = None
-    error_message: Optional[str] = None
+    image_path: Path | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)

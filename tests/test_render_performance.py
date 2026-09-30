@@ -120,6 +120,7 @@ async def test_cancelled_render_discards_page(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.browser
 async def test_short_document_has_no_viewport_padding(tmp_path):
     manager = BrowserManager(max_pages=1)
     renderer = PageRenderer(manager, tmp_path)

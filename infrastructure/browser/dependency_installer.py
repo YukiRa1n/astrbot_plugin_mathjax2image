@@ -5,7 +5,6 @@ Playwright依赖安装器
 
 import ctypes
 import platform
-from typing import Optional
 
 try:
     from astrbot.api import logger
@@ -41,7 +40,7 @@ class PlaywrightDependencyInstaller:
     ]
 
     def __init__(self):
-        self._installed: Optional[bool] = None
+        self._installed: bool | None = None
 
     def is_installed(self) -> bool:
         """检查系统依赖是否已安装"""

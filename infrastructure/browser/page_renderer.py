@@ -11,11 +11,13 @@ import tempfile
 import time
 import traceback
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from ...domain.errors import RenderError
+from ...utils.async_tasks import run_in_thread
 from .native_tikz import NativeTikzRenderer
 from .tikz_worker import optimize_tikz_worker
 
@@ -31,6 +33,42 @@ except ModuleNotFoundError:  # pragma: no cover - standalone test support
 
 if TYPE_CHECKING:
     from .browser_manager import BrowserManager
+
+
+@dataclass
+class _CachedResource:
+    """Track deliveries so eviction cannot dispose a response still in use."""
+
+    body: object
+    headers: dict[str, str]
+    created: float
+    size: int
+    users: int = 0
+    retired: bool = False
+
+    async def fulfill(self, route) -> None:
+        """Deliver a pinned resource without holding the cache's global lock.
+
+        Args:
+            route: Request to fulfill, after incrementing users under the lock.
+
+        Raises:
+            Exception: Delivery or deferred disposal fails.
+        """
+        try:
+            await route.fulfill(
+                **(
+                    {"body": self.body}
+                    if isinstance(self.body, bytes)
+                    else {"response": self.body}
+                ),
+                headers=self.headers,
+            )
+        finally:
+            # These counters are only accessed on the renderer's event loop.
+            self.users -= 1
+            if self.retired and self.users == 0 and not isinstance(self.body, bytes):
+                await self.body.dispose()
 
 
 class PageRenderer:
@@ -65,6 +103,8 @@ class PageRenderer:
         optimize_worker: bool = True,
         tikz_backend: str = "wasm",
         native_tex_bin: str = "",
+        render_semaphore: asyncio.Semaphore | None = None,
+        render_queue_timeout: float = 30.0,
     ):
         if tikz_backend not in {"wasm", "native"}:
             raise ValueError("tikz_backend must be wasm or native")
@@ -100,6 +140,8 @@ class PageRenderer:
         self._image_cache_limit = max(0, int(image_cache_max_mb)) * 1024 * 1024
         self._image_pending: dict[bytes, asyncio.Future] = {}
         self._tikz_slots = asyncio.Semaphore(max(1, int(max_concurrent_tikz)))
+        self._render_semaphore = render_semaphore
+        self._render_queue_timeout = render_queue_timeout
 
     async def render_to_image(self, html: str, output: Path) -> None:
         """Render HTML, reusing recent successful images and concurrent work.
@@ -114,7 +156,7 @@ class PageRenderer:
             if cached is not None:
                 if time.monotonic() - cached[1] < 300:
                     self._image_cache[key] = cached
-                    await asyncio.to_thread(output.write_bytes, cached[0])
+                    await run_in_thread(output.write_bytes, cached[0])
                     return
                 self._image_cache_bytes -= len(cached[0])
             pending = self._image_pending.get(key)
@@ -123,7 +165,7 @@ class PageRenderer:
             # A cancelled waiter must not cancel another caller's rendering.
             body = await asyncio.shield(pending)
             if body is not None:
-                await asyncio.to_thread(output.write_bytes, body)
+                await run_in_thread(output.write_bytes, body)
                 return
 
         pending = asyncio.get_running_loop().create_future()
@@ -131,7 +173,7 @@ class PageRenderer:
         try:
             complete = await self._render_uncached(html, output)
             if complete and output.stat().st_size <= self._image_cache_limit:
-                body = await asyncio.to_thread(output.read_bytes)
+                body = await run_in_thread(output.read_bytes)
                 while self._image_cache and (
                     self._image_cache_bytes + len(body) > self._image_cache_limit
                     or len(self._image_cache) >= 64
@@ -141,6 +183,11 @@ class PageRenderer:
                 self._image_cache[key] = (body, time.monotonic())
                 self._image_cache_bytes += len(body)
                 pending.set_result(body)
+        except Exception as exc:
+            # Concurrent callers share this attempt's failure; later calls retry.
+            pending.set_exception(exc)
+            pending.exception()
+            raise
         finally:
             if not pending.done():
                 pending.set_result(None)
@@ -157,6 +204,7 @@ class PageRenderer:
             Whether rendering completed without a timeout fallback.
         """
         heavy = 'type="text/tikz"' in html
+        render_acquired = False
         if heavy:
             try:
                 await asyncio.wait_for(
@@ -165,6 +213,18 @@ class PageRenderer:
             except asyncio.TimeoutError as exc:
                 raise RenderError("TikZ 编译队列等待超时，请稍后重试") from exc
         try:
+            if self._render_semaphore is not None:
+                try:
+                    if self._render_semaphore.locked():
+                        await asyncio.wait_for(
+                            self._render_semaphore.acquire(),
+                            timeout=self._render_queue_timeout,
+                        )
+                    else:
+                        await self._render_semaphore.acquire()
+                except asyncio.TimeoutError as exc:
+                    raise RenderError("等待渲染超时，请稍后重试") from exc
+                render_acquired = True
             if heavy and self._native_tikz is not None:
                 try:
                     html = await self._native_tikz.render_html(
@@ -191,6 +251,8 @@ class PageRenderer:
             finally:
                 tmp_path.unlink(missing_ok=True)
         finally:
+            if render_acquired:
+                self._render_semaphore.release()
             if heavy:
                 self._tikz_slots.release()
 
@@ -483,44 +545,38 @@ class PageRenderer:
                 self._cdn_context = context
             cached = self._cdn_cache.pop(url, None)
             if cached is not None:
-                if time.monotonic() - cached[2] < 3600:
+                if time.monotonic() - cached.created < 3600:
                     self._cdn_cache[url] = cached
-                    await route.fulfill(
-                        **(
-                            {"body": cached[0]}
-                            if isinstance(cached[0], bytes)
-                            else {"response": cached[0]}
-                        ),
-                        headers=cached[1],
-                    )
-                    return True
-                self._cdn_cache_bytes -= cached[3]
-                if not isinstance(cached[0], bytes):
-                    await cached[0].dispose()
-            pending = self._cdn_pending.get(url)
-            owner = pending is None
-            if owner:
-                pending = asyncio.get_running_loop().create_future()
-                self._cdn_pending[url] = pending
+                    cached.users += 1
+                else:
+                    self._cdn_cache_bytes -= cached.size
+                    cached.retired = True
+                    if cached.users == 0 and not isinstance(cached.body, bytes):
+                        await cached.body.dispose()
+                    cached = None
+            if cached is None:
+                pending = self._cdn_pending.get(url)
+                owner = pending is None
+                if owner:
+                    pending = asyncio.get_running_loop().create_future()
+                    self._cdn_pending[url] = pending
+        if cached is not None:
+            await cached.fulfill(route)
+            return True
         if not owner:
             await asyncio.shield(pending)
             async with self._cdn_lock:
                 cached = self._cdn_cache.get(url)
                 if cached is not None:
                     self._cdn_cache.move_to_end(url)
-                    await route.fulfill(
-                        **(
-                            {"body": cached[0]}
-                            if isinstance(cached[0], bytes)
-                            else {"response": cached[0]}
-                        ),
-                        headers=cached[1],
-                    )
-                    return True
+                    cached.users += 1
+            if cached is not None:
+                await cached.fulfill(route)
+                return True
             return False
 
         response = None
-        retained = False
+        resource = None
         try:
             # No redirects here: the browser re-applies the network allowlist.
             response = await context.get(url, timeout=15000, max_redirects=0)
@@ -547,29 +603,30 @@ class PageRenderer:
             async with self._cdn_lock:
                 if context is not self._browser_manager.request_context:
                     return False
-                if size <= min(self._cdn_cache_limit, 32 * 1024 * 1024):
+                retain = size <= min(self._cdn_cache_limit, 32 * 1024 * 1024)
+                if retain:
                     while self._cdn_cache and (
                         self._cdn_cache_bytes + size > self._cdn_cache_limit
                         or len(self._cdn_cache) >= 256
                     ):
                         _, evicted = self._cdn_cache.popitem(last=False)
-                        self._cdn_cache_bytes -= evicted[3]
-                        if not isinstance(evicted[0], bytes):
-                            await evicted[0].dispose()
-                    self._cdn_cache[url] = (response, headers, time.monotonic(), size)
-                    self._cdn_cache_bytes += size
-                    retained = True
-                # Keep the lock until fulfillment completes so an eviction can
-                # never dispose a response still being delivered to another page.
-                await route.fulfill(
-                    **(
-                        {"body": response}
-                        if isinstance(response, bytes)
-                        else {"response": response}
-                    ),
-                    headers=headers,
+                        self._cdn_cache_bytes -= evicted.size
+                        evicted.retired = True
+                        if evicted.users == 0 and not isinstance(evicted.body, bytes):
+                            await evicted.body.dispose()
+                resource = _CachedResource(
+                    response,
+                    headers,
+                    time.monotonic(),
+                    size,
+                    users=1,
+                    retired=not retain,
                 )
-                return True
+                if retain:
+                    self._cdn_cache[url] = resource
+                    self._cdn_cache_bytes += size
+            await resource.fulfill(route)
+            return True
         except Exception as exc:
             logger.debug("[MathJax2Image] Asset response cache failed: %s", exc)
             return False
@@ -579,7 +636,7 @@ class PageRenderer:
             self._cdn_pending.pop(url, None)
             if (
                 response is not None
-                and not retained
+                and resource is None
                 and not isinstance(response, bytes)
             ):
                 await response.dispose()

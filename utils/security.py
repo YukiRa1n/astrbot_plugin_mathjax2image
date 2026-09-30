@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """Shared security helpers for mathjax2image."""
 
 from __future__ import annotations
 
 from urllib.parse import urlparse
-
 
 #: Hosts that reach the local machine without leaving it. ``0.0.0.0`` is the
 #: IPv4 unspecified address (a bind target), not a loopback address, so it is

@@ -1224,3 +1224,136 @@ def test_tikz_ready_predicate_does_not_serialize_every_svg():
     assert "totalElements" in predicate
     assert "invalid.site" in predicate
     assert "tikz-diagram" in predicate
+
+
+# ===== Regression tests for the LLM provider fallback =====
+
+
+class _ProviderTypeStub:
+    """宿主的 ``ProviderType`` 枚举替身。"""
+
+    CHAT_COMPLETION = "chat_completion"
+    SPEECH_TO_TEXT = "speech_to_text"
+
+
+class _RecordingProviderManager:
+    """按宿主语义实现的 ProviderManager 替身。
+
+    ``ProviderManager.get_using_provider(provider_type, umo=None)`` 在
+    ``provider_type`` 不是 ``ProviderType`` 成员时走 ``else`` 分支抛
+    ``ValueError("Unknown provider type: None")``：插件传 ``None`` 时兜底路径
+    必然拿不到提供商。这里记录调用参数，好断言插件传的是 CHAT_COMPLETION。
+    """
+
+    def __init__(self, default):
+        self.inst_map = {}
+        self.provider_insts = [default]
+        self.calls = []
+
+    def get_using_provider(self, provider_type, umo=None):
+        self.calls.append((provider_type, umo))
+        if provider_type is not _ProviderTypeStub.CHAT_COMPLETION:
+            raise ValueError(f"Unknown provider type: {provider_type}")
+        return self.provider_insts[0]
+
+
+class _ProviderStub:
+    def __init__(self, text="正文"):
+        self.text = text
+        self.calls = []
+
+    async def text_chat(self, **kwargs):
+        self.calls.append(kwargs)
+        return types.SimpleNamespace(completion_text=self.text)
+
+
+def _orchestrator(context, monkeypatch, provider_id=""):
+    from astrbot_plugin_mathjax2image.application import llm_orchestrator
+
+    monkeypatch.setattr(
+        llm_orchestrator, "_load_provider_type", lambda: _ProviderTypeStub
+    )
+    return llm_orchestrator.LLMOrchestrator(context, provider_id=provider_id)
+
+
+def test_provider_fallback_passes_the_chat_completion_type(monkeypatch):
+    """兜底路径必须按宿主签名传 ProviderType，并把会话来去传给它。
+
+    宿主签名是 ``get_using_provider(provider_type, umo=None)``；传 ``None`` 会抛
+    ``ValueError("Unknown provider type: None")``，``/math`` 与 ``/art`` 就永远
+    报"未配置可用的 LLM 提供商"，即使已经配置了默认对话模型。
+    """
+    provider = _ProviderStub()
+    manager = _RecordingProviderManager(provider)
+
+    class Context:
+        provider_manager = manager
+
+    llm = _orchestrator(Context(), monkeypatch)
+    assert llm._get_provider("umo-1") is provider
+    assert manager.calls == [(_ProviderTypeStub.CHAT_COMPLETION, "umo-1")]
+
+
+def test_provider_fallback_prefers_the_host_context_api(monkeypatch):
+    """宿主提供 ``Context.get_using_provider`` 时优先用它。"""
+    provider = _ProviderStub()
+    manager = _RecordingProviderManager(provider)
+
+    class Context:
+        provider_manager = manager
+
+        def __init__(self):
+            self.umos = []
+
+        def get_using_provider(self, umo=None):
+            self.umos.append(umo)
+            return provider
+
+    context = Context()
+    llm = _orchestrator(context, monkeypatch)
+    assert llm._get_provider("umo-2") is provider
+    assert context.umos == ["umo-2"]
+    assert manager.calls == []
+
+
+def test_configured_provider_id_still_wins(monkeypatch):
+    """配置了 provider_id 时仍优先用 inst_map 里的实例。"""
+    configured = _ProviderStub()
+    fallback = _ProviderStub()
+    manager = _RecordingProviderManager(fallback)
+    manager.inst_map["chosen"] = configured
+
+    class Context:
+        provider_manager = manager
+
+    llm = _orchestrator(Context(), monkeypatch, provider_id="chosen")
+    assert llm._get_provider("umo-3") is configured
+    assert manager.calls == []
+
+
+async def test_call_llm_reaches_the_session_provider(monkeypatch):
+    """``call_llm`` 端到端：取到提供者、发出请求并过滤 think 标签。"""
+    provider = _ProviderStub("<think>草稿</think>成文")
+    manager = _RecordingProviderManager(provider)
+
+    class Context:
+        provider_manager = manager
+
+    llm = _orchestrator(Context(), monkeypatch)
+    assert await llm.call_llm("主题", "系统提示", umo="umo-4") == "成文"
+    assert manager.calls == [(_ProviderTypeStub.CHAT_COMPLETION, "umo-4")]
+    call = provider.calls[0]
+    assert call["system_prompt"] == "系统提示"
+    assert call["contexts"] == [{"role": "user", "content": "主题"}]
+
+
+async def test_call_llm_without_provider_reports_failure(monkeypatch):
+    """没有任何提供商时返回 None，让上层给出明确提示。"""
+    manager = _RecordingProviderManager(None)
+    manager.provider_insts = []
+
+    class Context:
+        provider_manager = manager
+
+    llm = _orchestrator(Context(), monkeypatch)
+    assert await llm.call_llm("主题", "系统提示") is None

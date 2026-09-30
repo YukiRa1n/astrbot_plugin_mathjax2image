@@ -1,7 +1,6 @@
 """Regression tests for lean startup and bounded concurrent render admission."""
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
@@ -71,20 +70,16 @@ async def test_cancelled_installer_kills_child_and_installs_shell_only(monkeypat
     process.wait.assert_awaited_once()
 
 
-async def test_queue_caps_active_work_and_rejects_excess(tmp_path):
-    from astrbot_plugin_mathjax2image.application.render_orchestrator import (
-        RenderOrchestrator,
-    )
-
-    orchestrator = RenderOrchestrator(
-        tmp_path, browser_max_pages=2, max_concurrent_renders=4, max_queued_renders=1
+async def test_queue_caps_active_work_and_rejects_excess(render_engine_factory):
+    orchestrator = render_engine_factory(
+        browser_max_pages=2, max_concurrent_renders=4, max_queued_renders=1
     )
     running = 0
     peak = 0
     both_running = asyncio.Event()
     finish = asyncio.Event()
 
-    async def render(content, skip):
+    async def render(html_path, output):
         nonlocal running, peak
         running += 1
         peak = max(peak, running)
@@ -92,11 +87,12 @@ async def test_queue_caps_active_work_and_rejects_excess(tmp_path):
             both_running.set()
         try:
             await finish.wait()
-            return Path(content)
+            output.write_bytes(html_path.read_bytes())
+            return True
         finally:
             running -= 1
 
-    orchestrator._render_locked = AsyncMock(side_effect=render)
+    orchestrator._page_renderer._do_render = AsyncMock(side_effect=render)
     first = asyncio.create_task(orchestrator.render("one"))
     second = asyncio.create_task(orchestrator.render("two"))
     await both_running.wait()
@@ -105,33 +101,27 @@ async def test_queue_caps_active_work_and_rejects_excess(tmp_path):
     with pytest.raises(RenderError, match="队列已满"):
         await orchestrator.render("four")
     finish.set()
-    assert await asyncio.gather(first, second, queued) == [
-        Path("one"),
-        Path("two"),
-        Path("three"),
-    ]
+    results = await asyncio.gather(first, second, queued)
+    assert [result.read_text() for result in results] == ["one", "two", "three"]
     assert peak == 2
     assert orchestrator._pending_renders == 0
-    assert await orchestrator.render("five") == Path("five")
+    assert (await orchestrator.render("five")).read_text() == "five"
 
 
-async def test_queue_timeout_and_cancellation_release_admission(tmp_path):
-    from astrbot_plugin_mathjax2image.application.render_orchestrator import (
-        RenderOrchestrator,
-    )
-
-    orchestrator = RenderOrchestrator(
-        tmp_path, browser_max_pages=1, max_queued_renders=1, render_queue_timeout=20
+async def test_queue_timeout_and_cancellation_release_admission(render_engine_factory):
+    orchestrator = render_engine_factory(
+        browser_max_pages=1, max_queued_renders=1, render_queue_timeout=20
     )
     started = asyncio.Event()
     finish = asyncio.Event()
 
-    async def render(content, skip):
+    async def render(html_path, output):
         started.set()
         await finish.wait()
-        return Path(content)
+        output.write_bytes(html_path.read_bytes())
+        return True
 
-    orchestrator._render_locked = AsyncMock(side_effect=render)
+    orchestrator._page_renderer._do_render = AsyncMock(side_effect=render)
     first = asyncio.create_task(orchestrator.render("one"))
     await started.wait()
     with pytest.raises(RenderError, match="等待渲染超时"):
@@ -147,7 +137,7 @@ async def test_queue_timeout_and_cancellation_release_admission(tmp_path):
         await first
     assert orchestrator._pending_renders == 0
     finish.set()
-    assert await orchestrator.render("four") == Path("four")
+    assert (await orchestrator.render("four")).read_text() == "four"
 
 
 async def test_response_eviction_disposes_driver_buffers(tmp_path):
@@ -210,6 +200,7 @@ async def test_close_waits_for_inflight_browser_start(monkeypatch):
     assert manager._browser is None
 
 
+@pytest.mark.browser
 async def test_idle_page_cap_closes_excess_pages_and_cancels_timer():
     manager = browser_manager.BrowserManager(
         max_pages=2, max_idle_pages=1, idle_timeout=30

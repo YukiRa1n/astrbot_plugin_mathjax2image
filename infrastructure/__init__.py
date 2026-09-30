@@ -3,17 +3,17 @@
 """
 
 from .browser import (
-    PlaywrightDependencyInstaller,
     BrowserManager,
     PageRenderer,
+    PlaywrightDependencyInstaller,
 )
 from .converter import (
-    TikzPlotConverter,
-    TikzConverter,
-    ListConverter,
-    TableConverter,
     LatexPreprocessor,
+    ListConverter,
     MarkdownConverter,
+    TableConverter,
+    TikzConverter,
+    TikzPlotConverter,
 )
 from .validator import LatexValidator
 

@@ -4,9 +4,18 @@ LLM编排器
 """
 
 import traceback
-from typing import Optional, Any
+from typing import Any
 
 from astrbot.api import logger
+
+
+def _load_provider_type() -> Any:
+    """惰性取得宿主的 ``ProviderType`` 枚举；宿主结构不同则返回 None。"""
+    try:
+        from astrbot.core.provider.entities import ProviderType
+    except Exception:
+        return None
+    return ProviderType
 
 
 class LLMOrchestrator:
@@ -23,12 +32,15 @@ class LLMOrchestrator:
         self._context = context
         self._provider_id = provider_id
 
-    async def call_llm(self, user_input: str, system_prompt: str) -> Optional[str]:
+    async def call_llm(
+        self, user_input: str, system_prompt: str, umo: str = ""
+    ) -> str | None:
         """调用LLM生成内容
 
         Args:
             user_input: 用户输入
             system_prompt: 系统提示词
+            umo: 会话来源 ID，用于取该会话偏好的提供商
 
         Returns:
             LLM响应文本，失败时返回None
@@ -36,7 +48,7 @@ class LLMOrchestrator:
         logger.debug(f"[MathJax2Image] 开始调用LLM，输入长度: {len(user_input)}")
 
         try:
-            provider = self._get_provider()
+            provider = self._get_provider(umo)
             if provider is None:
                 logger.error("[MathJax2Image] LLM provider 未配置或不可用")
                 return None
@@ -68,27 +80,62 @@ class LLMOrchestrator:
             logger.error(f"[MathJax2Image] 堆栈信息:\n{traceback.format_exc()}")
             return None
 
-    def _get_provider(self) -> Optional[Any]:
-        """获取LLM提供商"""
+    def _get_provider(self, umo: str = "") -> Any | None:
+        """获取LLM提供商
+
+        Args:
+            umo: 会话来源 ID；缺省时退回宿主的默认对话提供商
+        """
         provider_mgr = getattr(self._context, "provider_manager", None)
         if not provider_mgr:
             return None
-
-        provider = None
 
         # 优先使用配置的提供商
         if self._provider_id and hasattr(provider_mgr, "inst_map"):
             provider = provider_mgr.inst_map.get(self._provider_id)
             if provider:
                 logger.info(f"[MathJax2Image] 使用配置的提供商: {self._provider_id}")
+                return provider
 
-        # 如果没有配置或未找到，使用当前会话的提供商
-        if not provider:
-            provider = provider_mgr.get_using_provider(None, None)
+        # 没有配置或未找到，使用当前会话的提供商
+        return self._session_provider(provider_mgr, umo)
 
-        return provider
+    def _session_provider(self, provider_mgr: Any, umo: str) -> Any | None:
+        """按宿主约定取对话提供商。
 
-    def _filter_think_tags(self, text: Optional[str]) -> Optional[str]:
+        ``ProviderManager.get_using_provider(provider_type, umo=None)`` 的
+        ``provider_type`` 必须是 ``ProviderType`` 枚举成员：传 ``None`` 会落进它的
+        ``else`` 分支，抛 ``ValueError("Unknown provider type: None")``，兜底路径就
+        永远拿不到提供商。优先用宿主公开的 ``Context.get_using_provider(umo)``，
+        它内部正是 ``get_using_provider(ProviderType.CHAT_COMPLETION, umo)``。
+        """
+        session_umo = umo or None
+
+        get_using_provider = getattr(self._context, "get_using_provider", None)
+        if callable(get_using_provider):
+            try:
+                return get_using_provider(session_umo)
+            except Exception as e:
+                logger.warning(
+                    f"[MathJax2Image] 会话提供商不可用: {type(e).__name__}: {e}"
+                )
+
+        provider_type = _load_provider_type()
+        if provider_type is not None:
+            try:
+                return provider_mgr.get_using_provider(
+                    provider_type.CHAT_COMPLETION, session_umo
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[MathJax2Image] 获取默认提供商失败: {type(e).__name__}: {e}"
+                )
+
+        # 宿主 API 都不可用时的最后兜底：第一个已注册的对话提供商
+        insts = getattr(provider_mgr, "provider_insts", None) or []
+        return insts[0] if insts else None
+
+    def _filter_think_tags(self, text: str | None) -> str | None:
         """过滤LLM响应中的<think>标签。
 
         用前向扫描代替 ``re.sub(r"<think>.*?</think>\\s*", ...)``：惰性 ``.*?``

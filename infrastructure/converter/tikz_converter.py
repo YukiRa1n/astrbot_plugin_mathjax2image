@@ -35,16 +35,10 @@ MAX_TIKZ_FOREACH_DEPTH = 2  # 最大 \foreach 嵌套深度
 # 模式里的 {0,200}。不设上限时，字符类在缺少 `]`/`}` 时会回扫到块尾：块内
 # 50 KB 全是 `\usepackage[` 实测 1.0 秒（`_extract` 0.7 秒）。真实声明远短于此，
 # 超过上限的声明按“未匹配”处理（原文保留）。
-_PREAMBLE_PACKAGE = re.compile(
-    r"\\usepackage(?:\[([^\]]{0,200})\])?\{([^{}]{0,200})\}"
-)
+_PREAMBLE_PACKAGE = re.compile(r"\\usepackage(?:\[([^\]]{0,200})\])?\{([^{}]{0,200})\}")
 _PREAMBLE_LIBRARY = re.compile(r"\\usetikzlibrary\{([^{}]{0,200})\}")
-_STRIP_PACKAGE = re.compile(
-    r"\\usepackage(\[[^\]]{0,200}\])?\{[^}]{0,200}\}"
-)
-_STRIP_DOCUMENTCLASS = re.compile(
-    r"\\documentclass(\[[^\]]{0,200}\])?\{[^}]{0,200}\}"
-)
+_STRIP_PACKAGE = re.compile(r"\\usepackage(\[[^\]]{0,200}\])?\{[^}]{0,200}\}")
+_STRIP_DOCUMENTCLASS = re.compile(r"\\documentclass(\[[^\]]{0,200}\])?\{[^}]{0,200}\}")
 _STRIP_LIBRARY = re.compile(r"\\usetikzlibrary\{[^}]{0,200}\}")
 _STRIP_DOCUMENT = re.compile(r"\\(?:begin|end)\{document\}")
 _STRIP_PAGESTYLE = re.compile(r"\\(this)?pagestyle\{[^}]{0,200}\}")
@@ -69,8 +63,6 @@ class TikzConverter:
 
     def __init__(self, plot_converter: "TikzPlotConverter"):
         self._plot_converter = plot_converter
-        self._plot_budget = [plot_converter.MAX_EVAL_POINTS]
-        self._surface_budget = [plot_converter.max_plot_points]
 
     #: Rejected environments and the message shown in their place.
     _REJECTED_ENVIRONMENTS = {
@@ -79,11 +71,17 @@ class TikzConverter:
     }
 
     def convert(self, text: str) -> str:
-        """转换所有TikZ环境"""
-        # 采样预算跨图共享：否则每张图都能各自领满 plot_max_points，
-        # 一条消息即可把配置上限乘以图数。
-        self._plot_budget = [self._plot_converter.MAX_EVAL_POINTS]
-        self._surface_budget = [self._plot_converter.max_plot_points]
+        """Convert all TikZ environments with budgets local to this document.
+
+        Args:
+            text: Source document, including any protected code examples.
+
+        Returns:
+            Text with supported diagrams replaced by controlled HTML blocks.
+        """
+        # Share allowances across pictures, never across concurrent documents.
+        plot_budget = [self._plot_converter.MAX_EVAL_POINTS]
+        surface_budget = [self._plot_converter.max_plot_points]
         # 线性扫描配对环境：未闭合的 \begin{tikzpicture} 若交给惰性正则，
         # 每个起点都要扫到文末，O(n^2) 会冻结事件循环。
         for environment in ("tikzpicture", "tikzcd", "circuitikz", "chemfig"):
@@ -102,7 +100,13 @@ class TikzConverter:
                 )
                 text = substitute_spans(text, spans, lambda _i, _block: message)
             else:
-                text = substitute_spans(text, spans, self._convert_tikz_block_span)
+                text = substitute_spans(
+                    text,
+                    spans,
+                    lambda index, block: self._convert_tikz_block_span(
+                        index, block, plot_budget, surface_budget
+                    ),
+                )
 
         # 匹配独立的chemfig命令。
         # 注意: 转换后的 HTML 块含 <script type="text/tikz" data-...>,
@@ -145,12 +149,44 @@ class TikzConverter:
             kept.append((start, end))
         return kept
 
-    def _convert_tikz_block_span(self, _index: int, block: str) -> str:
-        """Adapter: the span scanner hands over the matched source text."""
-        return self._convert_tikz_block(re.match(r"[\s\S]*", block))
+    def _convert_tikz_block_span(
+        self,
+        _index: int,
+        block: str,
+        plot_budget: list[int],
+        surface_budget: list[int],
+    ) -> str:
+        """Pass a matched block and its document's allowances to conversion.
 
-    def _convert_tikz_block(self, match: re.Match) -> str:
-        """转换TikZ代码块"""
+        Args:
+            _index: Span index supplied by the scanner.
+            block: Matched source text.
+            plot_budget: Remaining curve evaluations for this document.
+            surface_budget: Remaining surface points for this document.
+
+        Returns:
+            The converted diagram block.
+        """
+        return self._convert_tikz_block(
+            re.match(r"[\s\S]*", block), plot_budget, surface_budget
+        )
+
+    def _convert_tikz_block(
+        self,
+        match: re.Match,
+        plot_budget: list[int] | None = None,
+        surface_budget: list[int] | None = None,
+    ) -> str:
+        """Convert one picture while charging its caller's sample budgets.
+
+        Args:
+            match: Matched picture source.
+            plot_budget: Shared curve allowance; None uses a fresh allowance.
+            surface_budget: Shared surface allowance; None uses a fresh allowance.
+
+        Returns:
+            Controlled HTML for the diagram or a complexity error.
+        """
         tikz_code = match.group(0)
 
         # 复杂度检查
@@ -174,9 +210,7 @@ class TikzConverter:
         tikz_code = self._strip_preamble_directives(tikz_code)
 
         # 预处理plot命令
-        tikz_code = self._plot_converter.convert(
-            tikz_code, self._plot_budget, self._surface_budget
-        )
+        tikz_code = self._plot_converter.convert(tikz_code, plot_budget, surface_budget)
 
         # 检测需要的包和库，并合并用户显式声明（白名单过滤）。
         packages = list(

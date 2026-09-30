@@ -6,11 +6,11 @@ LLM工具处理器
 import asyncio
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
+import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
-import astrbot.api.message_components as Comp
 
 from ..application.render_orchestrator import MAX_RENDER_LENGTH
 from ..utils.artifacts import consume_artifact, remove_artifact
@@ -37,8 +37,8 @@ class LLMToolHandler:
 
         self._pending_images: dict[str, tuple[Path, float]] = {}
         self._pending_lock = asyncio.Lock()
-        self._pending_cleanup_timer: Optional[asyncio.TimerHandle] = None
-        self._last_rendered_image: Optional[Path] = None
+        self._pending_cleanup_timer: asyncio.TimerHandle | None = None
+        self._last_rendered_image: Path | None = None
         self._closed = False
         self._active_renders: set[asyncio.Task] = set()
 
@@ -55,7 +55,7 @@ class LLMToolHandler:
                 为 True 时一步到位(渲染+发送),为 False 时仅保存,
                 需调用 send_image 发送。
         """
-        if getattr(self, '_closed', False):
+        if getattr(self, "_closed", False):
             return "插件已卸载，无法渲染"
 
         if not content or not content.strip():
@@ -147,7 +147,7 @@ class LLMToolHandler:
 
         发送最近渲染的图片给用户
         """
-        if getattr(self, '_closed', False):
+        if getattr(self, "_closed", False):
             return "插件已卸载，无法发送"
 
         session_key = self._get_session_key(event)
@@ -271,7 +271,7 @@ class LLMToolHandler:
             timer.cancel()
             self._pending_cleanup_timer = None
         # 等待进行中的渲染任务完成（或取消）
-        active = getattr(self, '_active_renders', set())
+        active = getattr(self, "_active_renders", set())
         if active:
             for t in active:
                 if not t.done():
@@ -303,7 +303,7 @@ class LLMToolHandler:
         return origin or sender or str(id(event))
 
     @property
-    def last_rendered_image(self) -> Optional[Path]:
+    def last_rendered_image(self) -> Path | None:
         """获取最近渲染的图片路径"""
         return self._last_rendered_image
 

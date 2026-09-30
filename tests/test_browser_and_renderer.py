@@ -29,6 +29,7 @@ async def test_safe_math_evaluator():
     assert math.isnan(safe_eval_math("eval('2+2')"))
 
 
+@pytest.mark.browser
 async def test_browser_manager_pool(tmp_path):
     """测试 BrowserManager 的页面复用和事件循环自愈能力"""
     bm = BrowserManager(max_pages=2)
@@ -62,6 +63,7 @@ async def test_browser_manager_pool(tmp_path):
     assert bm._active_pages_count == 0
 
 
+@pytest.mark.browser
 async def test_page_renderer_rendering(tmp_path):
     """测试 PageRenderer 渲染管道"""
     bm = BrowserManager(max_pages=2)

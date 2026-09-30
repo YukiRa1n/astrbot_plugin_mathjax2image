@@ -17,13 +17,19 @@ from ..converter.tikz_converter import TikzConverter
 _TIKZ_SCRIPT = re.compile(
     r'<script\b(?=[^>]*\btype="text/tikz")([^>]*)>(.*?)</script>', re.S
 )
-# A name blocklist cannot hold: the original one omitted `\file_input:n` (expl3)
-# and `\@@input`, and `openin_any=p` does not stop absolute paths on every TeX
-# engine. Two structural rules replace guesswork about individual names:
+# A name blocklist cannot hold: the original one omitted `\InputIfFileExists`,
+# `\IfFileExists`, `\lstinputlisting`, `\VerbatimInput`, `\import`, `\subfile`,
+# `\bibliography`, `\inputminted`, `\file_input:n` and `\@@input`, and
+# `openin_any=p` does not stop absolute paths on every TeX engine (MiKTeX ignores
+# it outright). Structural rules replace guesswork about individual names:
 #   * any expl3-style name (contains `_` or `:`) is refused wholesale, which
 #     covers the whole \file_*/\ior_*/\tl_* file and IO namespace at once;
 #   * any name starting with `@` is refused, which covers TeX internals such as
-#     \@@input that the old blocklist missed.
+#     \@@input that the old blocklist missed;
+#   * any other name *containing* one of the fragments below is refused, so the
+#     whole file/IO wrapper family stays out even when a wrapper we never
+#     enumerated is used; refusing only sends that diagram back to the WASM
+#     backend, so the cost of a false positive is a lost optimisation.
 # A short explicit list still covers plain-TeX file and process primitives.
 _DENIED_TEX_COMMANDS = frozenset(
     """
@@ -35,6 +41,24 @@ _DENIED_TEX_COMMANDS = frozenset(
     pdfobj pdffiledump pdfximage pdfcatalog pdfannot pdfextension pdfunescapehex
     primitive ifx ifnum while
     """.split()
+)
+#: Name fragments (substring match, already lowercased and without a trailing
+#: register number) that mark a control word as file, process, or IO access.
+_DENIED_TEX_NAME_PARTS = (
+    "input",
+    "include",
+    "import",
+    "open",
+    "file",
+    "read",
+    "write",
+    "bibliograph",
+    "verbatim",
+    "lua",
+    "catcode",
+    "csname",
+    "scantokens",
+    "primitive",
 )
 # Control *symbols* (backslash + one non-letter) that drawing code may use.
 _ALLOWED_TEX_SYMBOLS = frozenset("\\{}%$&_#@,;:! -'\"|./^~=*+<>()[?")
@@ -153,7 +177,10 @@ class NativeTikzRenderer:
                     "Native TikZ rejected a file, process, or metaprogramming command"
                 )
             # \openout1 / \read2 carry a register number.
-            if name.lower().rstrip("0123456789") in _DENIED_TEX_COMMANDS:
+            lowered = name.lower().rstrip("0123456789")
+            if lowered in _DENIED_TEX_COMMANDS or any(
+                part in lowered for part in _DENIED_TEX_NAME_PARTS
+            ):
                 raise RenderError(
                     "Native TikZ rejected a file, process, or metaprogramming command"
                 )

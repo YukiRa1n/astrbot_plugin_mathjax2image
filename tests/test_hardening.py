@@ -8,6 +8,7 @@ import pytest
 from astrbot_plugin_mathjax2image.domain.errors import PreprocessError, RenderError
 from astrbot_plugin_mathjax2image.infrastructure.browser.native_tikz import (
     NativeTikzRenderer,
+    _TIKZ_SCRIPT,
 )
 from astrbot_plugin_mathjax2image.infrastructure.converter.latex_preprocessor import (
     LatexPreprocessor,
@@ -206,6 +207,65 @@ def test_trusted_block_accepts_converter_output():
 def test_native_tex_rejects_file_and_process_primitives(code):
     with pytest.raises(RenderError):
         NativeTikzRenderer._reject_unsafe_tex(code)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # 名字列表挡不住文件/IO 包装族：这些在审查里都能穿过守卫，
+        # 而 MiKTeX 又会真的读掉绝对路径（openin_any=p 对它无效）。
+        r"\InputIfFileExists{C:/Users/x/.ssh/id_rsa}{}{}",
+        r"\IfFileExists{C:/Windows/win.ini}{visible}{hidden}",
+        r"\lstinputlisting{C:/secret.txt}",
+        r"\VerbatimInput{C:/secret.txt}",
+        r"\import{./}{secret.tex}",
+        r"\subfile{secret.tex}",
+        r"\bibliography{secret}",
+        r"\inputminted{python}{secret.py}",
+        r"\tikzsetnextfilename{outside}",
+        r"\endinput",
+    ],
+)
+def test_native_tex_rejects_file_io_wrapper_family(code):
+    with pytest.raises(RenderError):
+        NativeTikzRenderer._reject_unsafe_tex(code)
+
+
+def test_native_guard_screens_converted_tikz_body():
+    """守卫必须作用在转换后的 tikz 块体上。
+
+    转换器只把 ``\\begin{tikzpicture}...\\end{tikzpicture}`` 之间的内容交给原生
+    编译器，把宏放在环境内是它抵达 latex 的唯一位置。
+    """
+    content = (
+        "正文\n\n\\begin{tikzpicture}\n"
+        "\\node {$A$};\n"
+        "\\InputIfFileExists{C:/Users/29594/secret.txt}{}{}\n"
+        "\\end{tikzpicture}\n"
+    )
+    html = _converter().convert_to_html(_preprocessor().preprocess(content))
+    bodies = [match.group(2) for match in _TIKZ_SCRIPT.finditer(html)]
+    assert len(bodies) == 1
+    assert "InputIfFileExists" in bodies[0]
+    with pytest.raises(RenderError):
+        NativeTikzRenderer._reject_unsafe_tex(bodies[0])
+
+
+def test_native_guard_accepts_every_bundled_example():
+    """自带示例必须仍然通过守卫（拒绝只会让它们掉到 WASM 后端）。"""
+    examples = Path(__file__).resolve().parents[1] / "examples"
+    expected = 0
+    checked = 0
+    for path in sorted(examples.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        expected += text.count(r"\begin{tikzpicture}")
+        html = _converter().convert_to_html(_preprocessor().preprocess(text))
+        for match in _TIKZ_SCRIPT.finditer(html):
+            NativeTikzRenderer._reject_unsafe_tex(match.group(2))
+            checked += 1
+    # 每个自带 tikzpicture 都要活到守卫这一步，否则这个测试就白测了
+    assert expected >= 3
+    assert checked == expected
 
 
 @pytest.mark.parametrize(
