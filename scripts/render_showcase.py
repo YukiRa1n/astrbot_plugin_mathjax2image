@@ -75,8 +75,9 @@ async def main():
     try:
         for name in args.names:
             source = (root / "examples" / f"{name}.md").read_text(encoding="utf-8")
+            # 使用插件默认背景，示例图与实际输出一致
             html = converter.convert_to_html(
-                await asyncio.to_thread(preprocess.preprocess, source), "#FFFFFF"
+                await asyncio.to_thread(preprocess.preprocess, source)
             )
             output = root / "examples" / f"{name}.png"
             try:
