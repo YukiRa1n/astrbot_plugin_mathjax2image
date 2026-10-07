@@ -4,11 +4,10 @@ import time
 from pathlib import Path
 
 import pytest
-
 from astrbot_plugin_mathjax2image.domain.errors import PreprocessError, RenderError
 from astrbot_plugin_mathjax2image.infrastructure.browser.native_tikz import (
-    NativeTikzRenderer,
     _TIKZ_SCRIPT,
+    NativeTikzRenderer,
 )
 from astrbot_plugin_mathjax2image.infrastructure.converter.latex_preprocessor import (
     LatexPreprocessor,
@@ -50,7 +49,9 @@ BOMB_LENGTH = 100_000
 
 def _preprocessor() -> LatexPreprocessor:
     return LatexPreprocessor(
-        TikzConverter(TikzPlotConverter()), ListConverter(), TableConverter(),
+        TikzConverter(TikzPlotConverter()),
+        ListConverter(),
+        TableConverter(),
         MermaidConverter(),
     )
 
@@ -91,10 +92,24 @@ def test_degenerate_markup_does_not_hang(payload):
 
 @pytest.mark.parametrize(
     "payload",
-    ["`" * 100_000, "\\(" * 50_000, "\\[" * 50_000, "%" * 100_000, "[" * 100_000,
-     "~" * 100_000, "*" * 100_000],
-    ids=["backticks", "math-parens", "math-brackets", "percent", "brackets",
-         "tildes", "stars"],
+    [
+        "`" * 100_000,
+        "\\(" * 50_000,
+        "\\[" * 50_000,
+        "%" * 100_000,
+        "[" * 100_000,
+        "~" * 100_000,
+        "*" * 100_000,
+    ],
+    ids=[
+        "backticks",
+        "math-parens",
+        "math-brackets",
+        "percent",
+        "brackets",
+        "tildes",
+        "stars",
+    ],
 )
 def test_degenerate_guard_is_not_inverted(payload):
     """The ratio test must actually reject all-markup input.
@@ -146,6 +161,32 @@ def test_math_scan_matches_individual_delimiters():
     assert [text[a:b] for a, b in spans] == ["$x^2$", "\\[y\\]"]
 
 
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "$$\n" + r"\begin{aligned}a&=1\\[5pt]" + "\n" + r"b&=2\end{aligned}" + "\n$$",
+        "$$\n" + r"\underbrace{\begin{pmatrix}1&2\\3&4\end{pmatrix}}_{A}" + "\n$$",
+        "$$\n" + r"\frac{1}{2}+\frac{1}{3}=\frac{5}{6}" + "\n$$",
+    ],
+)
+def test_multiline_display_math_survives_markdown(formula):
+    """Keep display formulas intact before Markdown can rewrite TeX.
+
+    Args:
+        formula: A display formula containing physical source newlines.
+    """
+    from html import escape
+
+    text = "Before $x$\n\n" + formula + "\n\nAfter $y$"
+    spans = scan_math_blocks(text)
+    assert [text[start:end] for start, end in spans] == ["$x$", formula, "$y$"]
+
+    html = _converter().convert_to_html(_preprocessor().preprocess(text))
+    assert escape(formula, quote=False) in html
+    assert "Before $x$" in html
+    assert "After $y$" in html
+
+
 def test_math_scan_pairs_each_dollar_greedily_left_to_right():
     """A lone `$` consumes the next `$`, so two real pairs collapse into one.
 
@@ -170,7 +211,7 @@ def test_trusted_block_rejects_slash_separated_event_handler():
 def test_trusted_block_rejects_tex_injection_in_library_attribute():
     block = (
         '<div class="tikz-diagram"><script type="text/tikz" '
-        'data-tikz-libraries=\'x} \\file_input:n{D:/secret}\'>\n'
+        "data-tikz-libraries='x} \\file_input:n{D:/secret}'>\n"
         "\\draw (0,0)--(1,1);\n</script></div>"
     )
     assert _converter()._is_trusted_html_block(block) is False
@@ -179,7 +220,7 @@ def test_trusted_block_rejects_tex_injection_in_library_attribute():
 def test_trusted_block_accepts_converter_output():
     attrs = (
         ' type="text/tikz" data-disable-cache="true"'
-        ' data-tikz-libraries=\'calc,arrows.meta\''
+        " data-tikz-libraries='calc,arrows.meta'"
     )
     block = (
         '<div class="tikz-diagram"><script' + attrs + ">\n"
@@ -286,7 +327,7 @@ def test_native_tex_allows_ordinary_drawing(code):
     [
         (' type="text/tikz" data-disable-cache="true"', True),
         (' type="text/tikz" data-tex-packages=\'{"pgfplots": ""}\'', True),
-        (' type="text/tikz" data-tikz-libraries=\'x} \\file_input:n{y}\'', False),
+        (" type=\"text/tikz\" data-tikz-libraries='x} \\file_input:n{y}'", False),
         (' type="text/tikz" onerror="alert(1)"', False),
         (' type="text/tikz" /onerror=alert(1)', False),
         (' type="text/javascript"', False),
@@ -688,7 +729,9 @@ def test_preamble_directives_are_bounded():
         "\\usepackage{pgfplots}\\usetikzlibrary{calc}"
     ) == (["pgfplots"], ["calc"])
     assert converter._strip_preamble_directives("\\usepackage{pgfplots}") == ""
-    assert converter._strip_preamble_directives("\\begin{document}x\\end{document}") == "x"
+    assert (
+        converter._strip_preamble_directives("\\begin{document}x\\end{document}") == "x"
+    )
 
 
 def test_think_tag_filter_is_linear_and_keeps_semantics():

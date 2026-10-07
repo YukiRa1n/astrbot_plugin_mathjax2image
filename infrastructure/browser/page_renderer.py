@@ -699,10 +699,15 @@ class PageRenderer:
             has_math = True
         complete = True
         if has_math:
+            mathjax_wait_timeout = (
+                self._mathjax_timeout
+                if reused
+                else max(self._mathjax_timeout, _GOTO_TIMEOUT_MS)
+            )
             try:
                 await page.wait_for_function(
                     "() => window.mathJaxReady === true",
-                    timeout=self._mathjax_timeout,
+                    timeout=mathjax_wait_timeout,
                 )
                 logger.debug("[MathJax2Image] MathJax 渲染完成")
             except Exception as e:

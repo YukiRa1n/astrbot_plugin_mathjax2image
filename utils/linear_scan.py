@@ -80,8 +80,10 @@ def find_pairs(
     """
     spans: list[tuple[int, int]] = []
     if not open_token or not close_token or open_token in close_token:
-        return spans if not open_token or not close_token else _overlapping_pairs(
-            text, open_token, close_token, allow_newline
+        return (
+            spans
+            if not open_token or not close_token
+            else _overlapping_pairs(text, open_token, close_token, allow_newline)
         )
     opens = _occurrences(text, open_token)
     if not opens:
@@ -311,7 +313,7 @@ def scan_math_blocks(text: str) -> list[tuple[int, int]]:
     for open_token, close_token, allow_newline in (
         ("\\[", "\\]", True),
         ("\\(", "\\)", True),
-        ("$$", "$$", False),
+        ("$$", "$$", True),
         ("$", "$", False),
     ):
         if open_token in text:
@@ -342,7 +344,9 @@ def scan_math_blocks(text: str) -> list[tuple[int, int]]:
                     cursor += 1
                 if cursor >= len(closes):
                     break
-                spans.append((start, closes[cursor] + len(environment) + len("\\end{}")))
+                spans.append(
+                    (start, closes[cursor] + len(environment) + len("\\end{}"))
+                )
                 cursor += 1
     spans.sort()
     merged: list[tuple[int, int]] = []
