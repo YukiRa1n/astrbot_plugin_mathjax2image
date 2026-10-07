@@ -3,6 +3,7 @@
 处理 /math, /art, /render 命令
 """
 
+import re
 import traceback
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
@@ -177,34 +178,25 @@ class CommandHandler:
     def _extract_command_content(
         self, event: AstrMessageEvent, cmd_name: str, framework_content: str = ""
     ) -> str:
-        """提取命令后内容：优先框架注入参数，再解析完整消息。"""
-        if framework_content and framework_content.strip():
-            return framework_content.strip()
+        """提取命令后的完整内容。
 
+        AstrBot 会把命令后的文本按空白切分，只把第一段注入为
+        ``framework_content``（如 ``/render a b`` 只得到 ``a``），
+        因此优先从原始消息解析，保留空格和换行；解析不到时才回退。
+        """
         full_msg = (event.get_message_str() or "").strip()
-        if not full_msg:
-            return ""
+        if full_msg:
+            cmd = re.escape(cmd_name)
+            # 1) 消息以命令开头；唤醒前缀 "/" 通常已被框架去掉，也可能保留
+            match = re.match(
+                rf"/?{cmd}(?![A-Za-z0-9_])[\s:：]*", full_msg, re.IGNORECASE
+            )
+            if match is None:
+                # 2) 命令前还有其他文本时，只接受带斜杠且后跟空白的形式
+                match = re.search(rf"/{cmd}\s+", full_msg, re.IGNORECASE)
+            if match is not None:
+                rest = full_msg[match.end() :].strip()
+                if rest:
+                    return rest
 
-        lower_msg = full_msg.lower()
-        cmd = cmd_name.lower()
-
-        # 支持 /cmd 、自定义前缀、以及无空格紧跟参数
-        # 1) 标准 "/cmd " 或 "/cmd\n"
-        for prefix in (f"/{cmd} ", f"/{cmd}\n", f"/{cmd}\t"):
-            idx = lower_msg.find(prefix)
-            if idx != -1:
-                return full_msg[idx + len(prefix) :].strip()
-
-        # 2) 消息以 /cmd 开头且后面直接跟内容
-        bare = f"/{cmd}"
-        if lower_msg.startswith(bare):
-            rest = full_msg[len(bare) :].lstrip(" \t\n:：")
-            return rest.strip()
-
-        # 3) 任意位置的 "cmd " 作为弱匹配（兼容无斜杠前缀）
-        weak = f"{cmd} "
-        idx = lower_msg.find(weak)
-        if idx != -1:
-            return full_msg[idx + len(weak) :].strip()
-
-        return ""
+        return (framework_content or "").strip()

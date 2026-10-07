@@ -884,15 +884,43 @@ def test_bg_color_replacement_matches_template_default(tmp_path):
     assert "#fdfbf7" not in html.lower() or "#112233" in html
 
 
-def test_command_extract_prefers_framework_content():
+@pytest.mark.parametrize(
+    ("cmd", "message", "framework", "expected"),
+    [
+        # 唤醒前缀已被框架去掉；框架只注入第一段，应取完整内容
+        (
+            "render",
+            "render $E=mc^2$ 是爱因斯坦的质能方程",
+            "$E=mc^2$",
+            "$E=mc^2$ 是爱因斯坦的质能方程",
+        ),
+        # 多行 Markdown 必须保留换行
+        (
+            "render",
+            "render # 标题\n\n正文 $a+b$\n\n$$x^2$$",
+            "#",
+            "# 标题\n\n正文 $a+b$\n\n$$x^2$$",
+        ),
+        ("render", "render\n# 标题\n正文", "#", "# 标题\n正文"),
+        ("math", "/math Fourier transform basics", "Fourier", "Fourier transform basics"),
+        ("render", "/render$E=mc^2$", "", "$E=mc^2$"),
+        ("art", "ART：人工智能的发展", "人工智能的发展", "人工智能的发展"),
+        # 命令名只是更长单词的前缀时不能误匹配，回退到框架参数
+        ("render", "rendering is slow", "fallback", "fallback"),
+        # 命令前有其他文本时，接受 "/cmd 内容"
+        ("render", "请帮我 /render $a$ 和 $b$", "", "$a$ 和 $b$"),
+        # 解析不到原始消息时回退到框架参数
+        ("math", "", "勾股定理", "勾股定理"),
+        ("render", "render", "", ""),
+    ],
+)
+def test_command_extract_keeps_full_content(cmd, message, framework, expected):
     from astrbot_plugin_mathjax2image.handlers.command_handler import CommandHandler
 
     handler = CommandHandler.__new__(CommandHandler)
     event = MagicMock()
-    event.get_message_str.return_value = "/math ignored"
-    assert handler._extract_command_content(event, "math", "勾股定理") == "勾股定理"
-    event.get_message_str.return_value = "/render$E=mc^2$"
-    assert handler._extract_command_content(event, "render", "") == "$E=mc^2$"
+    event.get_message_str.return_value = message
+    assert handler._extract_command_content(event, cmd, framework) == expected
 
 
 @pytest.mark.asyncio
