@@ -226,9 +226,8 @@ class TikzConverter:
         # 并读 data-tex-packages/data-tikz-libraries 预加载包/库。
         # 因此脚本内容必须只含 tikzpicture 本体（不能有 usepackage/
         # usetikzlibrary/document 包装，否则嵌套 document 报错）。
-        tex_packages = {
-            pkg: "" for pkg in packages if pkg not in {"amsmath", "amsfonts", "amssymb"}
-        }
+        # The worker format does not preload AMS commands such as \mathbb.
+        tex_packages = dict.fromkeys(packages, "")
         return self._wrap_tikz_html(
             tikz_code,
             tex_packages=tex_packages,

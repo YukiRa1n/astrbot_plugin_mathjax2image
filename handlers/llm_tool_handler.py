@@ -135,10 +135,10 @@ class LLMToolHandler:
                 )
             if "TikZ渲染失败" in message or "编译错误" in message:
                 return (
-                    f"渲染失败: {message}。提示: TikZ 编译出错，最常见的原因是 TikZ "
-                    "代码里有中文（TikZ 无法显示中文），请把节点/标签文字改成英文"
-                    "或 $...$ 公式，中文说明写在图外的正文里；也请检查括号与分号"
-                    "是否配对。修改后重试。"
+                    f"渲染失败: {message}。提示: 请检查未定义的命令、所需宏包是否"
+                    "受当前后端支持，以及括号、环境和分号是否配对。若使用 WASM 后端"
+                    "且图内包含中文，可能无法正确渲染；可改用英文标签，把中文说明"
+                    "写在图外的正文里。请根据具体错误修改后重试。"
                 )
             if "过于复杂" in message or "过长" in message:
                 return (
@@ -205,7 +205,9 @@ class LLMToolHandler:
             remove_artifact(image_path)
             self._last_rendered_image = None
 
-    async def _send_image_direct(self, event: AstrMessageEvent, image_path: Path) -> str:
+    async def _send_image_direct(
+        self, event: AstrMessageEvent, image_path: Path
+    ) -> str:
         """直接发送指定路径的图片,不经过 pending 槽位(用于 auto_send=True)。"""
         try:
             image_name = image_path.name
@@ -230,9 +232,7 @@ class LLMToolHandler:
 
     def _evict_oldest_pending_image(self) -> None:
         """丢弃最早的一张待发送产物（调用方持有 _pending_lock）。"""
-        oldest = min(
-            self._pending_images, key=lambda key: self._pending_images[key][1]
-        )
+        oldest = min(self._pending_images, key=lambda key: self._pending_images[key][1])
         path, _ = self._pending_images.pop(oldest)
         if getattr(self, "_last_rendered_image", None) == path:
             self._last_rendered_image = None
@@ -269,7 +269,8 @@ class LLMToolHandler:
         """清理过期的图片缓存"""
         now = time.time()
         expired = [
-            k for k, (_, ts) in self._pending_images.items()
+            k
+            for k, (_, ts) in self._pending_images.items()
             if now >= ts + self._IMAGE_TTL_SECONDS
         ]
         for k in expired:

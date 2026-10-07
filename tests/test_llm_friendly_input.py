@@ -74,7 +74,7 @@ def test_preamble_inside_code_blocks_is_untouched():
 
 
 @pytest.mark.asyncio
-async def test_tikz_compile_error_explains_the_usual_cause():
+async def test_tikz_compile_error_does_not_assume_chinese_is_the_cause():
     from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
 
     orchestrator = MagicMock()
@@ -86,7 +86,13 @@ async def test_tikz_compile_error_explains_the_usual_cause():
     result = await handler.handle_render_math(MagicMock(), TIKZ)
 
     assert "渲染失败" in result
-    assert "中文" in result
+    assert "未定义的命令" in result
+    assert "宏包" in result
+    assert "WASM 后端" in result
+    assert "若使用 WASM 后端" in result
+    assert "且图内包含中文" in result
+    assert "最常见" not in result
+    assert "TikZ 无法显示中文" not in result
 
 
 @pytest.mark.asyncio
