@@ -15,6 +15,14 @@ if TYPE_CHECKING:
     from .tikz_converter import TikzConverter
 
 
+# 整个围栏代码块，语言标记为 tikz（不区分大小写）。在 scan_fenced_code 给出的
+# 区间内匹配，正文惰性扩展、只在换行处尝试收尾，单个代码块内线性。
+_TIKZ_FENCE = re.compile(
+    r"(?P<fence>[`~]{3,})[ \t]*tikz[ \t]*\n(?P<body>[\s\S]*?)\n[ \t]*(?P=fence)[`~]*[ \t]*$",
+    re.IGNORECASE,
+)
+
+
 class LatexPreprocessor:
     """LaTeX预处理器 - 组合多个转换器"""
 
@@ -32,6 +40,8 @@ class LatexPreprocessor:
 
     def preprocess(self, text: str) -> str:
         """预处理LaTeX文本"""
+        # 0. 大模型常把要画的图包进 ```tikz 代码块；按意图渲染成图
+        text = self._unwrap_tikz_fences(text)
         # 1. 转换LaTeX文本命令为Markdown
         text = self._convert_text_commands(text)
 
@@ -89,6 +99,28 @@ class LatexPreprocessor:
             else:
                 merged.append((start, end))
         return merged
+
+    def _unwrap_tikz_fences(self, text: str) -> str:
+        """Replace ```tikz fenced blocks with their TikZ source.
+
+        Only blocks labelled ``tikz`` are unwrapped: ```latex / ```tex blocks
+        are commonly used to *show* TikZ source and must stay code.
+        """
+        if "tikz" not in text.lower():
+            return text
+        pieces: list[str] = []
+        position = 0
+        for start, end in scan_fenced_code(text):
+            match = _TIKZ_FENCE.match(text, start, end)
+            if match is None or "\\begin{" not in match.group("body"):
+                continue
+            pieces.append(text[position:start])
+            pieces.append(match.group("body"))
+            position = end
+        if not pieces:
+            return text
+        pieces.append(text[position:])
+        return "".join(pieces)
 
     def _convert_text_commands(self, text: str) -> str:
         """将LaTeX文本命令转换为Markdown格式"""

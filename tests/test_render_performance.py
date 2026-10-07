@@ -61,8 +61,10 @@ def test_explicit_packages_and_code_isolation():
     assert 'const requestedPackages = ["mhchem", "physics"]' in html
     assert "window.mathJaxRequired = true" in html
     assert r"\usepackage" not in html
-    with pytest.raises(ValueError, match="Unsupported MathJax packages"):
-        converter.convert_to_html(r"\usepackage{nonexistent} $x$")
+    # 不支持的宏包（大模型常顺手写 tikz/siunitx）被忽略，不让整张图失败
+    html = converter.convert_to_html(r"\usepackage{nonexistent,mhchem} $x$")
+    assert 'const requestedPackages = ["mhchem"]' in html
+    assert "nonexistent" not in html
     html = converter.convert_to_html("```tex\n\\usepackage{nonexistent}\n```")
     # 代码块可能被语法高亮拆成多个 <span>，比较去掉标签后的文本
     assert r"\usepackage{nonexistent}" in re.sub(r"<[^>]+>", "", html)

@@ -12,6 +12,13 @@ from pathlib import Path
 
 import markdown
 
+try:
+    from astrbot.api import logger
+except ModuleNotFoundError:  # pragma: no cover - standalone test support
+    import logging
+
+    logger = logging.getLogger("astrbot")
+
 from ...utils.linear_scan import (
     scan_fenced_code,
     scan_math_blocks,
@@ -53,6 +60,15 @@ def resolve_bg_color(value: object) -> str:
         return DEFAULT_BG_COLOR
     value = value.strip()
     return DEFAULT_BG_COLOR if value.upper() == LEGACY_DEFAULT_BG_COLOR else value
+
+
+# 单独成行的 LaTeX 文档框架命令。逐行锚定匹配（[^\n]* 不跨行），线性复杂度。
+_PREAMBLE_LINE = re.compile(
+    r"^[ \t]*\\(?:documentclass|usetikzlibrary|usepgfplotslibrary|pgfplotsset"
+    r"|begin\{document\}|end\{document\}|maketitle|(?:this)?pagestyle)"
+    r"(?![A-Za-z])[^\n]*\n?",
+    re.MULTILINE,
+)
 
 
 # 超长代码块不做高亮：词法分析的耗时随长度增长，且长代码本身就难以阅读
@@ -347,19 +363,28 @@ class MarkdownConverter:
         md_text, trusted_html_blocks = self._extract_trusted_html_blocks(md_text, token)
         declared_packages = set()
 
+        ignored_packages = set()
+
         def collect_packages(names):
             resolved = {
                 MATHJAX_PACKAGE_ALIASES.get(name.strip(), name.strip())
                 for name in names.split(",")
+                if name.strip()
             }
-            unsupported = resolved - MATHJAX_PACKAGES
-            if unsupported:
-                raise ValueError(
-                    "Unsupported MathJax packages: " + ", ".join(sorted(unsupported))
-                )
-            declared_packages.update(resolved)
+            # 大模型常顺手写 \usepackage{tikz}/{siunitx} 等；它们对公式渲染
+            # 无意义，忽略即可，不应让整张图失败。
+            ignored_packages.update(resolved - MATHJAX_PACKAGES)
+            declared_packages.update(resolved & MATHJAX_PACKAGES)
 
         md_text = strip_usepackage_declarations(md_text, collect_packages)
+        if ignored_packages:
+            logger.info(
+                "[MathJax2Image] 忽略不支持的宏包声明: %s",
+                ", ".join(sorted(ignored_packages)),
+            )
+        # LaTeX 文档框架（\documentclass、\begin{document}、\usetikzlibrary 等）
+        # 单独成行时不是正文；TikZ 所需的库会自动加载。代码块已被占位符保护。
+        md_text = _PREAMBLE_LINE.sub("", md_text)
         md_text, math_blocks = self._extract_math_blocks(md_text, token)
 
         # Python-Markdown默认保留原始HTML，这里显式转义用户输入中的标签

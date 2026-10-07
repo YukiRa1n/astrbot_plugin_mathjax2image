@@ -181,45 +181,55 @@ class MathJax2ImagePlugin(Star):
     async def llm_render_math(
         self, event: AstrMessageEvent, content: str, auto_send: bool = True
     ) -> str:
-        """【数学与图形渲染工具】将 Markdown/LaTeX/TikZ/Mermaid 内容渲染为图片并发送。
+        """把含公式、推导或图形的内容渲染成一张图片，并直接发送给用户。
 
-        默认渲染成功后立即把图片发送给用户(一步到位,无需再调其他工具)。
-        若 auto_send=False,则仅保存图片,需再调用 send_image 发送。
+        QQ、微信等聊天平台无法显示 LaTeX：在文字回复里写 $x^2$、\\frac{a}{b}
+        会原样显示成难以阅读的源码。因此需要公式才能讲清楚的部分，应写成
+        Markdown 交给本工具渲染，不要写在文字回复里。
 
-        ⚠️ 格式要求：
-        1. 数学公式用 $$ 包裹(独立)或 $...$(行内),例如 $$f(x) = x^2$$
-        2. 普通文字直接写,不要用 $$ 包裹
-        3. TikZ 绘图直接用 \\begin{tikzpicture}...\\end{tikzpicture}
-        4. Mermaid 图表用 ```mermaid ... ``` 代码块
+        应当调用：
+        - 回答包含分式、根式、积分、求和、极限、矩阵、方程组或多步推导，
+          用纯文本难以阅读
+        - 需要函数图像、几何图形、交换图、流程图，或带公式的表格
+        - 用户要求写出公式、给出推导或画图
 
-        正确示例：
-        ```
-        导数的定义：
+        不要调用：
+        - 闲聊或与数学无关的回答
+        - 只有一两个简单式子：直接用 Unicode 写在文字里即可，如 x² + 1、a/b、
+          √2、≤、π、∑
 
+        使用方式：
+        - 一次回答通常只调用一次，把需要排版的内容连同必要的文字说明完整放进
+          content，图片要能脱离聊天上下文独立看懂
+        - 返回“图片已发送”后，文字回复只需一两句概括或引导，不要重复图片
+          中的内容，也不要再输出任何 LaTeX
+        - 返回“渲染失败”时，按提示修改后重试一次；仍失败则改用 Unicode
+          纯文本回答
+
+        content 就是普通 Markdown（标题、列表、表格、代码块均可）：
+        - 公式：行内 $...$，独立 $$...$$（可跨多行）；\\(...\\)、\\[...\\]、
+          align/cases 等环境也可直接写，\\text{中文} 可在公式中使用
+        - 画图：直接写 \\begin{tikzpicture}...\\end{tikzpicture}，或放进 ```tikz
+          代码块；支持 pgfplots、tikz-cd；不支持 circuitikz、chemfig
+        - 流程图、时序图：```mermaid 代码块
+        - 不需要写 \\documentclass、\\usepackage、\\usetikzlibrary，常用宏包与
+          TikZ 库会自动加载
+
+        必须遵守（否则渲染出错）：
+        - 正文里的美元符号写成 \\$（如 \\$5），裸 $ 会被当成公式开头
+        - TikZ 图内只能写英文或 $公式$，不能有中文，中文说明写在图外
+
+        示例 content：
+        ## 导数的定义
         $$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$
-
-        对于 $f(x) = x^2$：
-
-        $$f'(x) = 2x$$
-        ```
-
-        支持内容类型：
-        - 数学公式(MathJax): 行内 $...$ 和独立 $$...$$(支持 boldsymbol/mathtools 等)
-        - TikZ 绘图: 常用库已自动加载(calc/positioning/arrows.meta/intersections/
-          decorations/patterns/angles/matrix/3d/trees/mindmap/automata 等 60+ 库)
-        - pgfplots 图表(axis/addplot)、tikz-cd 交换图
-        - Mermaid 流程图、时序图等
-        - Markdown 文本(标题/列表/表格/代码块)
-
-        不支持(会返回明确错误): circuitikz、chemfig、graphicx 等 TikZJax
-        未内置的宏包,请用 TikZ 原生命令替代。
+        对 $f(x) = x^2$，有 $f'(x) = 2x$。
 
         Args:
-            content(string): Required. Markdown/LaTeX/TikZ/Mermaid 内容,公式用 $$ 包裹
-            auto_send(bool): Optional. 渲染后是否立即发送图片,默认 True
+            content(string): 要渲染的 Markdown 内容，可包含 $...$ / $$...$$ 公式、TikZ、Mermaid
+            auto_send(bool): 渲染后是否立即发送图片，默认 true，一般不要修改；为 false 时需再调用 send_image 发送
 
         Returns:
-            string: 渲染+发送结果(成功或失败原因)
+            string: 渲染与发送的结果，失败时附带修改建议
         """
         return await self._llm_tool_handler.handle_render_math(
             event, content, auto_send=auto_send
@@ -227,10 +237,10 @@ class MathJax2ImagePlugin(Star):
 
     @filter.llm_tool(name="send_image")
     async def llm_send_image(self, event: AstrMessageEvent) -> str:
-        """发送最近渲染的图片给用户。
+        """发送最近一次用 render_math 渲染、但尚未发送的图片。
 
-        仅在 render_math 以 auto_send=False 调用后使用(此时图片已保存未发送)。
-        默认 render_math 会直接发送,无需调用本工具。
+        只在 render_math 以 auto_send=false 调用之后使用。render_math 默认会
+        直接发送图片，通常不需要调用本工具。
 
         Returns:
             string: 发送结果

@@ -19,6 +19,14 @@ if TYPE_CHECKING:
     from ..application import RenderOrchestrator
 
 
+# 图片发送成功后返回给 LLM 的结果：同时说明下一步怎么回复。图片已经展示
+# 了公式，若再把内容或 LaTeX 写进文字回复，在 QQ 等平台会显示成源码。
+IMAGE_SENT_RESULT = (
+    "图片已发送给用户。请只用一两句话概括或引导，"
+    "不要重复图片中的内容，也不要输出 LaTeX 源码。"
+)
+
+
 class LLMToolHandler:
     """LLM工具处理器"""
 
@@ -125,6 +133,13 @@ class LLMToolHandler:
                     f"渲染失败: {message}。提示: circuitikz/chemfig 不受支持,"
                     "请改用 TikZ 原生命令(\\draw/\\node/\\fill 等)重试。"
                 )
+            if "TikZ渲染失败" in message or "编译错误" in message:
+                return (
+                    f"渲染失败: {message}。提示: TikZ 编译出错，最常见的原因是 TikZ "
+                    "代码里有中文（TikZ 无法显示中文），请把节点/标签文字改成英文"
+                    "或 $...$ 公式，中文说明写在图外的正文里；也请检查括号与分号"
+                    "是否配对。修改后重试。"
+                )
             if "过于复杂" in message or "过长" in message:
                 return (
                     f"渲染失败: {message}。提示: 请简化 TikZ 代码"
@@ -182,7 +197,7 @@ class LLMToolHandler:
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
                 return "发送图片失败: 平台不可用或已断开"
-            return f"图片已发送: {image_name}"
+            return IMAGE_SENT_RESULT
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
             return f"发送图片失败: {str(e)}"
@@ -205,7 +220,7 @@ class LLMToolHandler:
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
                 return "发送图片失败: 平台不可用或已断开"
-            return f"图片已发送: {image_name}"
+            return IMAGE_SENT_RESULT
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
             return f"发送图片失败: {str(e)}"
