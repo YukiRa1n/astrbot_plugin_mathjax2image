@@ -1,5 +1,6 @@
 """Regression tests for the quadratic-scan, attribute, and native-TeX fixes."""
 
+import re
 import time
 from pathlib import Path
 
@@ -885,4 +886,5 @@ def test_usepackage_inside_a_fence_is_protected_after_an_inline_mention():
     """
     payload = "正文提到 ```tex 代码块：\n\n```latex\n\\usepackage{pgfplots}\n```\n"
     html = _converter().convert_to_html(_preprocessor().preprocess(payload))
-    assert "\\usepackage{pgfplots}" in html
+    # 代码块可能被语法高亮拆成多个 <span>，比较去掉标签后的文本
+    assert "\\usepackage{pgfplots}" in re.sub(r"<[^>]+>", "", html)

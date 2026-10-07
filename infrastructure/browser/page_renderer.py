@@ -10,6 +10,7 @@ import re
 import tempfile
 import time
 import traceback
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,11 +19,30 @@ from urllib.parse import urlparse
 
 from ...domain.errors import RenderError
 from ...utils.async_tasks import run_in_thread
+from .asset_disk_cache import AssetDiskCache
 from .native_tikz import NativeTikzRenderer
 from .tikz_worker import optimize_tikz_worker
 
 _GOTO_TIMEOUT_MS = 60_000
+_MATH_REQUIRED_DECLARATION = re.compile(r"window\.mathJaxRequired = (true|false);")
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
+_CACHEABLE_SUFFIXES = (
+    ".js",
+    ".css",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".wasm",
+    ".gz",
+)
+_TIKZ_WORKER_SUFFIX = "/@drgrice1/tikzjax@1.0.0-beta24/dist/run-tex.js"
+_MEMORY_ASSET_TTL_S = 3600
+_MAX_MEMORY_ASSETS = 256
+_MAX_MEMORY_ASSET_BYTES = 32 * 1024 * 1024
+# 浏览器下载同一资源期间，并发请求最多等待这么久；页面中途关闭等导致
+# 下载事件不再到来时，过期的登记会被新请求接管
+_PENDING_TTL_S = 60.0
 
 try:
     from astrbot.api import logger
@@ -37,38 +57,16 @@ if TYPE_CHECKING:
 
 @dataclass
 class _CachedResource:
-    """Track deliveries so eviction cannot dispose a response still in use."""
+    """An immutable cached asset body; eviction never affects a delivery."""
 
-    body: object
+    body: bytes
     headers: dict[str, str]
     created: float
     size: int
-    users: int = 0
-    retired: bool = False
 
     async def fulfill(self, route) -> None:
-        """Deliver a pinned resource without holding the cache's global lock.
-
-        Args:
-            route: Request to fulfill, after incrementing users under the lock.
-
-        Raises:
-            Exception: Delivery or deferred disposal fails.
-        """
-        try:
-            await route.fulfill(
-                **(
-                    {"body": self.body}
-                    if isinstance(self.body, bytes)
-                    else {"response": self.body}
-                ),
-                headers=self.headers,
-            )
-        finally:
-            # These counters are only accessed on the renderer's event loop.
-            self.users -= 1
-            if self.retired and self.users == 0 and not isinstance(self.body, bytes):
-                await self.body.dispose()
+        """Deliver the asset to an intercepted request."""
+        await route.fulfill(body=self.body, headers=self.headers)
 
 
 class PageRenderer:
@@ -105,9 +103,18 @@ class PageRenderer:
         native_tex_bin: str = "",
         render_semaphore: asyncio.Semaphore | None = None,
         render_queue_timeout: float = 30.0,
+        asset_cache_dir: Path | None = None,
+        asset_disk_cache_max_mb: int = 256,
     ):
         if tikz_backend not in {"wasm", "native"}:
             raise ValueError("tikz_backend must be wasm or native")
+        # 跨重启保留 CDN 静态资源；未提供目录或预算为 0 时只用内存缓存
+        disk_cache = (
+            AssetDiskCache(asset_cache_dir, int(asset_disk_cache_max_mb) * 1024 * 1024)
+            if asset_cache_dir is not None
+            else None
+        )
+        self._disk_cache = disk_cache if disk_cache and disk_cache.enabled else None
         self._native_tikz = (
             NativeTikzRenderer(native_tex_bin) if tikz_backend == "native" else None
         )
@@ -128,13 +135,15 @@ class PageRenderer:
         # 当前渲染页面的 file URI（安全边界：仅放行此 URI 的本地文件加载）
         # 当前渲染页面的 file URI，按 page 隔离（网络策略只放行各自页面自身资源）
         self._current_page_uris: dict = {}
-        # 进程级 CDN 资源缓存(URL → bytes),避免跨页重复下载 MathJax/TikZJax
-        self._cdn_cache = OrderedDict()
-        self._cdn_lock = asyncio.Lock()
-        self._cdn_context = None
+        # 进程级 CDN 资源缓存(URL → bytes),避免跨页重复下载 MathJax/TikZJax。
+        # 只在事件循环线程上访问，不需要锁。
+        self._cdn_cache: OrderedDict[str, _CachedResource] = OrderedDict()
         self._cdn_cache_bytes = 0
         self._cdn_cache_limit = max(0, int(resource_cache_max_mb)) * 1024 * 1024
-        self._cdn_pending: dict[str, asyncio.Future] = {}
+        # URL → (浏览器下载完成的通知, 登记时间)
+        self._cdn_pending: dict[str, tuple[asyncio.Future, float]] = {}
+        # 已监听下载事件的浏览器上下文（上下文关闭后自动移除）
+        self._watched_contexts: weakref.WeakSet = weakref.WeakSet()
         self._image_cache = OrderedDict()
         self._image_cache_bytes = 0
         self._image_cache_limit = max(0, int(image_cache_max_mb)) * 1024 * 1024
@@ -496,24 +505,12 @@ class PageRenderer:
             ):
                 # Routing disables Chromium's HTTP cache. Cache only static GET
                 # assets, with a byte budget and TTL, across isolated pages.
-                cacheable = (
-                    route.request.method == "GET"
-                    and not parsed.query
-                    and parsed.path.endswith(
-                        (
-                            ".js",
-                            ".css",
-                            ".woff",
-                            ".woff2",
-                            ".ttf",
-                            ".otf",
-                            ".wasm",
-                            ".gz",
-                        )
-                    )
-                )
-                if cacheable and await self._serve_cached_resource(route):
+                if self._is_cacheable_asset(
+                    route.request
+                ) and await self._serve_cached_resource(route):
                     return
+                # 未命中时由浏览器自己下载（其 DNS/连接回退远快于驱动端
+                # 请求），下载完成后由 _capture_response 写入缓存。
                 await route.continue_()
                 return
             logger.warning(
@@ -523,123 +520,150 @@ class PageRenderer:
             await route.abort("blockedbyclient")
 
         await page.route("**/*", handle_request)
+        self._watch_asset_downloads(page.context)
+
+    @classmethod
+    def _is_cacheable_asset(cls, request) -> bool:
+        """Whether a request is an allowlisted static GET asset worth caching."""
+        parsed = urlparse(request.url)
+        return (
+            request.method == "GET"
+            and parsed.scheme == "https"
+            and parsed.hostname in cls._ALLOWED_REMOTE_HOSTS
+            and not parsed.query
+            and parsed.path.endswith(_CACHEABLE_SUFFIXES)
+        )
+
+    def _watch_asset_downloads(self, context) -> None:
+        """Capture browser-downloaded assets once per browser context.
+
+        Worker requests (TikZ TeX snapshot and package files) belong to the
+        context too, so they are captured as well.
+        """
+        if context in self._watched_contexts:
+            return
+        try:
+            self._watched_contexts.add(context)
+            context.on(
+                "requestfinished",
+                lambda request: asyncio.ensure_future(self._capture_response(request)),
+            )
+            context.on(
+                "requestfailed",
+                lambda request: self._release_pending(request.url),
+            )
+        except Exception as exc:  # pragma: no cover - mocked or closed contexts
+            logger.debug("[MathJax2Image] 无法监听资源下载: %s", exc)
 
     async def _serve_cached_resource(self, route) -> bool:
-        """Fulfill a static request from a bounded driver-side response cache.
+        """Fulfill a static request from the memory or disk asset cache.
+
+        On a miss the caller lets the browser download the asset; the first
+        miss registers a pending download so concurrent requests for the same
+        URL wait for it instead of downloading again.
 
         Args:
             route: An already allowlisted static GET request.
 
         Returns:
-            Whether the request was fulfilled from a fetched or cached response.
+            Whether the request was fulfilled from a cached response.
         """
-        context = self._browser_manager.request_context
-        if context is None or self._cdn_cache_limit == 0:
+        if self._cdn_cache_limit == 0:
             return False
         url = route.request.url
-        async with self._cdn_lock:
-            if self._cdn_context is not context:
-                # BrowserManager disposes the old request context on reconnect.
-                self._cdn_cache.clear()
-                self._cdn_cache_bytes = 0
-                self._cdn_context = context
-            cached = self._cdn_cache.pop(url, None)
-            if cached is not None:
-                if time.monotonic() - cached.created < 3600:
-                    self._cdn_cache[url] = cached
-                    cached.users += 1
-                else:
-                    self._cdn_cache_bytes -= cached.size
-                    cached.retired = True
-                    if cached.users == 0 and not isinstance(cached.body, bytes):
-                        await cached.body.dispose()
-                    cached = None
-            if cached is None:
-                pending = self._cdn_pending.get(url)
-                owner = pending is None
-                if owner:
-                    pending = asyncio.get_running_loop().create_future()
-                    self._cdn_pending[url] = pending
+        cached = self._lookup_resource(url)
+        if cached is None:
+            pending = self._cdn_pending.get(url)
+            if pending is not None and time.monotonic() - pending[1] < _PENDING_TTL_S:
+                try:
+                    await asyncio.wait_for(asyncio.shield(pending[0]), _PENDING_TTL_S)
+                except asyncio.TimeoutError:
+                    pass
+                cached = self._lookup_resource(url)
+        if cached is None and self._disk_cache is not None:
+            hit = await run_in_thread(self._disk_cache.get, url)
+            if hit is not None:
+                # 重启后从磁盘恢复，免去重新下载（首个资源常需数秒）
+                cached = self._store_resource(url, *hit)
         if cached is not None:
             await cached.fulfill(route)
             return True
-        if not owner:
-            await asyncio.shield(pending)
-            async with self._cdn_lock:
-                cached = self._cdn_cache.get(url)
-                if cached is not None:
-                    self._cdn_cache.move_to_end(url)
-                    cached.users += 1
-            if cached is not None:
-                await cached.fulfill(route)
-                return True
-            return False
+        pending = self._cdn_pending.get(url)
+        if pending is None or time.monotonic() - pending[1] >= _PENDING_TTL_S:
+            self._cdn_pending[url] = (
+                asyncio.get_running_loop().create_future(),
+                time.monotonic(),
+            )
+        return False
 
-        response = None
-        resource = None
+    def _lookup_resource(self, url: str) -> "_CachedResource | None":
+        """Return a fresh memory entry and mark it most recently used."""
+        cached = self._cdn_cache.pop(url, None)
+        if cached is None:
+            return None
+        if time.monotonic() - cached.created >= _MEMORY_ASSET_TTL_S:
+            self._cdn_cache_bytes -= cached.size
+            return None
+        self._cdn_cache[url] = cached
+        return cached
+
+    def _store_resource(
+        self, url: str, body: bytes, content_type: str
+    ) -> "_CachedResource":
+        """Keep a downloaded asset in memory within the byte and entry budgets.
+
+        The TikZ worker is stored patched; the disk copy stays unpatched so a
+        plugin update can change the patch.
+        """
+        if self._optimize_worker and url.endswith(_TIKZ_WORKER_SUFFIX):
+            body = optimize_tikz_worker(body)
+        resource = _CachedResource(
+            body,
+            {"content-type": content_type, "access-control-allow-origin": "*"},
+            time.monotonic(),
+            len(body),
+        )
+        previous = self._cdn_cache.pop(url, None)
+        if previous is not None:
+            self._cdn_cache_bytes -= previous.size
+        if resource.size > min(self._cdn_cache_limit, _MAX_MEMORY_ASSET_BYTES):
+            return resource
+        while self._cdn_cache and (
+            self._cdn_cache_bytes + resource.size > self._cdn_cache_limit
+            or len(self._cdn_cache) >= _MAX_MEMORY_ASSETS
+        ):
+            _, evicted = self._cdn_cache.popitem(last=False)
+            self._cdn_cache_bytes -= evicted.size
+        self._cdn_cache[url] = resource
+        self._cdn_cache_bytes += resource.size
+        return resource
+
+    async def _capture_response(self, request) -> None:
+        """Store an asset the browser downloaded after a cache miss."""
+        url = request.url
+        if url not in self._cdn_pending:
+            return
         try:
-            # No redirects here: the browser re-applies the network allowlist.
-            response = await context.get(url, timeout=15000, max_redirects=0)
-            if response.status != 200:
-                return False
-            # Inspect the decoded size once. Warm hits send only a response ID
-            # through the Python/Node pipe, instead of base64-encoding large fonts.
+            response = await request.response()
+            if response is None or response.status != 200:
+                return
             body = await response.body()
-            size = len(body)
-            headers = {
-                "content-type": response.headers.get(
-                    "content-type", "application/octet-stream"
-                ),
-                "access-control-allow-origin": "*",
-            }
-            if self._optimize_worker and url.endswith(
-                "/@drgrice1/tikzjax@1.0.0-beta24/dist/run-tex.js"
-            ):
-                optimized = optimize_tikz_worker(body)
-                if optimized is not body:
-                    await response.dispose()
-                    response = optimized
-                    size = len(optimized)
-            async with self._cdn_lock:
-                if context is not self._browser_manager.request_context:
-                    return False
-                retain = size <= min(self._cdn_cache_limit, 32 * 1024 * 1024)
-                if retain:
-                    while self._cdn_cache and (
-                        self._cdn_cache_bytes + size > self._cdn_cache_limit
-                        or len(self._cdn_cache) >= 256
-                    ):
-                        _, evicted = self._cdn_cache.popitem(last=False)
-                        self._cdn_cache_bytes -= evicted.size
-                        evicted.retired = True
-                        if evicted.users == 0 and not isinstance(evicted.body, bytes):
-                            await evicted.body.dispose()
-                resource = _CachedResource(
-                    response,
-                    headers,
-                    time.monotonic(),
-                    size,
-                    users=1,
-                    retired=not retain,
-                )
-                if retain:
-                    self._cdn_cache[url] = resource
-                    self._cdn_cache_bytes += size
-            await resource.fulfill(route)
-            return True
+            content_type = response.headers.get(
+                "content-type", "application/octet-stream"
+            )
+            if self._disk_cache is not None:
+                await run_in_thread(self._disk_cache.put, url, body, content_type)
+            self._store_resource(url, body, content_type)
         except Exception as exc:
-            logger.debug("[MathJax2Image] Asset response cache failed: %s", exc)
-            return False
+            logger.debug("[MathJax2Image] 缓存已下载资源失败: %s: %s", url, exc)
         finally:
-            if not pending.done():
-                pending.set_result(None)
-            self._cdn_pending.pop(url, None)
-            if (
-                response is not None
-                and resource is None
-                and not isinstance(response, bytes)
-            ):
-                await response.dispose()
+            self._release_pending(url)
+
+    def _release_pending(self, url: str) -> None:
+        """Wake requests waiting for a browser download of ``url``."""
+        pending = self._cdn_pending.pop(url, None)
+        if pending is not None and not pending[0].done():
+            pending[0].set_result(None)
 
     def _setup_logging(self, page) -> None:
         """设置页面日志"""
@@ -653,6 +677,7 @@ class PageRenderer:
         html = await asyncio.to_thread(html_path.read_text, encoding="utf-8")
         content = re.search(r'<main class="render-content">([\s\S]*?)</main>', html)
         resident_key = ""
+        math_required = None
         if (
             self._resident_engines
             and content
@@ -668,6 +693,12 @@ class PageRenderer:
             if not stateful_math:
                 shell = html[: content.start(1)] + html[content.end(1) :]
                 shell += str('class="mermaid"' in content.group(1))
+                # 是否需要公式只影响本次排版，不应让公式/TikZ/纯文本文档
+                # 之间切换时重新加载页面；复用时单独传入页面
+                declaration = _MATH_REQUIRED_DECLARATION.search(shell)
+                if declaration:
+                    math_required = declaration.group(1) == "true"
+                    shell = shell[: declaration.start()] + shell[declaration.end() :]
                 resident_key = hashlib.sha256(shell.encode()).hexdigest()
         reused = False
         if resident_key:
@@ -676,7 +707,11 @@ class PageRenderer:
             )
         if reused:
             await page.evaluate(
-                "content => window.__replaceRenderContent(content)", content.group(1)
+                """([content, required]) => {
+                    if (required !== null) window.mathJaxRequired = required;
+                    return window.__replaceRenderContent(content);
+                }""",
+                [content.group(1), math_required],
             )
         else:
             await page.goto(

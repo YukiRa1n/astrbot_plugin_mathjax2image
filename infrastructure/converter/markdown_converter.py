@@ -36,6 +36,61 @@ _TRUSTED_HTML_STARTS = (
 _TRUSTED_HTML_ENDS = (_TIKZ_HTML_END, _MERMAID_HTML_END, _ERROR_HTML_END)
 
 
+# 默认背景：中性近白。旧版默认的米黄 #FDFBF0 已被 AstrBot 写入用户配置，
+# 见 resolve_bg_color。
+DEFAULT_BG_COLOR = "#FCFCFD"
+LEGACY_DEFAULT_BG_COLOR = "#FDFBF0"
+
+
+def resolve_bg_color(value: object) -> str:
+    """Map a configured background to the color the template should use.
+
+    AstrBot writes schema defaults into the plugin config, so every existing
+    install holds the old default rather than an explicit choice; treat that
+    exact value as "unset". Any other valid color is kept as configured.
+    """
+    if not isinstance(value, str) or not BG_COLOR_PATTERN.fullmatch(value.strip()):
+        return DEFAULT_BG_COLOR
+    value = value.strip()
+    return DEFAULT_BG_COLOR if value.upper() == LEGACY_DEFAULT_BG_COLOR else value
+
+
+# 超长代码块不做高亮：词法分析的耗时随长度增长，且长代码本身就难以阅读
+_HIGHLIGHT_MAX_CHARS = 20_000
+
+try:  # Pygments 为可选依赖：缺失时代码块以纯文本显示
+    from pygments import highlight as _pygments_highlight
+    from pygments.formatters import HtmlFormatter as _HtmlFormatter
+    from pygments.lexers import get_lexer_by_name as _get_lexer_by_name
+    from pygments.util import ClassNotFound as _ClassNotFound
+except ImportError:  # pragma: no cover - depends on the environment
+    _pygments_highlight = None
+
+
+def _highlight_code(code: str, language: str) -> str | None:
+    """Return syntax-highlighted HTML for ``code``, or None to use plain text.
+
+    Only blocks with an explicit language are highlighted; guessing is slow
+    and often wrong. Pygments closes its ``<span>`` tags at every line end, so
+    the template can split the result into numbered lines safely.
+    """
+    if (
+        _pygments_highlight is None
+        or not language
+        or len(code) > _HIGHLIGHT_MAX_CHARS
+    ):
+        return None
+    try:
+        lexer = _get_lexer_by_name(language, stripnl=False, ensurenl=False)
+    except _ClassNotFound:
+        return None
+    try:
+        highlighted = _pygments_highlight(code, lexer, _HtmlFormatter(nowrap=True))
+    except Exception:  # pragma: no cover - lexer bugs must not break rendering
+        return None
+    return highlighted[:-1] if highlighted.endswith("\n") and not code.endswith("\n") else highlighted
+
+
 def _block_placeholder(token: str, kind: str, index: int) -> str:
     r"""每次转换独立的块占位符。
 
@@ -266,7 +321,7 @@ class MarkdownConverter:
                 value = default
             self._typography[name] = max(low, min(high, value))
 
-    def convert_to_html(self, md_text: str, bg_color: str = "#FDFBF0") -> str:
+    def convert_to_html(self, md_text: str, bg_color: str = DEFAULT_BG_COLOR) -> str:
         """将Markdown转换为完整HTML"""
         # 预处理前先做退化输入检查：纯标记字符的长文本会让 Python-Markdown
         # 自身的扫描器退化成超线性；大量未配对的 `[` 同样会让它的链接/引用
@@ -350,16 +405,9 @@ class MarkdownConverter:
         result = self._apply_template(html_body, bg_color)
         result = result.replace("{{MATH_REQUIRED}}", json.dumps(bool(math_blocks)))
         result = result.replace("{{MATH_PACKAGES}}", json.dumps(sorted(packages)))
-        if not math_blocks:
-            result = re.sub(
-                r'<script src="[^" ]*/mathjax@[^" ]+"></script>', "", result
-            )
-        if not any('class="tikz-diagram"' in block for block in trusted_html_blocks):
-            result = re.sub(
-                r'<(?:script|link)[^>]+(?:src|href)="[^" ]*/@drgrice1/tikzjax[^" ]+"[^>]*>(?:</script>)?',
-                "",
-                result,
-            )
+        # MathJax 与 TikZJax 始终保留：页面外壳与内容类型无关，常驻页面才能在
+        # 公式、TikZ、纯文本文档之间直接复用，而不必每次切换都重新加载并初始化
+        # （TikZ worker 约 1 秒）。两者在不需要时只加载脚本，不做排版或编译。
         return result
 
     _END_TOKENS = ("\\end{tikzpicture}", "\\end{tikzcd}")
@@ -641,9 +689,22 @@ class MarkdownConverter:
         if not blocks:
             return html
         rendered = [self._render_code_block(block) for block in blocks]
-        return _placeholder_pattern(token, "CODE").sub(
-            lambda m: rendered[int(m.group("index"))], html
+        pattern = re.compile(
+            r"(?P<open><p>)?"
+            + _placeholder_pattern(token, "CODE").pattern
+            + r"(?P<close></p>)?"
         )
+
+        def restore(match: re.Match[str]) -> str:
+            block = rendered[int(match.group("index"))]
+            # 独占一段的围栏代码块会被 Markdown 套上 <p>；<p><pre> 不是合法
+            # HTML，浏览器会在代码块前后各补一个空段落，徒增间距。行内代码
+            # 和只占一侧的包装保持原样，避免破坏所在段落。
+            if block.startswith("<pre") and match.group("open") and match.group("close"):
+                return block
+            return (match.group("open") or "") + block + (match.group("close") or "")
+
+        return pattern.sub(restore, html)
 
     def _render_code_block(self, block: str) -> str:
         """把一个代码块源码渲染为 ``<pre><code>`` HTML。"""
@@ -655,8 +716,11 @@ class MarkdownConverter:
             return "<code>" + html_lib.escape(block.strip("`")) + "</code>"
         language = self._sanitize_language(fence.group(3).strip())
         lang_class = f' class="language-{language}"' if language else ""
-        escaped_code = html_lib.escape(fence.group(4))
-        return f"<pre><code{lang_class}>{escaped_code}</code></pre>"
+        code = fence.group(4)
+        body = _highlight_code(code, language)
+        if body is None:
+            body = html_lib.escape(code)
+        return f"<pre><code{lang_class}>{body}</code></pre>"
 
     def _sanitize_language(self, language: str) -> str:
         """仅保留安全的代码语言标识"""
@@ -668,7 +732,9 @@ class MarkdownConverter:
             with open(self._template_path, encoding="utf-8") as f:
                 self._template_cache = f.read()
 
-        safe_bg_color = bg_color if BG_COLOR_PATTERN.fullmatch(bg_color) else "#FDFBF0"
+        safe_bg_color = (
+            bg_color if BG_COLOR_PATTERN.fullmatch(bg_color) else DEFAULT_BG_COLOR
+        )
         template = self._template_cache
         for name, value in self._typography.items():
             variable = "--" + name.replace("_", "-")

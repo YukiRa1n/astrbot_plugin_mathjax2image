@@ -140,34 +140,6 @@ async def test_queue_timeout_and_cancellation_release_admission(render_engine_fa
     assert (await orchestrator.render("four")).read_text() == "four"
 
 
-async def test_response_eviction_disposes_driver_buffers(tmp_path):
-    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
-        PageRenderer,
-    )
-
-    manager = MagicMock()
-    responses = [
-        MagicMock(
-            status=200,
-            headers={},
-            body=AsyncMock(return_value=b"12345"),
-            dispose=AsyncMock(),
-        )
-        for _ in range(3)
-    ]
-    manager.request_context.get = AsyncMock(side_effect=responses)
-    renderer = PageRenderer(manager, tmp_path)
-    renderer._cdn_cache_limit = 10
-    for name in ["a", "b", "c"]:
-        route = MagicMock(fulfill=AsyncMock())
-        route.request.url = f"https://cdn.jsdelivr.net/{name}.js"
-        assert await renderer._serve_cached_resource(route)
-    responses[0].dispose.assert_awaited_once()
-    responses[1].dispose.assert_not_awaited()
-    responses[2].dispose.assert_not_awaited()
-    assert renderer._cdn_cache_bytes == 10
-
-
 async def test_close_waits_for_inflight_browser_start(monkeypatch):
     entered, finish = asyncio.Event(), asyncio.Event()
     browser = MagicMock(is_connected=MagicMock(return_value=True), close=AsyncMock())

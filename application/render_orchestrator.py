@@ -29,6 +29,18 @@ from ..infrastructure.converter import (
 from ..utils.artifacts import cleanup_stale_artifacts, remove_artifact
 from ..utils.async_tasks import run_in_thread
 
+
+def _asset_cache_dir() -> Path | None:
+    """Return the persistent CDN asset cache directory, if one is available."""
+    try:
+        return (
+            Path(StarTools.get_data_dir("astrbot_plugin_mathjax2image"))
+            / "asset_cache"
+        )
+    except Exception as exc:
+        logger.warning(f"[MathJax2Image] 无法确定资源磁盘缓存目录，仅使用内存缓存: {exc}")
+        return None
+
 MAX_RENDER_LENGTH = 100000  # 渲染内容最大长度（字符）
 
 
@@ -48,7 +60,7 @@ class RenderOrchestrator:
     def __init__(
         self,
         plugin_dir: Path,
-        bg_color: str = "#FDFBF0",
+        bg_color: str = "#FCFCFD",
         browser_engine: str = "chromium",
         browser_cdp_url: str = "",
         browser_max_pages: int = 2,
@@ -65,6 +77,7 @@ class RenderOrchestrator:
         browser_max_idle_pages: int = 1,
         browser_idle_timeout: int = 30,
         resource_cache_max_mb: int = 64,
+        asset_disk_cache_max_mb: int = 256,
         image_cache_max_mb: int = 8,
         precompute_pgfplots: bool = True,
         plot_max_points: int = 6400,
@@ -114,6 +127,8 @@ class RenderOrchestrator:
             mermaid_timeout=mermaid_timeout,
             fail_on_mathjax_timeout=fail_on_mathjax_timeout,
             resource_cache_max_mb=resource_cache_max_mb,
+            asset_cache_dir=_asset_cache_dir(),
+            asset_disk_cache_max_mb=asset_disk_cache_max_mb,
             image_cache_max_mb=image_cache_max_mb,
             max_concurrent_tikz=max_concurrent_tikz,
             resident_engines=resident_engines,

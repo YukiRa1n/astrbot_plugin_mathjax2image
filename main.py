@@ -20,6 +20,7 @@ from astrbot.api.star import Context, Star, register
 
 from .application import LLMOrchestrator, RenderOrchestrator
 from .handlers import CommandHandler, LLMToolHandler
+from .infrastructure.converter.markdown_converter import resolve_bg_color
 from .utils.config import normalized_choice, safe_bool, safe_int
 from .utils.security import validate_cdp_url
 
@@ -43,7 +44,7 @@ class MathJax2ImagePlugin(Star):
         self._plugin_dir = Path(__file__).resolve().parent
 
         # 加载配置
-        self._bg_color = config.get("background_color", "#FDFBF0")
+        self._bg_color = resolve_bg_color(config.get("background_color"))
         self._math_prompt = config.get("math_system_prompt", "")
         self._article_prompt = config.get("article_system_prompt", "")
 
@@ -121,6 +122,7 @@ class MathJax2ImagePlugin(Star):
             browser_max_idle_pages=_cfg_int("browser_max_idle_pages", 1),
             browser_idle_timeout=_cfg_int("browser_idle_timeout", 30),
             resource_cache_max_mb=_cfg_int("resource_cache_max_mb", 64),
+            asset_disk_cache_max_mb=_cfg_int("asset_disk_cache_max_mb", 256),
             image_cache_max_mb=_cfg_int("image_cache_max_mb", 8),
             precompute_pgfplots=safe_bool(
                 self.config.get("precompute_pgfplots", True)

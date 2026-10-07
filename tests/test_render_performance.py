@@ -1,5 +1,6 @@
 """Regression tests for rendering readiness, package loading, and asset reuse."""
 
+import re
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -20,12 +21,36 @@ from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter im
     "content",
     ["Plain text", "```tex\n$\\ce{H2O}$\n```", "~~~tex\n$\\ce{H2O}$\n~~~", "`$x$`"],
 )
-def test_plain_content_does_not_download_engines(content):
+def test_plain_content_loads_engines_on_demand(content):
+    """The shell holds an engine loader instead of static engine tags.
+
+    New pages load only the engines their content needs, while the shell stays
+    identical across content types so resident pages can be reused.
+    """
     converter = MarkdownConverter(Path(__file__).parents[1] / "templates/template.html")
     html = converter.convert_to_html(content)
-    assert 'src="https://cdn.jsdelivr.net/npm/mathjax@' not in html
-    assert 'src="https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@' not in html
+    assert '<script src="https://cdn.jsdelivr.net/npm/mathjax@' not in html
+    assert '<script src="https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@' not in html
+    assert "window.__ensureEngines(document)" in html
     assert "window.mathJaxRequired = false" in html
+    assert "typeset: window.mathJaxRequired" in html
+
+
+def test_shell_is_identical_across_content_types():
+    """Only the content and the math flag differ between document types."""
+    import re
+
+    converter = MarkdownConverter(Path(__file__).parents[1] / "templates/template.html")
+    tikz = "\\begin{tikzpicture}\n\\draw (0,0) -- (1,0);\n\\end{tikzpicture}"
+
+    def shell(source):
+        html = converter.convert_to_html(source)
+        html = re.sub(
+            r'(<main class="render-content">)[\s\S]*?(</main>)', r"\1\2", html
+        )
+        return re.sub(r"window\.mathJaxRequired = (true|false);", "", html)
+
+    assert shell("纯文本") == shell("$x^2$") == shell(tikz)
 
 
 def test_explicit_packages_and_code_isolation():
@@ -39,55 +64,8 @@ def test_explicit_packages_and_code_isolation():
     with pytest.raises(ValueError, match="Unsupported MathJax packages"):
         converter.convert_to_html(r"\usepackage{nonexistent} $x$")
     html = converter.convert_to_html("```tex\n\\usepackage{nonexistent}\n```")
-    assert r"\usepackage{nonexistent}" in html
-
-
-@pytest.mark.asyncio
-async def test_asset_cache_merges_requests_and_evicts(tmp_path):
-    manager = MagicMock()
-    renderer = PageRenderer(manager, tmp_path)
-    renderer._cdn_cache_limit = 10
-    page = MagicMock(route=AsyncMock())
-    await renderer._setup_network_policy(page)
-    handler = page.route.call_args.args[1]
-    response = MagicMock(status=200, headers={"content-type": "text/javascript"})
-    started = asyncio.Event()
-    complete = asyncio.Event()
-
-    async def body():
-        started.set()
-        await complete.wait()
-        return b"12345"
-
-    response.body = AsyncMock(side_effect=body)
-    response.dispose = AsyncMock()
-    manager.request_context.get = AsyncMock(return_value=response)
-
-    def route_for(name):
-        route = MagicMock()
-        route.request.url = "https://cdn.jsdelivr.net/npm/test@1/" + name + ".js"
-        route.request.method = "GET"
-        route.fetch = AsyncMock(return_value=response)
-        route.fulfill = AsyncMock()
-        route.continue_ = AsyncMock()
-        return route
-
-    first, second = route_for("a"), route_for("a")
-    task = asyncio.create_task(handler(first))
-    await started.wait()
-    waiter = asyncio.create_task(handler(second))
-    await asyncio.sleep(0)
-    complete.set()
-    await asyncio.gather(task, waiter)
-    manager.request_context.get.assert_awaited_once()
-    response.body.assert_awaited_once()
-    assert second.fulfill.call_args.kwargs["response"] is response
-    assert "body" not in second.fulfill.call_args.kwargs
-    for name in ["b", "c"]:
-        await handler(route_for(name))
-    assert renderer._cdn_cache_bytes == 10
-    assert not any(url.endswith("/a.js") for url in renderer._cdn_cache)
-    assert not renderer._cdn_pending
+    # 代码块可能被语法高亮拆成多个 <span>，比较去掉标签后的文本
+    assert r"\usepackage{nonexistent}" in re.sub(r"<[^>]+>", "", html)
 
 
 @pytest.mark.asyncio

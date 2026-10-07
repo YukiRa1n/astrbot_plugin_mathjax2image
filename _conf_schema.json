@@ -16,8 +16,8 @@
     "background_color": {
         "description": "模板背景颜色",
         "type": "string",
-        "hint": "支持十六进制颜色值，如 #FDFBF0（米黄）、#FFFFFF（白色）、#F5F5F5（浅灰）",
-        "default": "#FDFBF0"
+        "hint": "十六进制颜色值，默认 #FCFCFD（中性近白），也可用 #FFFFFF（纯白）、#F5F5F5（浅灰）。旧默认值 #FDFBF0 会按新默认处理",
+        "default": "#FCFCFD"
     },
     "typography": {
         "description": "字体大小与标题比例",
@@ -85,6 +85,12 @@
         "type": "int",
         "hint": "默认 64。缓存字体和渲染库；可降为 32，0 表示禁用。过小可能导致重新下载；不是浏览器总内存上限",
         "default": 64
+    },
+    "asset_disk_cache_max_mb": {
+        "description": "静态资源磁盘缓存上限（MiB）",
+        "type": "int",
+        "hint": "默认 256。把字体和渲染库保存到插件数据目录，重启后无需重新下载；0 表示禁用。仅缓存固定版本的 CDN 资源，未带版本号的字体最多保留 7 天",
+        "default": 256
     },
     "image_cache_max_mb": {
         "description": "渲染图片缓存上限（MiB）",

@@ -46,6 +46,8 @@
     <!-- MathJax 配置 -->
     <script id="MathJax-config">
         window.mathJaxRequired = {{MATH_REQUIRED}};
+        // MathJax 按需异步加载；排版前需等它启动完成
+        window.__mathJaxStartup = new Promise(resolve => { window.__resolveMathJaxStartup = resolve; });
         const requestedPackages = {{MATH_PACKAGES}};
         window.MathJax = {
             tex: {
@@ -175,12 +177,15 @@
                 scale: 1.0
             },
             startup: {
+                // 常驻页面复用时由 __replaceRenderContent 显式排版
+                typeset: window.mathJaxRequired,
                 ready: () => {
                     console.log('MathJax is ready');
                     MathJax.startup.defaultReady();
                     MathJax.startup.promise.then(() => {
                         console.log('MathJax initial typesetting complete');
                         window.mathJaxReady = true;
+                        window.__resolveMathJaxStartup();
                     });
                 }
             }
@@ -197,29 +202,34 @@
 
     <style>
         :root {
-            /* LaTeX 学术论文风格配色 */
-            --bg-color: #FDFBF0;        /* 暖白/米色羊皮纸（可被配置覆盖） */
+            /* 学术排版 + 现代中性配色：近白底、深灰正文、靛蓝强调 */
+            --bg-color: #FCFCFD;        /* 中性近白（可被配置覆盖） */
             --body-font-size: 36px;
             --h1-scale: 1.55;
             --h2-scale: 1.25;
             --h3-scale: 1.10;
             --line-height: 1.7;
-            --text-color: #2b2b2b;      /* 深炭灰（不用纯黑） */
-            --heading-color: #1a1a1a;
-            --muted-color: #6b6558;
-            --accent-color: #8b3a3a;    /* 暗红强调色（classicthesis 风格） */
-            --accent-soft: rgba(139, 58, 58, 0.06);
-            --rule-color: rgba(60, 50, 30, 0.22);
-            --code-bg: rgba(90, 70, 40, 0.05);
-            --code-border: rgba(60, 50, 30, 0.14);
-            --gutter-bg: rgba(90, 70, 40, 0.05);
-            --line-num-color: #a39e93;
+            --text-color: #1f2328;
+            --heading-color: #0f172a;
+            --muted-color: #5b6472;
+            --accent-color: #3451b2;    /* 靛蓝强调色 */
+            --accent-soft: rgba(52, 81, 178, 0.06);
+            --accent-line: rgba(52, 81, 178, 0.35);
+            /* 中性半透明色，任意浅色背景下都协调 */
+            --rule-color: rgba(15, 23, 42, 0.12);
+            --surface: rgba(15, 23, 42, 0.035);
+            --inline-code-bg: rgba(15, 23, 42, 0.06);
+            --inline-code-color: #b4235a;
+
+            /* 代码块：深色主题 */
+            --code-bg: #22272e;
+            --code-text: #adbac7;
+            --code-header: #2d333b;
+            --code-muted: #636e7b;
 
             /* LaTeX 风格字体栈：英文优先 EB Garamond，中文后备 Noto Serif SC */
             --font-main: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
-
-            /* 代码：打字机风格 */
-            --font-code: "Fira Mono", "Fira Code", "Courier New", monospace;
+            --font-code: "Fira Code", "Fira Mono", "Consolas", "Courier New", monospace;
         }
 
         html, body {
@@ -235,7 +245,7 @@
             color: var(--text-color);
             font-family: var(--font-main);
             line-height: var(--line-height);
-            padding: 56px 72px;
+            padding: 60px 72px;
             font-size: var(--body-font-size);
             -webkit-font-smoothing: antialiased;
             text-rendering: optimizeLegibility;
@@ -245,9 +255,7 @@
             font-weight: 600;
             color: var(--heading-color);
             line-height: 1.3;
-            /* LaTeX 排版：标题字间距收紧 */
             letter-spacing: 0.01em;
-            /* LaTeX 排版：标题上方留白要大，体现层级 */
             margin-top: 1.3em;
             margin-bottom: 0.55em;
         }
@@ -264,18 +272,30 @@
             margin-bottom: 0;
         }
 
-        /* 一级标题：论文标题式粗细双线 */
+        /* 一级标题：细分隔线 + 强调色短条 */
         h1 {
+            position: relative;
             font-size: calc(1em * var(--h1-scale));
-            padding-bottom: 0.3em;
-            border-bottom: 3px double var(--rule-color);
+            padding-bottom: 0.4em;
+            border-bottom: 1px solid var(--rule-color);
+        }
+
+        h1::after {
+            content: "";
+            position: absolute;
+            left: 0;
+            bottom: -2px;
+            width: 2.2em;
+            height: 3px;
+            border-radius: 3px;
+            background: var(--accent-color);
         }
 
         /* 二级标题：左侧强调色竖条 */
         h2 {
             font-size: calc(1em * var(--h2-scale));
             padding-left: 0.55em;
-            border-left: 0.16em solid var(--accent-color);
+            border-left: 0.14em solid var(--accent-color);
         }
 
         h3 {
@@ -288,25 +308,21 @@
         }
 
         p {
-            /* LaTeX 排版：字间距微调，增加空气感 */
             letter-spacing: 0.02em;
             line-height: var(--line-height);
-            /* LaTeX 灵魂：两端对齐 */
-            text-align: justify;
-            text-justify: inter-ideograph;
-            /* 段落间距 */
+            /* 左对齐：中文与行内公式、代码混排时，两端对齐会把字距硬撑开 */
+            text-align: left;
             margin: 0 0 0.9em 0;
         }
 
-        /* 分隔线：两端渐隐 */
         hr {
             border: 0;
             height: 1px;
-            background: linear-gradient(to right, transparent, var(--rule-color) 15%, var(--rule-color) 85%, transparent);
+            background: var(--rule-color);
             margin: 1.4em 0;
         }
 
-        /* --- 列表样式 --- */
+        /* --- 列表 --- */
         ul, ol {
             padding-left: 1.6em;
             margin: 0.5em 0 0.9em;
@@ -329,7 +345,6 @@
             list-style-type: disc;
         }
 
-        /* 嵌套列表使用空心圆 / 方块 */
         ul ul {
             list-style-type: circle;
         }
@@ -342,76 +357,105 @@
             margin: 0.3em 0;
         }
 
-        /* --- 引用样式：正体（中文不做伪斜体），强调色竖线 + 浅底 --- */
+        /* --- 引用：强调色竖线 + 淡蓝底（中文不做伪斜体） --- */
         blockquote {
             margin: 1em 0;
-            padding: 0.55em 1em;
+            padding: 0.6em 1em;
             border-left: 0.14em solid var(--accent-color);
-            border-radius: 0 8px 8px 0;
+            border-radius: 0 10px 10px 0;
             background: var(--accent-soft);
-            color: #3a3631;
+            color: #334155;
         }
 
         blockquote p {
             margin: 0.3em 0;
         }
 
-        /* --- 代码块样式：左侧行号栏由背景渐变铺满整个高度 --- */
+        /* --- 代码块：深色主题，顶部语言标签，左侧行号 --- */
         pre {
-            --gutter-width: 3em;
-            background:
-                linear-gradient(to right,
-                    var(--gutter-bg) 0 var(--gutter-width),
-                    var(--code-border) var(--gutter-width) calc(var(--gutter-width) + 1px),
-                    transparent calc(var(--gutter-width) + 1px)),
-                var(--code-bg);
-            border: 1px solid var(--code-border);
-            border-radius: 10px;
-            padding: 0.75em 0;
+            --gutter-width: 2.6em;
+            position: relative;
+            background: var(--code-bg);
+            color: var(--code-text);
+            border-radius: 14px;
+            padding: 0.9em 0;
             font-family: var(--font-code);
-            font-size: 0.62em;
-            margin: 1em 0;
+            font-size: 0.6em;
+            margin: 1.1em 0;
             overflow: hidden;
-            /* LaTeX 排版：代码块不两端对齐 */
             text-align: left;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.08);
         }
 
-        /* 每行代码容器 */
+        pre[data-lang] {
+            padding-top: 2.6em;
+        }
+
+        pre[data-lang]::before {
+            content: attr(data-lang);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 0.45em 1.2em;
+            background: var(--code-header);
+            color: var(--code-muted);
+            font-size: 0.85em;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
         .code-line {
             display: flex;
             align-items: flex-start;
         }
 
-        /* 行号 */
         .line-num {
             box-sizing: border-box;
             width: var(--gutter-width);
             text-align: right;
-            padding-right: 0.8em;
-            color: var(--line-num-color);
-            line-height: 1.6;
+            padding-right: 0.9em;
+            color: var(--code-muted);
+            line-height: 1.65;
             user-select: none;
             flex-shrink: 0;
         }
 
-        /* 代码内容 */
         .line-content {
             flex: 1;
-            padding-left: 1em;
-            padding-right: 1em;
-            line-height: 1.6;
+            padding-left: 0.6em;
+            padding-right: 1.2em;
+            line-height: 1.65;
             white-space: pre-wrap;
             word-wrap: break-word;
             overflow-wrap: break-word;
         }
 
+        /* 语法高亮（Pygments 短类名，GitHub Dark Dimmed 配色） */
+        pre .c, pre .ch, pre .cm, pre .c1, pre .cs, pre .cp, pre .cpf { color: #768390; font-style: italic; }
+        pre .k, pre .kc, pre .kd, pre .kn, pre .kp, pre .kr, pre .ow { color: #f47067; }
+        pre .kt, pre .nc, pre .nn, pre .ne { color: #f69d50; }
+        pre .s, pre .s1, pre .s2, pre .sa, pre .sb, pre .sc, pre .sd, pre .sh,
+        pre .si, pre .sx, pre .sr, pre .ss, pre .dl { color: #96d0ff; }
+        pre .se { color: #6cb6ff; }
+        pre .m, pre .mi, pre .mf, pre .mh, pre .mo, pre .mb, pre .il { color: #6cb6ff; }
+        pre .nf, pre .fm, pre .nd { color: #dcbdfb; }
+        pre .nb, pre .bp, pre .no { color: #6cb6ff; }
+        pre .nt { color: #8ddb8c; }
+        pre .na, pre .nv, pre .vi, pre .vc, pre .vg { color: #f69d50; }
+        pre .o { color: #f47067; }
+        pre .gd { color: #ff938a; }
+        pre .gi { color: #8ddb8c; }
+        pre .err { color: #ff938a; }
+
+        /* 行内代码 */
         code {
             font-family: var(--font-code);
-            background-color: rgba(90, 70, 40, 0.07);
-            color: #7a3328;
-            padding: 0.1em 0.35em;
-            border-radius: 5px;
-            font-size: 0.8em;
+            background-color: var(--inline-code-bg);
+            color: var(--inline-code-color);
+            padding: 0.12em 0.4em;
+            border-radius: 6px;
+            font-size: 0.78em;
         }
 
         pre code {
@@ -421,38 +465,42 @@
             font-size: 1em;
         }
 
-        /* --- 表格样式：booktabs 三线表 --- */
+        /* --- 表格：圆角卡片，表头浅底 --- */
         table {
-            border-collapse: collapse;
+            border-collapse: separate;
+            border-spacing: 0;
             width: 100%;
-            margin: 1em 0;
-            font-size: 0.9em;
-            border-top: 2px solid var(--heading-color);
-            border-bottom: 2px solid var(--heading-color);
+            margin: 1.1em 0;
+            font-size: 0.88em;
+            border: 1px solid var(--rule-color);
+            border-radius: 14px;
+            overflow: hidden;
         }
 
         th, td {
-            padding: 0.45em 0.9em;
+            padding: 0.5em 0.9em;
             text-align: left;
         }
 
         thead th {
             font-weight: 600;
-            border-bottom: 1px solid var(--heading-color);
+            color: var(--heading-color);
+            background: var(--surface);
+            border-bottom: 1px solid var(--rule-color);
         }
 
-        tbody tr:nth-child(even) {
-            background-color: rgba(90, 70, 40, 0.035);
+        tbody tr + tr td {
+            border-top: 1px solid var(--rule-color);
         }
 
-        /* --- 链接样式 --- */
+        /* --- 链接 --- */
         a {
             color: var(--accent-color);
             text-decoration: none;
-            border-bottom: 1px solid rgba(139, 58, 58, 0.35);
+            border-bottom: 1px solid var(--accent-line);
         }
 
-        /* --- 强调样式 --- */
+        /* --- 强调 --- */
         strong {
             font-weight: 600;
             color: var(--heading-color);
@@ -504,6 +552,12 @@
         pre.mermaid {
             background: transparent !important;
             border: none !important;
+            /* 不继承代码块的深色主题、卡片阴影与等宽字体 */
+            box-shadow: none;
+            border-radius: 0;
+            color: var(--text-color);
+            font-family: var(--font-main);
+            font-size: 1em;
             text-align: center;
             margin: 40px 0;
             padding: 20px;
@@ -523,15 +577,51 @@
     <!-- 预连接 CDN,减少 MathJax/TikZJax 首字节延迟 -->
     <link rel="preconnect" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com" crossorigin>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-    <!-- MathJax 脚本 (jsdelivr,与 TikZJax 同源更稳;OSS 源曾 ERR_CONNECTION_CLOSED) -->
-    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
-
-    <!-- TikZJax 脚本 (drgrice1 fork via jsdelivr npm)
-         原 OSS 源缺 tex.wasm.gz/core.dump.gz/tex_files/,复杂 TikZ 库
-         (intersections/patterns/decorations/angles 等)全部渲染失败破图。
-         jsdelivr 自动托管 npm 包完整 dist,含全部库文件。 -->
-    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/fonts.css">
-    <script src="https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/tikzjax.js"></script>
+    <!-- 渲染引擎按需加载：页面外壳与内容类型无关，常驻页面可在公式、TikZ、
+         纯文本文档之间直接复用；新页面只加载本次内容需要的引擎。
+         MathJax 用 jsdelivr（与 TikZJax 同源更稳；OSS 源曾 ERR_CONNECTION_CLOSED）。
+         TikZJax 用 drgrice1 fork 的 npm 包：原 OSS 源缺 tex.wasm.gz/core.dump.gz/
+         tex_files/，复杂 TikZ 库（intersections/patterns/decorations 等）会破图。 -->
+    <script>
+        window.__engineSources = {
+            mathjax: [['script', 'https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js']],
+            tikzjax: [
+                ['link', 'https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/fonts.css'],
+                // TikZJax 在页面已完成加载时立即处理现有图形，并监听之后插入的图形
+                ['script', 'https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/tikzjax.js']
+            ]
+        };
+        window.__engines = {};
+        window.__loadEngine = function(name) {
+            if (!window.__engines[name]) {
+                window.__engines[name] = Promise.all(window.__engineSources[name].map(([tag, url]) =>
+                    new Promise((resolve, reject) => {
+                        const node = document.createElement(tag);
+                        if (tag === 'script') {
+                            node.async = true;
+                            node.src = url;
+                        } else {
+                            node.rel = 'stylesheet';
+                            node.href = url;
+                        }
+                        node.onload = resolve;
+                        node.onerror = () => reject(new Error('Failed to load ' + url));
+                        document.head.appendChild(node);
+                    })));
+            }
+            return window.__engines[name];
+        };
+        // 加载 root 中内容所需的引擎；MathJax 还需等待启动完成
+        window.__ensureEngines = function(root) {
+            const jobs = [];
+            if (window.mathJaxRequired) {
+                jobs.push(window.__loadEngine('mathjax').then(() => window.__mathJaxStartup));
+            }
+            if (root.querySelector('script[type="text/tikz"]')) jobs.push(window.__loadEngine('tikzjax'));
+            return Promise.all(jobs);
+        };
+        window.__ensureEngines(document).catch(error => console.warn('[MathJax2Image]', error.message));
+    </script>
 
     <!-- Mermaid：优先 unpkg，失败回退 jsdelivr -->
     <script>
@@ -561,18 +651,18 @@
                             theme: 'base',
                             securityLevel: 'strict',
                             themeVariables: {
-                                primaryColor: '#FDFBF0',
-                                primaryTextColor: '#2c2c2c',
-                                primaryBorderColor: '#333',
-                                lineColor: '#333',
-                                secondaryColor: '#f5f2f0',
-                                tertiaryColor: '#FDFBF0',
+                                primaryColor: '#F1F4FB',
+                                primaryTextColor: '#1f2328',
+                                primaryBorderColor: '#3451b2',
+                                lineColor: '#5b6472',
+                                secondaryColor: '#F3F4F6',
+                                tertiaryColor: '#FCFCFD',
                                 fontFamily: '"EB Garamond", "Noto Serif SC", serif',
                                 fontSize: '18px',
-                                nodeBorder: '#333',
-                                clusterBkg: '#f5f2f0',
-                                clusterBorder: '#999',
-                                edgeLabelBackground: '#FDFBF0'
+                                nodeBorder: '#3451b2',
+                                clusterBkg: '#F3F4F6',
+                                clusterBorder: '#cbd5e1',
+                                edgeLabelBackground: '#FCFCFD'
                             },
                             flowchart: {
                                 curve: 'basis',
@@ -614,7 +704,11 @@
         window.__formatRenderCode = function() {
             document.querySelectorAll('pre code').forEach(function(codeBlock) {
                 const pre = codeBlock.parentElement;
-                const lines = codeBlock.textContent.split('\n');
+                const language = /(?:^|\s)language-([A-Za-z0-9_-]+)/.exec(codeBlock.className);
+                if (language) pre.dataset.lang = language[1];
+                // 内容是转换器转义过的文本或 Pygments 输出（每行自行闭合标签），
+                // 按行切分 HTML 不会切断标签
+                const lines = codeBlock.innerHTML.split('\n');
 
                 // 移除最后的空行
                 if (lines[lines.length - 1] === '') {
@@ -637,7 +731,7 @@
                     // 代码内容
                     const lineContent = document.createElement('span');
                     lineContent.className = 'line-content';
-                    lineContent.textContent = lineText || ' ';
+                    lineContent.innerHTML = lineText || ' ';
 
                     lineDiv.appendChild(lineNum);
                     lineDiv.appendChild(lineContent);
@@ -661,6 +755,7 @@
             const main = document.querySelector('main.render-content');
             main.innerHTML = content;
             window.__formatRenderCode();
+            await window.__ensureEngines(main);
             if (window.mathJaxRequired) {
                 MathJax.texReset();
                 await MathJax.typesetPromise([main]);

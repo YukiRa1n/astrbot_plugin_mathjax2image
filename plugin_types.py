@@ -19,7 +19,7 @@ class RenderMode(Enum):
 class RenderConfig:
     """渲染配置（不可变）"""
 
-    bg_color: str = "#FDFBF0"
+    bg_color: str = "#FCFCFD"
     viewport_width: int = 1150
     viewport_height: int = 2000
     mathjax_timeout: int = 10000
