@@ -27,7 +27,7 @@
 - [x] 完成路由字体下载、响应释放、重定向保留、失败回退和 commit 固定资源策略；`python -m pytest tests/test_asset_disk_cache.py -q`：33 passed，退出码 0。
 - [x] 完成真实字体冷启动和禁网重启验证。两个字体合计 37,901,760 字节；冷启动下载 2 次，新浏览器/新渲染器断网启动下载 0 次；两张 PNG 的 SHA-256 一致。
 - [x] 全量回归：`python -m pytest tests -q`，338 passed / 2 skipped，退出码 0；7 个修改的 Python 文件通过 Ruff 和格式检查；`git diff --check` 通过。
-- [ ] 提交、推送及远端核对。
+- [x] 功能提交 `f27d987af734300393f1cff4457d5472bd24211b` 已推送到 `origin/master`；`git ls-remote origin refs/heads/master` 返回同一 SHA，退出码 0。
 
 ## 决策记录
 
@@ -39,4 +39,8 @@
 
 ## 结果与复盘
 
-代码与运行验收已完成，待提交推送。实际验证脚本 `D:/desktop/Github/AstrBot/.misaka-review-20261020/verify_font_cache.py` 退出码 0，结果保存在同目录 `font-cache-validation.json`，日志为 `font-cache-validation.log`。冷启动 20.014s，重建浏览器和渲染器后断网出图 4.015s（包含启动及截图，仅为本机单次字体页面验证，不代表所有文章性能）。两张图 SHA-256 均为 `f2ad596397d13a6dc1f2feb0506f26506284c609a5d10330de60f0236bec7feb`。实际 W04/W05 字形均命中。完整字体使用路由下载及显式响应释放，避免依赖 Chromium 调试缓存；磁盘容量不足或缓存关闭时不保证跨重启复用。
+代码、运行验收及功能提交推送均已完成。实际验证脚本 `D:/desktop/Github/AstrBot/.misaka-review-20261020/verify_font_cache.py` 退出码 0，结果保存在同目录 `font-cache-validation.json`，日志为 `font-cache-validation.log`。冷启动 20.014s，重建浏览器和渲染器后断网出图 4.015s（包含启动及截图，仅为本机单次字体页面验证，不代表所有文章性能）。两张图 SHA-256 均为 `f2ad596397d13a6dc1f2feb0506f26506284c609a5d10330de60f0236bec7feb`。实际 W04/W05 字形均命中。完整字体使用路由下载及显式响应释放，避免依赖 Chromium 调试缓存；磁盘容量不足或缓存关闭时不保证跨重启复用。
+
+## 交付记录
+
+2026-10-20 America/Denver：功能与书籍主题已推送，本次计划完成状态以随后文档提交同步；未创建 Release。无剩余实现事项。
