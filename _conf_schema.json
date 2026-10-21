@@ -16,19 +16,19 @@
     "background_color": {
         "description": "模板背景颜色",
         "type": "string",
-        "hint": "十六进制颜色值，默认 #FCFCFD（中性近白），也可用 #FFFFFF（纯白）、#F5F5F5（浅灰）。旧默认值 #FDFBF0 会按新默认处理",
-        "default": "#FCFCFD"
+        "hint": "十六进制颜色值，默认 #F5F4ED（暖纸色），也可用 #FFFFFF（纯白）、#F5F5F5（浅灰）。旧默认值 #FDFBF0 / #FCFCFD 会按新默认处理",
+        "default": "#F5F4ED"
     },
     "typography": {
         "description": "字体大小与标题比例",
         "type": "object",
         "hint": "标题大小 = 正文字号 × 对应标题比例。修改后重载插件",
         "items": {
-            "body_font_size": {"description": "正文字号（px）", "type": "int", "default": 36, "hint": "支持 16–64，默认 36"},
-            "h1_scale": {"description": "一级标题 / 正文比例", "type": "float", "default": 1.55, "hint": "默认 1.55；正文 36px 时约 56px"},
-            "h2_scale": {"description": "二级标题 / 正文比例", "type": "float", "default": 1.25, "hint": "默认 1.25；正文 36px 时为 45px"},
-            "h3_scale": {"description": "三级标题 / 正文比例", "type": "float", "default": 1.1, "hint": "默认 1.10；正文 36px 时约 40px"},
-            "line_height": {"description": "正文行高倍数", "type": "float", "default": 1.7, "hint": "默认 1.7，支持 1.2–2.2"}
+            "body_font_size": {"description": "正文字号（px）", "type": "int", "default": 26, "hint": "支持 16–64，默认 26；已保存的字号配置优先生效"},
+            "h1_scale": {"description": "一级标题 / 正文比例", "type": "float", "default": 1.4, "hint": "默认 1.4；正文 26px 时约 36px"},
+            "h2_scale": {"description": "二级标题 / 正文比例", "type": "float", "default": 1.25, "hint": "默认 1.25；正文 26px 时约 33px"},
+            "h3_scale": {"description": "三级标题 / 正文比例", "type": "float", "default": 1.1, "hint": "默认 1.10；正文 26px 时约 29px"},
+            "line_height": {"description": "正文行高倍数", "type": "float", "default": 1.78, "hint": "默认 1.78，支持 1.2–2.2"}
         }
     },
     "math_system_prompt": {

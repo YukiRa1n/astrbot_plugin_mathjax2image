@@ -43,9 +43,8 @@ _TRUSTED_HTML_STARTS = (
 _TRUSTED_HTML_ENDS = (_TIKZ_HTML_END, _MERMAID_HTML_END, _ERROR_HTML_END)
 
 
-# 默认背景：中性近白。旧版默认的米黄 #FDFBF0 已被 AstrBot 写入用户配置，
-# 见 resolve_bg_color。
-DEFAULT_BG_COLOR = "#FCFCFD"
+# Previous shipped defaults are migrated to the book theme background.
+DEFAULT_BG_COLOR = "#F5F4ED"
 LEGACY_DEFAULT_BG_COLOR = "#FDFBF0"
 
 
@@ -53,13 +52,17 @@ def resolve_bg_color(value: object) -> str:
     """Map a configured background to the color the template should use.
 
     AstrBot writes schema defaults into the plugin config, so every existing
-    install holds the old default rather than an explicit choice; treat that
-    exact value as "unset". Any other valid color is kept as configured.
+    install can hold a previous default rather than an explicit choice; treat
+    the shipped default colors as "unset". Other valid colors are preserved.
     """
     if not isinstance(value, str) or not BG_COLOR_PATTERN.fullmatch(value.strip()):
         return DEFAULT_BG_COLOR
     value = value.strip()
-    return DEFAULT_BG_COLOR if value.upper() == LEGACY_DEFAULT_BG_COLOR else value
+    return (
+        DEFAULT_BG_COLOR
+        if value.upper() in {LEGACY_DEFAULT_BG_COLOR, "#FCFCFD"}
+        else value
+    )
 
 
 # 单独成行的 LaTeX 文档框架命令。逐行锚定匹配（[^\n]* 不跨行），线性复杂度。
@@ -90,11 +93,7 @@ def _highlight_code(code: str, language: str) -> str | None:
     and often wrong. Pygments closes its ``<span>`` tags at every line end, so
     the template can split the result into numbered lines safely.
     """
-    if (
-        _pygments_highlight is None
-        or not language
-        or len(code) > _HIGHLIGHT_MAX_CHARS
-    ):
+    if _pygments_highlight is None or not language or len(code) > _HIGHLIGHT_MAX_CHARS:
         return None
     try:
         lexer = _get_lexer_by_name(language, stripnl=False, ensurenl=False)
@@ -104,7 +103,11 @@ def _highlight_code(code: str, language: str) -> str | None:
         highlighted = _pygments_highlight(code, lexer, _HtmlFormatter(nowrap=True))
     except Exception:  # pragma: no cover - lexer bugs must not break rendering
         return None
-    return highlighted[:-1] if highlighted.endswith("\n") and not code.endswith("\n") else highlighted
+    return (
+        highlighted[:-1]
+        if highlighted.endswith("\n") and not code.endswith("\n")
+        else highlighted
+    )
 
 
 def _block_placeholder(token: str, kind: str, index: int) -> str:
@@ -195,6 +198,8 @@ def iter_trusted_html_spans(text: str):
         body_end = text.find(_TRUSTED_HTML_ENDS[form], body_from)
         yield start, body_end + len(_TRUSTED_HTML_ENDS[form])
         cursor = body_end + len(_TRUSTED_HTML_ENDS[form])
+
+
 MATHJAX_PACKAGES = {
     "ams",
     "amscd",
@@ -323,11 +328,11 @@ class MarkdownConverter:
         typography = typography if isinstance(typography, dict) else {}
         self._typography = {}
         for name, default, low, high in (
-            ("body_font_size", 36, 16, 64),
-            ("h1_scale", 1.55, 1, 3),
+            ("body_font_size", 26, 16, 64),
+            ("h1_scale", 1.4, 1, 3),
             ("h2_scale", 1.25, 1, 2.5),
             ("h3_scale", 1.10, 1, 2),
-            ("line_height", 1.7, 1.2, 2.2),
+            ("line_height", 1.78, 1.2, 2.2),
         ):
             try:
                 value = float(typography.get(name, default))
@@ -422,7 +427,9 @@ class MarkdownConverter:
         # Other common extensions keep MathJax's existing autoload behavior.
 
         # 还原插件内部HTML、数学公式和代码块
-        html_body = self._restore_trusted_html_blocks(html_body, trusted_html_blocks, token)
+        html_body = self._restore_trusted_html_blocks(
+            html_body, trusted_html_blocks, token
+        )
         html_body = self._restore_math_blocks(html_body, math_blocks, token)
         html_body = self._restore_code_blocks(html_body, code_blocks, token)
 
@@ -725,7 +732,11 @@ class MarkdownConverter:
             # 独占一段的围栏代码块会被 Markdown 套上 <p>；<p><pre> 不是合法
             # HTML，浏览器会在代码块前后各补一个空段落，徒增间距。行内代码
             # 和只占一侧的包装保持原样，避免破坏所在段落。
-            if block.startswith("<pre") and match.group("open") and match.group("close"):
+            if (
+                block.startswith("<pre")
+                and match.group("open")
+                and match.group("close")
+            ):
                 return block
             return (match.group("open") or "") + block + (match.group("close") or "")
 

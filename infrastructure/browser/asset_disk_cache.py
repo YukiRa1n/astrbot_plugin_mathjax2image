@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 # npm 资源带精确版本号（如 mathjax@3.2.2、tikzjax@1.0.0-beta24）时内容不可变
 _PINNED_NPM_PATH = re.compile(r"/(?:@[^/]+/)?[^/@]+@\d+\.\d+\.\d+[^/]*/")
+_PINNED_GITHUB_PATH = re.compile(r"/gh/[^/]+/[^/@]+@[0-9a-fA-F]{40}/.+")
 _NPM_HOSTS = frozenset({"cdn.jsdelivr.net", "unpkg.com"})
 # 未带版本号的资源（如 OSS 字体）可能被原地替换，只缓存有限时间
 _UNPINNED_MAX_AGE = 7 * 24 * 3600
@@ -48,6 +49,12 @@ class AssetDiskCache:
         """Return the maximum age in seconds, or None for immutable assets."""
         parsed = urlparse(url)
         if parsed.hostname in _NPM_HOSTS and _PINNED_NPM_PATH.search(parsed.path):
+            return None
+        if (
+            parsed.hostname == "cdn.jsdelivr.net"
+            and not parsed.query
+            and _PINNED_GITHUB_PATH.fullmatch(parsed.path)
+        ):
             return None
         return _UNPINNED_MAX_AGE
 

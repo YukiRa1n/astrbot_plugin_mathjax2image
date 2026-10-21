@@ -34,12 +34,14 @@ def _asset_cache_dir() -> Path | None:
     """Return the persistent CDN asset cache directory, if one is available."""
     try:
         return (
-            Path(StarTools.get_data_dir("astrbot_plugin_mathjax2image"))
-            / "asset_cache"
+            Path(StarTools.get_data_dir("astrbot_plugin_mathjax2image")) / "asset_cache"
         )
     except Exception as exc:
-        logger.warning(f"[MathJax2Image] 无法确定资源磁盘缓存目录，仅使用内存缓存: {exc}")
+        logger.warning(
+            f"[MathJax2Image] 无法确定资源磁盘缓存目录，仅使用内存缓存: {exc}"
+        )
         return None
+
 
 MAX_RENDER_LENGTH = 100000  # 渲染内容最大长度（字符）
 
@@ -60,7 +62,7 @@ class RenderOrchestrator:
     def __init__(
         self,
         plugin_dir: Path,
-        bg_color: str = "#FCFCFD",
+        bg_color: str = "#F5F4ED",
         browser_engine: str = "chromium",
         browser_cdp_url: str = "",
         browser_max_pages: int = 2,

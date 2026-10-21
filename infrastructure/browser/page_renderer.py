@@ -84,7 +84,7 @@ class PageRenderer:
         self,
         browser_manager: "BrowserManager",
         plugin_dir: Path,
-        viewport_width: int = 1150,
+        viewport_width: int = 960,
         viewport_height: int = 1,
         mathjax_timeout: int = 10000,
         tikz_timeout: int = 60000,
@@ -556,17 +556,18 @@ class PageRenderer:
             logger.debug("[MathJax2Image] 无法监听资源下载: %s", exc)
 
     async def _serve_cached_resource(self, route) -> bool:
-        """Fulfill a static request from the memory or disk asset cache.
+        """Serve a cached asset or download a full font before delivering it.
 
-        On a miss the caller lets the browser download the asset; the first
-        miss registers a pending download so concurrent requests for the same
-        URL wait for it instead of downloading again.
+        Full TTF/OTF fonts can exceed Chromium's response inspector buffer.
+        Download them through the route API so their bytes remain available
+        for caching. Other misses use the browser and its completion event.
+        Concurrent requests wait for the first download.
 
         Args:
             route: An already allowlisted static GET request.
 
         Returns:
-            Whether the request was fulfilled from a cached response.
+            Whether the route was fulfilled and needs no browser download.
         """
         if self._cdn_cache_limit == 0:
             return False
@@ -594,6 +595,41 @@ class PageRenderer:
                 asyncio.get_running_loop().create_future(),
                 time.monotonic(),
             )
+        if urlparse(url).path.endswith((".ttf", ".otf")):
+            response = None
+            try:
+                # Never follow redirects outside the page's network allowlist.
+                # A redirect response is delivered to the browser to route again.
+                response = await route.fetch(timeout=30_000, max_redirects=0)
+                if response.status != 200:
+                    self._release_pending(url)
+                    await route.fulfill(response=response)
+                    return True
+                body = await response.body()
+                content_type = response.headers.get(
+                    "content-type", "application/octet-stream"
+                )
+                if self._disk_cache is not None:
+                    await run_in_thread(self._disk_cache.put, url, body, content_type)
+                cached = self._store_resource(url, body, content_type)
+            except Exception as exc:
+                logger.debug(
+                    "[MathJax2Image] Font download failed; using browser fallback: %s: %s",
+                    url,
+                    exc,
+                )
+                return False
+            finally:
+                # Release before fulfill: requestfinished must not capture the
+                # same body again through Chromium's limited inspector buffer.
+                self._release_pending(url)
+                if response is not None:
+                    try:
+                        await response.dispose()
+                    except Exception:
+                        pass  # The context may already be closed on cancellation.
+            await cached.fulfill(route)
+            return True
         return False
 
     def _lookup_resource(self, url: str) -> "_CachedResource | None":

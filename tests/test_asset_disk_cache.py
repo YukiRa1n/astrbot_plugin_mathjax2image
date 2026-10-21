@@ -16,7 +16,9 @@ from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
 
 PINNED = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"
 SCOPED = "https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.3.0/600.css"
-UNPINNED = "https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/A.ttf"
+UNPINNED = (
+    "https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/A.ttf"
+)
 
 
 def test_round_trip_and_content_type(tmp_path):
@@ -193,9 +195,10 @@ async def test_stale_pending_download_is_taken_over(tmp_path, monkeypatch):
     monkeypatch.setattr(page_renderer, "_PENDING_TTL_S", 1.0)
 
     # A page closed mid-download never reports back; do not wait for it.
-    assert await asyncio.wait_for(
-        renderer._serve_cached_resource(_route(PINNED)), 1
-    ) is False
+    assert (
+        await asyncio.wait_for(renderer._serve_cached_resource(_route(PINNED)), 1)
+        is False
+    )
     assert renderer._cdn_pending[PINNED][0] is not future
 
 
@@ -241,7 +244,9 @@ async def test_eviction_during_delivery_keeps_the_body(tmp_path):
 async def test_tikz_worker_is_patched_in_memory_and_raw_on_disk(tmp_path, monkeypatch):
     from astrbot_plugin_mathjax2image.infrastructure.browser import page_renderer
 
-    worker = "https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/run-tex.js"
+    worker = (
+        "https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/run-tex.js"
+    )
     monkeypatch.setattr(page_renderer, "optimize_tikz_worker", lambda body: b"patched")
     renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "c")
     assert not await renderer._serve_cached_resource(_route(worker))
@@ -279,3 +284,149 @@ async def test_renderer_without_cache_dir_keeps_memory_only_behavior(tmp_path):
         MagicMock(), tmp_path, asset_cache_dir=tmp_path, asset_disk_cache_max_mb=0
     )
     assert disabled._disk_cache is None
+
+
+# Full fonts can exceed Chromium's response inspector buffer.
+FULL_FONT = "https://cdn.jsdelivr.net/gh/tw93/Kami@6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6/assets/fonts/TsangerJinKai02-W04.ttf"
+
+
+@pytest.mark.asyncio
+async def test_full_font_download_is_cached_without_browser_response_body(tmp_path):
+    body = b"font" * (3 * 1024 * 1024)
+    response = MagicMock(status=200, headers={"content-type": "font/ttf"})
+    response.body = AsyncMock(return_value=body)
+    response.dispose = AsyncMock()
+    renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "fonts")
+    route = _route(FULL_FONT)
+    route.fetch = AsyncMock(return_value=response)
+
+    await _handle(renderer, route)
+
+    route.fetch.assert_awaited_once()
+    route.continue_.assert_not_awaited()
+    assert route.fetch.call_args.kwargs["max_redirects"] == 0
+    assert route.fulfill.call_args.kwargs["body"] == body
+    response.dispose.assert_awaited_once()
+    assert not renderer._cdn_pending
+    assert renderer._disk_cache.get(FULL_FONT) == (body, "font/ttf")
+    restarted = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "fonts")
+    warm = _route(FULL_FONT)
+    warm.fetch = AsyncMock(side_effect=AssertionError("Network must not be used"))
+    await _handle(restarted, warm)
+    warm.fetch.assert_not_awaited()
+    warm.continue_.assert_not_awaited()
+    assert warm.fulfill.call_args.kwargs["body"] == body
+
+
+@pytest.mark.parametrize(
+    ("url", "immutable"),
+    [
+        (FULL_FONT, True),
+        (FULL_FONT.replace("6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6", "main"), False),
+        (
+            FULL_FONT.replace("6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6", "6b399e9"),
+            False,
+        ),
+        (FULL_FONT + "?version=1", False),
+        (FULL_FONT.replace("cdn.jsdelivr.net", "example.com"), False),
+    ],
+)
+def test_full_github_commits_are_immutable(url, immutable):
+    assert (AssetDiskCache.max_age(url) is None) is immutable
+
+
+@pytest.mark.asyncio
+async def test_full_font_concurrent_requests_share_one_download(tmp_path):
+    renderer = PageRenderer(MagicMock(), tmp_path)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    response = MagicMock(status=200, headers={"content-type": "font/ttf"})
+    response.dispose = AsyncMock()
+
+    async def body():
+        entered.set()
+        await finish.wait()
+        return b"shared font"
+
+    response.body = body
+    first, second = _route(FULL_FONT), _route(FULL_FONT)
+    first.fetch = AsyncMock(return_value=response)
+    second.fetch = AsyncMock(side_effect=AssertionError("Duplicate font download"))
+    owner = asyncio.create_task(renderer._serve_cached_resource(first))
+    await entered.wait()
+    waiter = asyncio.create_task(renderer._serve_cached_resource(second))
+    await asyncio.sleep(0)
+    assert not waiter.done()
+    finish.set()
+    assert await owner
+    assert await waiter
+    first.fetch.assert_awaited_once()
+    second.fetch.assert_not_awaited()
+    assert second.fulfill.call_args.kwargs["body"] == b"shared font"
+    assert not renderer._cdn_pending
+
+
+@pytest.mark.asyncio
+async def test_full_font_fetch_failure_allows_browser_fallback(tmp_path):
+    renderer = PageRenderer(MagicMock(), tmp_path)
+    route = _route(FULL_FONT)
+    route.fetch = AsyncMock(side_effect=RuntimeError("network unavailable"))
+    await _handle(renderer, route)
+    route.continue_.assert_awaited_once()
+    route.fulfill.assert_not_awaited()
+    assert not renderer._cdn_pending
+    assert not renderer._cdn_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [302, 404])
+async def test_full_font_error_or_redirect_is_delivered_without_caching(
+    tmp_path, status
+):
+    renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "c")
+    response = MagicMock(status=status)
+    response.dispose = AsyncMock()
+    response.body = AsyncMock(side_effect=AssertionError("Do not cache error bodies"))
+    route = _route(FULL_FONT)
+    route.fetch = AsyncMock(return_value=response)
+    await _handle(renderer, route)
+    route.fulfill.assert_awaited_once_with(response=response)
+    response.dispose.assert_awaited_once()
+    assert not renderer._cdn_pending
+    assert renderer._disk_cache.get(FULL_FONT) is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_font_download_disposes_response_and_releases_waiters(tmp_path):
+    renderer = PageRenderer(MagicMock(), tmp_path)
+    entered = asyncio.Event()
+    response = MagicMock(status=200)
+    response.dispose = AsyncMock()
+
+    async def body():
+        entered.set()
+        await asyncio.Event().wait()
+
+    response.body = body
+    route = _route(FULL_FONT)
+    route.fetch = AsyncMock(return_value=response)
+    task = asyncio.create_task(renderer._serve_cached_resource(route))
+    await entered.wait()
+    pending = renderer._cdn_pending[FULL_FONT][0]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert pending.done() and not pending.cancelled()
+    assert not renderer._cdn_pending
+    response.dispose.assert_awaited_once()
+    assert not renderer._cdn_cache
+
+
+@pytest.mark.asyncio
+async def test_font_download_respects_disabled_cache(tmp_path):
+    renderer = PageRenderer(MagicMock(), tmp_path, resource_cache_max_mb=0)
+    route = _route(FULL_FONT)
+    route.fetch = AsyncMock(side_effect=AssertionError("Cache is disabled"))
+    await _handle(renderer, route)
+    route.fetch.assert_not_awaited()
+    route.continue_.assert_awaited_once()
+    assert not renderer._cdn_pending

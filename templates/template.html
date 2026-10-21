@@ -5,24 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Markdown Render</title>
 
-    <!-- CDN 字体定义 -->
+    <!-- Book typography adapted from Kami (MIT); see templates/NOTICE.md. -->
     <style>
-        /* EB Garamond - 主要衬线字体 */
         @font-face {
-            font-family: 'EB Garamond';
-            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/EBGaramond-Regular.ttf') format('truetype');
+            font-family: 'TsangerJinKai02';
+            src: url('https://cdn.jsdelivr.net/gh/tw93/Kami@6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6/assets/fonts/TsangerJinKai02-W04.ttf') format('truetype');
             font-weight: 400;
             font-style: normal;
             font-display: swap;
         }
         @font-face {
-            font-family: 'EB Garamond';
-            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/EBGaramond-SemiBold.ttf') format('truetype');
-            font-weight: 600;
+            font-family: 'TsangerJinKai02';
+            src: url('https://cdn.jsdelivr.net/gh/tw93/Kami@6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6/assets/fonts/TsangerJinKai02-W05.ttf') format('truetype');
+            font-weight: 500 900;
             font-style: normal;
             font-display: swap;
         }
-        /* Fira Code - 代码字体 */
         @font-face {
             font-family: 'Fira Code';
             src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/FiraCode-Regular.ttf') format('truetype');
@@ -30,18 +28,7 @@
             font-style: normal;
             font-display: swap;
         }
-        /* Noto Serif SC - 中文衬线字体 */
-        @font-face {
-            font-family: 'Noto Serif SC';
-            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/NotoSerifSC-Regular.otf') format('opentype');
-            font-weight: 400;
-            font-style: normal;
-            font-display: swap;
-        }
     </style>
-    <!-- 真粗体中文与 EB Garamond 斜体（fontsource 按 unicode-range 分片，只下载用到的字） -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.3.0/600.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/eb-garamond@5.3.0/400-italic.css">
 
     <!-- MathJax 配置 -->
     <script id="MathJax-config">
@@ -202,34 +189,29 @@
 
     <style>
         :root {
-            /* 学术排版 + 现代中性配色：近白底、深灰正文、靛蓝强调 */
-            --bg-color: #FCFCFD;        /* 中性近白（可被配置覆盖） */
-            --body-font-size: 36px;
-            --h1-scale: 1.55;
+            /* Paper, ink and type rhythm from the Kami long-document style. */
+            --bg-color: #F5F4ED;
+            --body-font-size: 26px;
+            --h1-scale: 1.4;
             --h2-scale: 1.25;
             --h3-scale: 1.10;
-            --line-height: 1.7;
-            --text-color: #1f2328;
-            --heading-color: #0f172a;
-            --muted-color: #5b6472;
-            --accent-color: #3451b2;    /* 靛蓝强调色 */
-            --accent-soft: rgba(52, 81, 178, 0.06);
-            --accent-line: rgba(52, 81, 178, 0.35);
-            /* 中性半透明色，任意浅色背景下都协调 */
-            --rule-color: rgba(15, 23, 42, 0.12);
-            --surface: rgba(15, 23, 42, 0.035);
-            --inline-code-bg: rgba(15, 23, 42, 0.06);
-            --inline-code-color: #b4235a;
-
-            /* 代码块：深色主题 */
-            --code-bg: #22272e;
-            --code-text: #adbac7;
-            --code-header: #2d333b;
-            --code-muted: #636e7b;
-
-            /* LaTeX 风格字体栈：英文优先 EB Garamond，中文后备 Noto Serif SC */
-            --font-main: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
-            --font-code: "Fira Code", "Fira Mono", "Consolas", "Courier New", monospace;
+            --line-height: 1.78;
+            --text-color: #141413;
+            --heading-color: #141413;
+            --muted-color: #6b6a64;
+            --accent-color: #1B365D;
+            --accent-soft: #faf9f5;
+            --accent-line: #b9c4d1;
+            --rule-color: #e8e6dc;
+            --surface: #faf9f5;
+            --inline-code-bg: #faf9f5;
+            --inline-code-color: #3d3d3a;
+            --code-bg: #faf9f5;
+            --code-text: #3d3d3a;
+            --code-header: #eeede5;
+            --code-muted: #77756b;
+            --font-main: "TsangerJinKai02", "Noto Serif SC", "Songti SC", serif;
+            --font-code: "Fira Code", "Consolas", "TsangerJinKai02", monospace;
         }
 
         html, body {
@@ -245,14 +227,14 @@
             color: var(--text-color);
             font-family: var(--font-main);
             line-height: var(--line-height);
-            padding: 60px 72px;
+            padding: 56px 72px;
             font-size: var(--body-font-size);
             -webkit-font-smoothing: antialiased;
             text-rendering: optimizeLegibility;
         }
 
         h1, h2, h3, h4, h5, h6 {
-            font-weight: 600;
+            font-weight: 500;
             color: var(--heading-color);
             line-height: 1.3;
             letter-spacing: 0.01em;
@@ -272,23 +254,11 @@
             margin-bottom: 0;
         }
 
-        /* 一级标题：细分隔线 + 强调色短条 */
+        /* A plain title keeps long images compact without a separate cover. */
         h1 {
-            position: relative;
             font-size: calc(1em * var(--h1-scale));
-            padding-bottom: 0.4em;
-            border-bottom: 1px solid var(--rule-color);
-        }
-
-        h1::after {
-            content: "";
-            position: absolute;
-            left: 0;
-            bottom: -2px;
-            width: 2.2em;
-            height: 3px;
-            border-radius: 3px;
-            background: var(--accent-color);
+            line-height: 1.25;
+            margin-bottom: 0.7em;
         }
 
         /* 二级标题：左侧强调色竖条 */
@@ -308,11 +278,11 @@
         }
 
         p {
-            letter-spacing: 0.02em;
+            letter-spacing: 0.016em;
             line-height: var(--line-height);
             /* 左对齐：中文与行内公式、代码混排时，两端对齐会把字距硬撑开 */
             text-align: left;
-            margin: 0 0 0.9em 0;
+            margin: 0 0 0.65em 0;
         }
 
         hr {
@@ -338,7 +308,7 @@
         }
 
         ol > li::marker {
-            font-weight: 600;
+            font-weight: 500;
         }
 
         ul {
@@ -357,34 +327,33 @@
             margin: 0.3em 0;
         }
 
-        /* --- 引用：强调色竖线 + 淡蓝底（中文不做伪斜体） --- */
+        /* Quotes retain a thin rule and the paper background. */
         blockquote {
             margin: 1em 0;
-            padding: 0.6em 1em;
+            padding: 0.15em 0 0.15em 0.9em;
             border-left: 0.14em solid var(--accent-color);
-            border-radius: 0 10px 10px 0;
-            background: var(--accent-soft);
-            color: #334155;
+            background: transparent;
+            color: #504e49;
         }
 
         blockquote p {
             margin: 0.3em 0;
         }
 
-        /* --- 代码块：深色主题，顶部语言标签，左侧行号 --- */
+        /* Code keeps language labels and line numbers on an ivory surface. */
         pre {
             --gutter-width: 2.6em;
             position: relative;
             background: var(--code-bg);
             color: var(--code-text);
-            border-radius: 14px;
+            border-radius: 5px;
             padding: 0.9em 0;
             font-family: var(--font-code);
-            font-size: 0.6em;
+            font-size: 0.72em;
             margin: 1.1em 0;
             overflow: hidden;
             text-align: left;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.08);
+            border: 1px solid var(--rule-color);
         }
 
         pre[data-lang] {
@@ -431,22 +400,22 @@
             overflow-wrap: break-word;
         }
 
-        /* 语法高亮（Pygments 短类名，GitHub Dark Dimmed 配色） */
-        pre .c, pre .ch, pre .cm, pre .c1, pre .cs, pre .cp, pre .cpf { color: #768390; font-style: italic; }
-        pre .k, pre .kc, pre .kd, pre .kn, pre .kp, pre .kr, pre .ow { color: #f47067; }
-        pre .kt, pre .nc, pre .nn, pre .ne { color: #f69d50; }
+        /* Pygments tokens use readable ink colors on the light code surface. */
+        pre .c, pre .ch, pre .cm, pre .c1, pre .cs, pre .cp, pre .cpf { color: #6b6a64; font-style: italic; }
+        pre .k, pre .kc, pre .kd, pre .kn, pre .kp, pre .kr, pre .ow { color: #84503f; }
+        pre .kt, pre .nc, pre .nn, pre .ne { color: #84503f; }
         pre .s, pre .s1, pre .s2, pre .sa, pre .sb, pre .sc, pre .sd, pre .sh,
-        pre .si, pre .sx, pre .sr, pre .ss, pre .dl { color: #96d0ff; }
-        pre .se { color: #6cb6ff; }
-        pre .m, pre .mi, pre .mf, pre .mh, pre .mo, pre .mb, pre .il { color: #6cb6ff; }
-        pre .nf, pre .fm, pre .nd { color: #dcbdfb; }
-        pre .nb, pre .bp, pre .no { color: #6cb6ff; }
-        pre .nt { color: #8ddb8c; }
-        pre .na, pre .nv, pre .vi, pre .vc, pre .vg { color: #f69d50; }
-        pre .o { color: #f47067; }
-        pre .gd { color: #ff938a; }
-        pre .gi { color: #8ddb8c; }
-        pre .err { color: #ff938a; }
+        pre .si, pre .sx, pre .sr, pre .ss, pre .dl { color: #436048; }
+        pre .se { color: #1B365D; }
+        pre .m, pre .mi, pre .mf, pre .mh, pre .mo, pre .mb, pre .il { color: #1B365D; }
+        pre .nf, pre .fm, pre .nd { color: #5f496f; }
+        pre .nb, pre .bp, pre .no { color: #1B365D; }
+        pre .nt { color: #436048; }
+        pre .na, pre .nv, pre .vi, pre .vc, pre .vg { color: #84503f; }
+        pre .o { color: #84503f; }
+        pre .gd { color: #a13432; }
+        pre .gi { color: #436048; }
+        pre .err { color: #a13432; }
 
         /* 行内代码 */
         code {
@@ -465,16 +434,15 @@
             font-size: 1em;
         }
 
-        /* --- 表格：圆角卡片，表头浅底 --- */
+        /* Tables use open sides and fine horizontal rules. */
         table {
-            border-collapse: separate;
+            border-collapse: collapse;
             border-spacing: 0;
             width: 100%;
             margin: 1.1em 0;
             font-size: 0.88em;
-            border: 1px solid var(--rule-color);
-            border-radius: 14px;
-            overflow: hidden;
+            border-top: 2px solid var(--accent-color);
+            border-bottom: 2px solid var(--accent-color);
         }
 
         th, td {
@@ -483,9 +451,9 @@
         }
 
         thead th {
-            font-weight: 600;
+            font-weight: 500;
             color: var(--heading-color);
-            background: var(--surface);
+            background: transparent;
             border-bottom: 1px solid var(--rule-color);
         }
 
@@ -502,12 +470,13 @@
 
         /* --- 强调 --- */
         strong {
-            font-weight: 600;
+            font-weight: 500;
             color: var(--heading-color);
         }
 
         em {
-            font-style: italic;
+            font-style: normal;
+            color: #504e49;
         }
 
         /* --- MathJax 公式样式 --- */
@@ -529,8 +498,9 @@
         /* 只针对 TikZ 容器内的 SVG */
         .tikz-diagram {
             text-align: center;
-            margin: 24px 0;
-            padding: 16px 0;
+            max-width: 27em;
+            margin: 1.1em auto;
+            padding: 0.25em 0;
         }
 
         .tikz-diagram svg {
