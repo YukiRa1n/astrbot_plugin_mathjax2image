@@ -221,15 +221,17 @@
             --inline-code-bg: rgba(15, 23, 42, 0.06);
             --inline-code-color: #b4235a;
 
-            /* 代码块：深色主题 */
-            --code-bg: #22272e;
-            --code-text: #adbac7;
-            --code-header: #2d333b;
-            --code-muted: #636e7b;
+            /* Code blocks share the page's neutral light palette. */
+            --code-bg: rgba(15, 23, 42, 0.035);
+            --code-border: rgba(15, 23, 42, 0.09);
+            --code-text: #1f2328;
+            --code-muted: #6e7781;
+            --code-line-num: rgba(15, 23, 42, 0.28);
 
             /* LaTeX 风格字体栈：英文优先 EB Garamond，中文后备 Noto Serif SC */
             --font-main: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
-            --font-code: "Fira Code", "Fira Mono", "Consolas", "Courier New", monospace;
+            /* Reuse the loaded CJK font when the server lacks a Chinese monospace font. */
+            --font-code: "Fira Code", "Fira Mono", "Consolas", "Courier New", "Noto Serif SC", monospace;
         }
 
         html, body {
@@ -371,38 +373,56 @@
             margin: 0.3em 0;
         }
 
-        /* --- 代码块：深色主题，顶部语言标签，左侧行号 --- */
+        /* Light code blocks with language labels and line numbers. */
         pre {
-            --gutter-width: 2.6em;
+            --gutter-width: 3em;
             position: relative;
             background: var(--code-bg);
             color: var(--code-text);
-            border-radius: 14px;
-            padding: 0.9em 0;
+            border: 1px solid var(--code-border);
+            border-radius: 12px;
+            padding: 0;
             font-family: var(--font-code);
             font-size: 0.6em;
             margin: 1.1em 0;
             overflow: hidden;
             text-align: left;
-            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.08);
         }
 
-        pre[data-lang] {
-            padding-top: 2.6em;
-        }
-
-        pre[data-lang]::before {
-            content: attr(data-lang);
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            padding: 0.45em 1.2em;
-            background: var(--code-header);
+        .code-header {
+            display: flex;
+            align-items: center;
+            gap: 0.6em;
+            padding: 0.55em 1.2em;
+            border-bottom: 1px solid var(--code-border);
             color: var(--code-muted);
             font-size: 0.85em;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
+            line-height: 1.5;
+            letter-spacing: 0.04em;
+        }
+
+        .code-header::before {
+            content: "";
+            width: 0.55em;
+            height: 0.55em;
+            border-radius: 50%;
+            background: var(--accent-color);
+            opacity: 0.7;
+        }
+
+        .code-body {
+            position: relative;
+            padding: 0.85em 0;
+        }
+
+        /* Extend the gutter rule through the vertical padding. */
+        .code-body::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: var(--gutter-width);
+            border-left: 1px solid var(--code-border);
         }
 
         .code-line {
@@ -414,41 +434,49 @@
             box-sizing: border-box;
             width: var(--gutter-width);
             text-align: right;
-            padding-right: 0.9em;
-            color: var(--code-muted);
-            line-height: 1.65;
+            padding-right: 0.8em;
+            color: var(--code-line-num);
+            font-variant-numeric: tabular-nums;
+            line-height: 1.7;
             user-select: none;
             flex-shrink: 0;
         }
 
         .line-content {
             flex: 1;
-            padding-left: 0.6em;
+            padding-left: 1em;
             padding-right: 1.2em;
-            line-height: 1.65;
+            line-height: 1.7;
             white-space: pre-wrap;
             word-wrap: break-word;
             overflow-wrap: break-word;
         }
 
-        /* 语法高亮（Pygments 短类名，GitHub Dark Dimmed 配色） */
-        pre .c, pre .ch, pre .cm, pre .c1, pre .cs, pre .cp, pre .cpf { color: #768390; font-style: italic; }
-        pre .k, pre .kc, pre .kd, pre .kn, pre .kp, pre .kr, pre .ow { color: #f47067; }
-        pre .kt, pre .nc, pre .nn, pre .ne { color: #f69d50; }
+        /* GitHub Light token colors, with green strings and neutral operators.
+           Keep comments upright to avoid synthesized italics for CJK glyphs. */
+        pre .c, pre .ch, pre .cm, pre .c1, pre .cs, pre .cp, pre .cpf { color: #6e7781; }
+        pre .k, pre .kc, pre .kd, pre .kn, pre .kp, pre .kr, pre .ow { color: #cf222e; }
+        pre .kt, pre .nc, pre .ne { color: #953800; }
         pre .s, pre .s1, pre .s2, pre .sa, pre .sb, pre .sc, pre .sd, pre .sh,
-        pre .si, pre .sx, pre .sr, pre .ss, pre .dl { color: #96d0ff; }
-        pre .se { color: #6cb6ff; }
-        pre .m, pre .mi, pre .mf, pre .mh, pre .mo, pre .mb, pre .il { color: #6cb6ff; }
-        pre .nf, pre .fm, pre .nd { color: #dcbdfb; }
-        pre .nb, pre .bp, pre .no { color: #6cb6ff; }
-        pre .nt { color: #8ddb8c; }
-        pre .na, pre .nv, pre .vi, pre .vc, pre .vg { color: #f69d50; }
-        pre .o { color: #f47067; }
-        pre .gd { color: #ff938a; }
-        pre .gi { color: #8ddb8c; }
-        pre .err { color: #ff938a; }
+        pre .si, pre .sx, pre .sr, pre .ss, pre .dl { color: #116329; }
+        pre .se { color: #0550ae; }
+        pre .m, pre .mi, pre .mf, pre .mh, pre .mo, pre .mb, pre .il { color: #0550ae; }
+        pre .nf, pre .fm, pre .nd { color: #8250df; }
+        pre .nb, pre .bp, pre .no { color: #0550ae; }
+        pre .nt { color: #0550ae; }
+        pre .na, pre .nv, pre .vi, pre .vc, pre .vg { color: #953800; }
+        pre .gh, pre .gu { color: #0550ae; font-weight: 600; }
+        pre .gd { color: #82071e; background: #ffebe9; }
+        pre .gi { color: #116329; background: #dafbe1; }
+        pre .err { color: #cf222e; }
 
         /* 行内代码 */
+        code, pre {
+            /* Keep operators such as ->, != and => visually faithful to the source. */
+            font-variant-ligatures: none;
+            font-feature-settings: "liga" 0, "calt" 0;
+        }
+
         code {
             font-family: var(--font-code);
             background-color: var(--inline-code-bg);
@@ -715,8 +743,17 @@
                     lines.pop();
                 }
 
-                // 清空 pre
+                // Replace the pre content with a language header and numbered lines.
                 pre.innerHTML = '';
+                if (language) {
+                    const header = document.createElement('div');
+                    header.className = 'code-header';
+                    header.textContent = language[1];
+                    pre.appendChild(header);
+                }
+                const body = document.createElement('div');
+                body.className = 'code-body';
+                pre.appendChild(body);
 
                 // 为每行创建独立容器
                 lines.forEach(function(lineText, index) {
@@ -735,7 +772,7 @@
 
                     lineDiv.appendChild(lineNum);
                     lineDiv.appendChild(lineContent);
-                    pre.appendChild(lineDiv);
+                    body.appendChild(lineDiv);
                 });
             });
         };

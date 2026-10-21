@@ -93,7 +93,9 @@ def _highlight_code(code: str, language: str) -> str | None:
     if _pygments_highlight is None or not language or len(code) > _HIGHLIGHT_MAX_CHARS:
         return None
     try:
-        lexer = _get_lexer_by_name(language, stripnl=False, ensurenl=False)
+        # Line-based lexers such as diff need the trailing newline to classify
+        # the last line. The extra output newline is removed below.
+        lexer = _get_lexer_by_name(language, stripnl=False)
     except _ClassNotFound:
         return None
     try:

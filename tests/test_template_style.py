@@ -46,6 +46,12 @@ def test_highlighted_lines_close_their_tags():
         assert line.count("<span") == line.count("</span>")
 
 
+def test_last_line_is_lexed_like_the_others():
+    body = _body("```diff\n- old\n+ new\n```")
+    assert '<span class="gi">+ new</span></code>' in body
+    assert 'class="err"' not in body
+
+
 @pytest.mark.parametrize("fence", ["```\nx = 1\n```", "```nosuchlang\nx = 1\n```"])
 def test_unlabelled_or_unknown_code_stays_plain(fence):
     body = _body(fence)
