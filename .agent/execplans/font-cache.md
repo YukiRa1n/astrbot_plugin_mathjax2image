@@ -44,3 +44,9 @@
 ## 交付记录
 
 2026-10-20 America/Denver：功能与书籍主题已推送，本次计划完成状态以随后文档提交同步；未创建 Release。无剩余实现事项。
+
+## 后续默认模板调整
+
+2026-10-20 America/Denver：用户明确选择“恢复旧模板作为默认”。`templates/template.html` 与 `_conf_schema.json` 恢复为 `07d0de9` 的内容，使用 EB Garamond / Noto Serif SC、近白背景、36px 正文、1.55 一级标题比例和 1.7 行高；截图默认宽度恢复为 1150px。书籍样式保存在 `templates/book.html`，仅作参考，默认不会加载。缓存下载路径和不可变 commit 缓存策略不变。
+
+验证：`git diff 07d0de9 -- templates/template.html _conf_schema.json` 输出为空；`python -m pytest tests/test_template_style.py tests/test_plot_precomputation.py tests/test_asset_disk_cache.py tests/test_browser_and_renderer.py -q` 为 72 passed、2 skipped，退出码 0；修改的 Python 文件 Ruff 检查和 `git diff --check` 通过。本段记录后续默认行为调整，不撤销字体缓存的运行验收结果。

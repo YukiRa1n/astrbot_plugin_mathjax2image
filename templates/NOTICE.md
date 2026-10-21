@@ -1,6 +1,6 @@
 # Template and font attribution
 
-The book styling in `template.html` is adapted from [Kami](https://github.com/tw93/Kami), copyright (c) 2026 Tw93, under the MIT license reproduced in `LICENSE.Kami`.
+The book styling in `book.html` is adapted from [Kami](https://github.com/tw93/Kami), copyright (c) 2026 Tw93, under the MIT license reproduced in `LICENSE.Kami`.
 
 Reference: Kami long-document template as used by [Misaka-Napoleon-Test](https://github.com/Luciole-Studio/Misaka-Napoleon-Test/blob/main/final/r_5b1357a9c6-revised/v5/typeset/build_mobile_v5.py). The plugin retains its own Markdown, MathJax and TikZ rendering pipeline.
 

@@ -84,7 +84,7 @@ class PageRenderer:
         self,
         browser_manager: "BrowserManager",
         plugin_dir: Path,
-        viewport_width: int = 960,
+        viewport_width: int = 1150,
         viewport_height: int = 1,
         mathjax_timeout: int = 10000,
         tikz_timeout: int = 60000,

@@ -31,7 +31,7 @@ playwright install-deps chromium
 
 ### 2. CDN 资源
 
-MathJax 3.2.2、TikZJax beta24 和 Mermaid 10.9.3 使用固定版本 CDN；仓耳今楷来自固定 commit 的 jsDelivr，代码与公式字体使用各自的 CDN。首次使用需要联网；已缓存资源可在页面回收或插件重启后复用。
+MathJax 3.2.2、TikZJax beta24 和 Mermaid 10.9.3 使用固定版本 CDN；字体来自阿里云 OSS。首次使用仍需联网，后续在插件进程内复用资源。
 
 ### 3. 可选：使用 TinyTeX 原生绘图
 
@@ -54,11 +54,9 @@ MathJax 3.2.2、TikZJax beta24 和 Mermaid 10.9.3 使用固定版本 CDN；仓�
 
 **部署边界：** 原生 TeX 是本机程序。插件禁用 shell escape、限制文件访问、过滤常见危险指令并使用临时目录，但这些措施不构成完整沙箱。接收不可信用户输入时，应把启用原生后端的 AstrBot 部署在无敏感挂载、低权限的隔离容器中；默认 WASM 路线仍可直接使用。
 
-默认输出保留长图，宽度 960px、左右留白各 72px；正文 26px，每行约 31 个汉字。已保存的 `typography` 配置仍优先生效，要采用这组比例可将 `body_font_size` 设为 26、`h1_scale` 设为 1.4。
+默认继续使用原有模板：EB Garamond / Noto Serif SC、近白背景、1150px 宽和 36px 正文。已保存的自定义背景、字号和标题比例仍优先生效。
 
-默认页面采用 Kami 书籍风格：仓耳今楷 02、暖纸色 `#F5F4ED`、深蓝强调色、浅色代码块和横线表格。字体从固定版本 CDN 加载，不将字体文件打入插件包；两档完整字体合计约 36 MiB。已有自定义背景和字号配置继续生效，历史默认背景会迁移为暖纸色。
-
-仓耳今楷按 Kami 上游说明仅个人非商用免费，商用需要另行授权；模板适配来源与 MIT 声明见 [templates/NOTICE.md](templates/NOTICE.md)。
+书籍样式仅保留为[参考模板](templates/book.html)和[预览](examples/book_theme.png)，默认不会加载；其字体许可与模板来源见 [NOTICE](templates/NOTICE.md)。
 
 ## 命令
 
@@ -82,7 +80,7 @@ Flowchart 的双引号节点与边标签支持 `$...$` 公式和中文混排，�
 
 ## 效果展示
 
-当前书籍主题见 [混排预览](examples/book_theme.png)（[源码](examples/book_theme.md)）。下方图片展示公式与绘图能力，保留原有示例配色；损失曲面为合成函数，网络图为结构示意。点击示例标题查看完整源码，复制内容后加上 `/render` 即可使用。
+以下图片均由当前插件实际渲染。点击示例标题查看完整源码，复制内容后加上 `/render` 即可使用。示例使用白底；损失曲面为合成函数，网络图为结构示意。
 
 | 公式与排版 | TikZ 绘图 |
 | --- | --- |
@@ -165,11 +163,11 @@ TikZ 与 MathJax 使用不同引擎。下面是两个 TikZ 后端共用的加载
 
 | 字段 | 默认值 | 范围 |
 | --- | --- | --- |
-| `body_font_size` | 26 px | 16–64 |
-| `h1_scale` | 1.4 | 1–3 |
+| `body_font_size` | 36 px | 16–64 |
+| `h1_scale` | 1.55 | 1–3 |
 | `h2_scale` | 1.25 | 1–2.5 |
 | `h3_scale` | 1.10 | 1–2 |
-| `line_height` | 1.78 | 1.2–2.2 |
+| `line_height` | 1.7 | 1.2–2.2 |
 
 例如正文 32 px、一级标题比例 1.5，对应标题 48 px。四至六级标题为正文大小，使用字重区分。此配置控制 Markdown 排版；TikZ 图内文字通过 TeX 的 `font`、`scale` 等选项调整。
 

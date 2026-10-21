@@ -82,8 +82,6 @@ def test_inline_code_keeps_its_paragraph():
     [
         ("#FDFBF0", DEFAULT_BG_COLOR),  # 旧默认值视为未设置
         ("#fdfbf0", DEFAULT_BG_COLOR),
-        ("#FCFCFD", DEFAULT_BG_COLOR),
-        ("#fcfcfd", DEFAULT_BG_COLOR),
         (" #FFFFFF ", "#FFFFFF"),
         ("#123", "#123"),
         ("red", DEFAULT_BG_COLOR),

@@ -43,8 +43,9 @@ _TRUSTED_HTML_STARTS = (
 _TRUSTED_HTML_ENDS = (_TIKZ_HTML_END, _MERMAID_HTML_END, _ERROR_HTML_END)
 
 
-# Previous shipped defaults are migrated to the book theme background.
-DEFAULT_BG_COLOR = "#F5F4ED"
+# 默认背景：中性近白。旧版默认的米黄 #FDFBF0 已被 AstrBot 写入用户配置，
+# 见 resolve_bg_color。
+DEFAULT_BG_COLOR = "#FCFCFD"
 LEGACY_DEFAULT_BG_COLOR = "#FDFBF0"
 
 
@@ -52,17 +53,13 @@ def resolve_bg_color(value: object) -> str:
     """Map a configured background to the color the template should use.
 
     AstrBot writes schema defaults into the plugin config, so every existing
-    install can hold a previous default rather than an explicit choice; treat
-    the shipped default colors as "unset". Other valid colors are preserved.
+    install holds the old default rather than an explicit choice; treat that
+    exact value as "unset". Any other valid color is kept as configured.
     """
     if not isinstance(value, str) or not BG_COLOR_PATTERN.fullmatch(value.strip()):
         return DEFAULT_BG_COLOR
     value = value.strip()
-    return (
-        DEFAULT_BG_COLOR
-        if value.upper() in {LEGACY_DEFAULT_BG_COLOR, "#FCFCFD"}
-        else value
-    )
+    return DEFAULT_BG_COLOR if value.upper() == LEGACY_DEFAULT_BG_COLOR else value
 
 
 # 单独成行的 LaTeX 文档框架命令。逐行锚定匹配（[^\n]* 不跨行），线性复杂度。
@@ -328,11 +325,11 @@ class MarkdownConverter:
         typography = typography if isinstance(typography, dict) else {}
         self._typography = {}
         for name, default, low, high in (
-            ("body_font_size", 26, 16, 64),
-            ("h1_scale", 1.4, 1, 3),
+            ("body_font_size", 36, 16, 64),
+            ("h1_scale", 1.55, 1, 3),
             ("h2_scale", 1.25, 1, 2.5),
             ("h3_scale", 1.10, 1, 2),
-            ("line_height", 1.78, 1.2, 2.2),
+            ("line_height", 1.7, 1.2, 2.2),
         ):
             try:
                 value = float(typography.get(name, default))

@@ -62,7 +62,7 @@ class RenderOrchestrator:
     def __init__(
         self,
         plugin_dir: Path,
-        bg_color: str = "#F5F4ED",
+        bg_color: str = "#FCFCFD",
         browser_engine: str = "chromium",
         browser_cdp_url: str = "",
         browser_max_pages: int = 2,

@@ -195,7 +195,7 @@ def test_typography_clamps_invalid_values_and_preserves_content():
     assert "--h1-scale: 1.5;" in html
     assert "--h2-scale: 1.25;" in html
     assert "--h3-scale: 2;" in html
-    assert "--line-height: 1.78;" in html
+    assert "--line-height: 1.7;" in html
     assert "bad; color:red" not in html
 
 

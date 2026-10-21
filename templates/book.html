@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markdown Render</title>
+
+    <!-- Book typography adapted from Kami (MIT); see templates/NOTICE.md. -->
+    <style>
+        @font-face {
+            font-family: 'TsangerJinKai02';
+            src: url('https://cdn.jsdelivr.net/gh/tw93/Kami@6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6/assets/fonts/TsangerJinKai02-W04.ttf') format('truetype');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'TsangerJinKai02';
+            src: url('https://cdn.jsdelivr.net/gh/tw93/Kami@6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6/assets/fonts/TsangerJinKai02-W05.ttf') format('truetype');
+            font-weight: 500 900;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'Fira Code';
+            src: url('https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/FiraCode-Regular.ttf') format('truetype');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+    </style>
+
+    <!-- MathJax 配置 -->
+    <script id="MathJax-config">
+        window.mathJaxRequired = {{MATH_REQUIRED}};
+        // MathJax 按需异步加载；排版前需等它启动完成
+        window.__mathJaxStartup = new Promise(resolve => { window.__resolveMathJaxStartup = resolve; });
+        const requestedPackages = {{MATH_PACKAGES}};
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                packages: {'[+]': ['ams', 'newcommand', 'boldsymbol', 'mathtools', 'extpfeil', ...requestedPackages]},
+                macros: {
+                    // 群论/代数
+                    Stab: '\\operatorname{Stab}',
+                    Aut: '\\operatorname{Aut}',
+                    End: '\\operatorname{End}',
+                    Hom: '\\operatorname{Hom}',
+                    Ker: '\\operatorname{Ker}',
+                    Gal: '\\operatorname{Gal}',
+                    Orb: '\\operatorname{Orb}',
+                    Fix: '\\operatorname{Fix}',
+                    Sym: '\\operatorname{Sym}',
+                    Alt: '\\operatorname{Alt}',
+                    GL: '\\operatorname{GL}',
+                    SL: '\\operatorname{SL}',
+                    SO: '\\operatorname{SO}',
+                    SU: '\\operatorname{SU}',
+                    // Tr/tr 为 AMS 内置,不自定义避免覆盖
+                    rank: '\\operatorname{rank}',
+                    Ann: '\\operatorname{Ann}',
+                    Rad: '\\operatorname{Rad}',
+                    Nil: '\\operatorname{Nil}',
+                    Soc: '\\operatorname{Soc}',
+                    char: '\\operatorname{char}',
+                    ord: '\\operatorname{ord}',
+                    lcm: '\\operatorname{lcm}',
+                    // 代数几何
+                    Spec: '\\operatorname{Spec}',
+                    Proj: '\\operatorname{Proj}',
+                    Pic: '\\operatorname{Pic}',
+                    Div: '\\operatorname{Div}',
+                    Cl: '\\operatorname{Cl}',
+                    Jac: '\\operatorname{Jac}',
+                    Sing: '\\operatorname{Sing}',
+                    // 范畴论
+                    Ob: '\\operatorname{Ob}',
+                    Mor: '\\operatorname{Mor}',
+                    id: '\\operatorname{id}',
+                    op: '\\operatorname{op}',
+                    colim: '\\operatorname{colim}',
+                    // 分析
+                    supp: '\\operatorname{supp}',
+                    sgn: '\\operatorname{sgn}',
+                    Re: '\\operatorname{Re}',
+                    Im: '\\operatorname{Im}',
+                    Res: '\\operatorname{Res}',
+                    // 线性代数
+                    diag: '\\operatorname{diag}',
+                    span: '\\operatorname{span}',
+                    codim: '\\operatorname{codim}',
+                    // 常用集合
+                    N: '\\mathbb{N}',
+                    Z: '\\mathbb{Z}',
+                    Q: '\\mathbb{Q}',
+                    R: '\\mathbb{R}',
+                    C: '\\mathbb{C}',
+                    F: '\\mathbb{F}',
+                    P: '\\mathbb{P}',
+                    A: '\\mathbb{A}',
+                    // 常用符号
+                    eps: '\\varepsilon',
+                    vphi: '\\varphi',
+                    coloneqq: '\\mathrel{:=}',
+                    eqqcolon: '\\mathrel{=:}',
+                    // 加粗数学符号
+                    bm: ['\\boldsymbol{#1}', 1],
+                    // 扩展箭头（extpfeil 提供 xrightarrow/xleftarrow 等,不自定义避免覆盖）
+                    // 微积分(不与内置冲突的)
+                    dd: '\\mathrm{d}',
+                    dv: ['\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}', 2],
+                    pdv: ['\\frac{\\partial #1}{\\partial #2}', 2],
+                    divop: '\\nabla \\cdot',
+                    // 物理(不与 physics 包冲突的)
+                    Laplacian: '\\nabla^2',
+                    E: '\\mathbb{E}',
+                    Var: '\\operatorname{Var}',
+                    Cov: '\\operatorname{Cov}',
+                    // 统计/概率(避免与内置 Pr 等冲突,用大写命名)
+                    Exp: '\\operatorname{Exp}',
+                    Bin: '\\operatorname{Bin}',
+                    Unif: '\\operatorname{Unif}',
+                    iid: '\\stackrel{\\mathrm{i.i.d.}}{\\sim}',
+                    // 线性代数补充(不覆盖内置)
+                    adj: '\\operatorname{adj}',
+                    nullspace: '\\operatorname{null}',
+                    im: '\\operatorname{im}',
+                    coker: '\\operatorname{coker}',
+                    // 常用集合/符号补充
+                    emptyset: '\\varnothing',
+                    set: ['\\{ #1 \\}', 1],
+                    abs: ['\\lvert #1 \\rvert', 1],
+                    norm: ['\\lVert #1 \\rVert', 1],
+                    floor: ['\\lfloor #1 \\rfloor', 1],
+                    ceil: ['\\lceil #1 \\rceil', 1],
+                    avg: '\\operatorname{avg}',
+                    // max/min/argmax/argmin 为 TeX 内置,不自定义避免覆盖
+                    // 数论/图论(非内置)
+                    mod: '\\operatorname{mod}',
+                    rem: '\\operatorname{rem}',
+                    deg: '\\operatorname{deg}',
+                    dist: '\\operatorname{dist}',
+                    diam: '\\operatorname{diam}',
+                    girth: '\\operatorname{girth}',
+                    vol: '\\operatorname{vol}',
+                    cut: '\\operatorname{cut}',
+                    // 信号处理/分析
+                    sinc: '\\operatorname{sinc}',
+                    rect: '\\operatorname{rect}',
+                    Laplace: '\\mathcal{L}',
+                    FT: '\\mathcal{F}',
+                    iFT: '\\mathcal{F}^{-1}',
+                    ZTransform: '\\mathcal{Z}',
+                    // 统计正态分布(避免 N 重复键)
+                    Normal: '\\mathcal{N}'
+                }
+            },
+            loader: {
+                load: ['[tex]/ams', '[tex]/newcommand', '[tex]/extpfeil', '[tex]/boldsymbol', '[tex]/mathtools', ...requestedPackages.map(name => '[tex]/' + name)],
+                paths: {mathjax: 'https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5'}
+            },
+            chtml: {
+                scale: 1.0
+            },
+            startup: {
+                // 常驻页面复用时由 __replaceRenderContent 显式排版
+                typeset: window.mathJaxRequired,
+                ready: () => {
+                    console.log('MathJax is ready');
+                    MathJax.startup.defaultReady();
+                    MathJax.startup.promise.then(() => {
+                        console.log('MathJax initial typesetting complete');
+                        window.mathJaxReady = true;
+                        window.__resolveMathJaxStartup();
+                    });
+                }
+            }
+        };
+        if (requestedPackages.includes('physics')) {
+            // Let the package own its optional-argument and starred commands.
+            for (const name of ['dd', 'dv', 'pdv', 'abs', 'norm', 'Re', 'Im', 'Res', 'rank', 'op', 'set']) {
+                delete MathJax.tex.macros[name];
+            }
+            MathJax.tex.autoload = {braket: []};
+        }
+        if (requestedPackages.includes('braket')) delete MathJax.tex.macros.set;
+    </script>
+
+    <style>
+        :root {
+            /* Paper, ink and type rhythm from the Kami long-document style. */
+            --bg-color: #F5F4ED;
+            --body-font-size: 26px;
+            --h1-scale: 1.4;
+            --h2-scale: 1.25;
+            --h3-scale: 1.10;
+            --line-height: 1.78;
+            --text-color: #141413;
+            --heading-color: #141413;
+            --muted-color: #6b6a64;
+            --accent-color: #1B365D;
+            --accent-soft: #faf9f5;
+            --accent-line: #b9c4d1;
+            --rule-color: #e8e6dc;
+            --surface: #faf9f5;
+            --inline-code-bg: #faf9f5;
+            --inline-code-color: #3d3d3a;
+            --code-bg: #faf9f5;
+            --code-text: #3d3d3a;
+            --code-header: #eeede5;
+            --code-muted: #77756b;
+            --font-main: "TsangerJinKai02", "Noto Serif SC", "Songti SC", serif;
+            --font-code: "Fira Code", "Consolas", "TsangerJinKai02", monospace;
+        }
+
+        html, body {
+            box-sizing: border-box;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: visible;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: var(--font-main);
+            line-height: var(--line-height);
+            padding: 56px 72px;
+            font-size: var(--body-font-size);
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 500;
+            color: var(--heading-color);
+            line-height: 1.3;
+            letter-spacing: 0.01em;
+            margin-top: 1.3em;
+            margin-bottom: 0.55em;
+        }
+
+        .render-content {
+            display: flow-root;
+        }
+
+        .render-content > :first-child {
+            margin-top: 0;
+        }
+
+        .render-content > :last-child {
+            margin-bottom: 0;
+        }
+
+        /* A plain title keeps long images compact without a separate cover. */
+        h1 {
+            font-size: calc(1em * var(--h1-scale));
+            line-height: 1.25;
+            margin-bottom: 0.7em;
+        }
+
+        /* 二级标题：左侧强调色竖条 */
+        h2 {
+            font-size: calc(1em * var(--h2-scale));
+            padding-left: 0.55em;
+            border-left: 0.14em solid var(--accent-color);
+        }
+
+        h3 {
+            font-size: calc(1em * var(--h3-scale));
+            color: var(--accent-color);
+        }
+
+        h4, h5, h6 {
+            font-size: 1em;
+        }
+
+        p {
+            letter-spacing: 0.016em;
+            line-height: var(--line-height);
+            /* 左对齐：中文与行内公式、代码混排时，两端对齐会把字距硬撑开 */
+            text-align: left;
+            margin: 0 0 0.65em 0;
+        }
+
+        hr {
+            border: 0;
+            height: 1px;
+            background: var(--rule-color);
+            margin: 1.4em 0;
+        }
+
+        /* --- 列表 --- */
+        ul, ol {
+            padding-left: 1.6em;
+            margin: 0.5em 0 0.9em;
+        }
+
+        li {
+            margin-bottom: 0.3em;
+            padding-left: 0.25em;
+        }
+
+        li::marker {
+            color: var(--accent-color);
+        }
+
+        ol > li::marker {
+            font-weight: 500;
+        }
+
+        ul {
+            list-style-type: disc;
+        }
+
+        ul ul {
+            list-style-type: circle;
+        }
+
+        ul ul ul {
+            list-style-type: square;
+        }
+
+        li > ul, li > ol {
+            margin: 0.3em 0;
+        }
+
+        /* Quotes retain a thin rule and the paper background. */
+        blockquote {
+            margin: 1em 0;
+            padding: 0.15em 0 0.15em 0.9em;
+            border-left: 0.14em solid var(--accent-color);
+            background: transparent;
+            color: #504e49;
+        }
+
+        blockquote p {
+            margin: 0.3em 0;
+        }
+
+        /* Code keeps language labels and line numbers on an ivory surface. */
+        pre {
+            --gutter-width: 2.6em;
+            position: relative;
+            background: var(--code-bg);
+            color: var(--code-text);
+            border-radius: 5px;
+            padding: 0.9em 0;
+            font-family: var(--font-code);
+            font-size: 0.72em;
+            margin: 1.1em 0;
+            overflow: hidden;
+            text-align: left;
+            border: 1px solid var(--rule-color);
+        }
+
+        pre[data-lang] {
+            padding-top: 2.6em;
+        }
+
+        pre[data-lang]::before {
+            content: attr(data-lang);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            padding: 0.45em 1.2em;
+            background: var(--code-header);
+            color: var(--code-muted);
+            font-size: 0.85em;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .code-line {
+            display: flex;
+            align-items: flex-start;
+        }
+
+        .line-num {
+            box-sizing: border-box;
+            width: var(--gutter-width);
+            text-align: right;
+            padding-right: 0.9em;
+            color: var(--code-muted);
+            line-height: 1.65;
+            user-select: none;
+            flex-shrink: 0;
+        }
+
+        .line-content {
+            flex: 1;
+            padding-left: 0.6em;
+            padding-right: 1.2em;
+            line-height: 1.65;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        /* Pygments tokens use readable ink colors on the light code surface. */
+        pre .c, pre .ch, pre .cm, pre .c1, pre .cs, pre .cp, pre .cpf { color: #6b6a64; font-style: italic; }
+        pre .k, pre .kc, pre .kd, pre .kn, pre .kp, pre .kr, pre .ow { color: #84503f; }
+        pre .kt, pre .nc, pre .nn, pre .ne { color: #84503f; }
+        pre .s, pre .s1, pre .s2, pre .sa, pre .sb, pre .sc, pre .sd, pre .sh,
+        pre .si, pre .sx, pre .sr, pre .ss, pre .dl { color: #436048; }
+        pre .se { color: #1B365D; }
+        pre .m, pre .mi, pre .mf, pre .mh, pre .mo, pre .mb, pre .il { color: #1B365D; }
+        pre .nf, pre .fm, pre .nd { color: #5f496f; }
+        pre .nb, pre .bp, pre .no { color: #1B365D; }
+        pre .nt { color: #436048; }
+        pre .na, pre .nv, pre .vi, pre .vc, pre .vg { color: #84503f; }
+        pre .o { color: #84503f; }
+        pre .gd { color: #a13432; }
+        pre .gi { color: #436048; }
+        pre .err { color: #a13432; }
+
+        /* 行内代码 */
+        code {
+            font-family: var(--font-code);
+            background-color: var(--inline-code-bg);
+            color: var(--inline-code-color);
+            padding: 0.12em 0.4em;
+            border-radius: 6px;
+            font-size: 0.78em;
+        }
+
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+            font-size: 1em;
+        }
+
+        /* Tables use open sides and fine horizontal rules. */
+        table {
+            border-collapse: collapse;
+            border-spacing: 0;
+            width: 100%;
+            margin: 1.1em 0;
+            font-size: 0.88em;
+            border-top: 2px solid var(--accent-color);
+            border-bottom: 2px solid var(--accent-color);
+        }
+
+        th, td {
+            padding: 0.5em 0.9em;
+            text-align: left;
+        }
+
+        thead th {
+            font-weight: 500;
+            color: var(--heading-color);
+            background: transparent;
+            border-bottom: 1px solid var(--rule-color);
+        }
+
+        tbody tr + tr td {
+            border-top: 1px solid var(--rule-color);
+        }
+
+        /* --- 链接 --- */
+        a {
+            color: var(--accent-color);
+            text-decoration: none;
+            border-bottom: 1px solid var(--accent-line);
+        }
+
+        /* --- 强调 --- */
+        strong {
+            font-weight: 500;
+            color: var(--heading-color);
+        }
+
+        em {
+            font-style: normal;
+            color: #504e49;
+        }
+
+        /* --- MathJax 公式样式 --- */
+        .MathJax {
+            font-size: 1.1em !important;
+        }
+
+        mjx-container[jax="CHTML"][display="true"] {
+            margin: 0.75em 0 !important;
+        }
+
+        /* MathJax 中文文本字体对齐正文 */
+        mjx-container mjx-mtext,
+        mjx-container mjx-utext {
+            font-family: var(--font-main) !important;
+        }
+
+        /* --- TikZ SVG 样式 --- */
+        /* 只针对 TikZ 容器内的 SVG */
+        .tikz-diagram {
+            text-align: center;
+            max-width: 27em;
+            margin: 1.1em auto;
+            padding: 0.25em 0;
+        }
+
+        .tikz-diagram svg {
+            display: block !important;
+            position: relative !important;
+            margin: 0 auto !important;
+            overflow: visible !important;
+            /* 放大 TikZ 图形 */
+            transform: none !important;
+            transform-origin: center center !important;
+        }
+
+        /* 不要影响 MathJax 的 SVG */
+        mjx-container svg {
+            transform: none !important;
+        }
+
+        /* --- Mermaid 图表样式 --- */
+        pre.mermaid {
+            background: transparent !important;
+            border: none !important;
+            /* 不继承代码块的深色主题、卡片阴影与等宽字体 */
+            box-shadow: none;
+            border-radius: 0;
+            color: var(--text-color);
+            font-family: var(--font-main);
+            font-size: 1em;
+            text-align: center;
+            margin: 40px 0;
+            padding: 20px;
+        }
+
+        .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <main class="render-content">
+    {{CONTENT}}
+    </main>
+
+    <!-- 预连接 CDN,减少 MathJax/TikZJax 首字节延迟 -->
+    <link rel="preconnect" href="https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <!-- 渲染引擎按需加载：页面外壳与内容类型无关，常驻页面可在公式、TikZ、
+         纯文本文档之间直接复用；新页面只加载本次内容需要的引擎。
+         MathJax 用 jsdelivr（与 TikZJax 同源更稳；OSS 源曾 ERR_CONNECTION_CLOSED）。
+         TikZJax 用 drgrice1 fork 的 npm 包：原 OSS 源缺 tex.wasm.gz/core.dump.gz/
+         tex_files/，复杂 TikZ 库（intersections/patterns/decorations 等）会破图。 -->
+    <script>
+        window.__engineSources = {
+            mathjax: [['script', 'https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js']],
+            tikzjax: [
+                ['link', 'https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/fonts.css'],
+                // TikZJax 在页面已完成加载时立即处理现有图形，并监听之后插入的图形
+                ['script', 'https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/tikzjax.js']
+            ]
+        };
+        window.__engines = {};
+        window.__loadEngine = function(name) {
+            if (!window.__engines[name]) {
+                window.__engines[name] = Promise.all(window.__engineSources[name].map(([tag, url]) =>
+                    new Promise((resolve, reject) => {
+                        const node = document.createElement(tag);
+                        if (tag === 'script') {
+                            node.async = true;
+                            node.src = url;
+                        } else {
+                            node.rel = 'stylesheet';
+                            node.href = url;
+                        }
+                        node.onload = resolve;
+                        node.onerror = () => reject(new Error('Failed to load ' + url));
+                        document.head.appendChild(node);
+                    })));
+            }
+            return window.__engines[name];
+        };
+        // 加载 root 中内容所需的引擎；MathJax 还需等待启动完成
+        window.__ensureEngines = function(root) {
+            const jobs = [];
+            if (window.mathJaxRequired) {
+                jobs.push(window.__loadEngine('mathjax').then(() => window.__mathJaxStartup));
+            }
+            if (root.querySelector('script[type="text/tikz"]')) jobs.push(window.__loadEngine('tikzjax'));
+            return Promise.all(jobs);
+        };
+        window.__ensureEngines(document).catch(error => console.warn('[MathJax2Image]', error.message));
+    </script>
+
+    <!-- Mermaid：优先 unpkg，失败回退 jsdelivr -->
+    <script>
+        window.mermaidReady = false;
+        (function loadMermaid() {
+            var sources = [
+                'https://unpkg.com/mermaid@10.9.3/dist/mermaid.min.js',
+                'https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js'
+            ];
+            var idx = 0;
+            function tryNext() {
+                if (!document.querySelector('pre.mermaid')) {
+                    window.mermaidReady = true;
+                    return;
+                }
+                if (idx >= sources.length) {
+                    console.warn('[MathJax2Image] Mermaid CDN unavailable');
+                    window.mermaidError = 'Mermaid CDN unavailable';
+                    return;
+                }
+                var s = document.createElement('script');
+                s.src = sources[idx++];
+                s.onload = function() {
+                    try {
+                        mermaid.initialize({
+                            startOnLoad: false,
+                            theme: 'base',
+                            securityLevel: 'strict',
+                            themeVariables: {
+                                primaryColor: '#F1F4FB',
+                                primaryTextColor: '#1f2328',
+                                primaryBorderColor: '#3451b2',
+                                lineColor: '#5b6472',
+                                secondaryColor: '#F3F4F6',
+                                tertiaryColor: '#FCFCFD',
+                                fontFamily: '"EB Garamond", "Noto Serif SC", serif',
+                                fontSize: '18px',
+                                nodeBorder: '#3451b2',
+                                clusterBkg: '#F3F4F6',
+                                clusterBorder: '#cbd5e1',
+                                edgeLabelBackground: '#FCFCFD'
+                            },
+                            flowchart: {
+                                curve: 'basis',
+                                padding: 20,
+                                nodeSpacing: 50,
+                                rankSpacing: 50,
+                                htmlLabels: true
+                            }
+                        });
+                        var nodes = document.querySelectorAll('pre.mermaid');
+                        if (!nodes.length) {
+                            window.mermaidReady = true;
+                            return;
+                        }
+                        mermaid.run({ nodes: nodes }).then(function() {
+                            window.mermaidReady = true;
+                        }).catch(function(err) {
+                            console.warn('[MathJax2Image] Mermaid run failed', err);
+                            window.mermaidError = String(err);
+                        });
+                    } catch (e) {
+                        console.warn('[MathJax2Image] Mermaid init failed', e);
+                        window.mermaidError = String(e);
+                    }
+                };
+                s.onerror = tryNext;
+                document.head.appendChild(s);
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', tryNext);
+            } else {
+                tryNext();
+            }
+        })();
+    </script>
+
+    <!-- Reusable content lifecycle; engines stay loaded between compatible jobs. -->
+    <script>
+        window.__formatRenderCode = function() {
+            document.querySelectorAll('pre code').forEach(function(codeBlock) {
+                const pre = codeBlock.parentElement;
+                const language = /(?:^|\s)language-([A-Za-z0-9_-]+)/.exec(codeBlock.className);
+                if (language) pre.dataset.lang = language[1];
+                // 内容是转换器转义过的文本或 Pygments 输出（每行自行闭合标签），
+                // 按行切分 HTML 不会切断标签
+                const lines = codeBlock.innerHTML.split('\n');
+
+                // 移除最后的空行
+                if (lines[lines.length - 1] === '') {
+                    lines.pop();
+                }
+
+                // 清空 pre
+                pre.innerHTML = '';
+
+                // 为每行创建独立容器
+                lines.forEach(function(lineText, index) {
+                    const lineDiv = document.createElement('div');
+                    lineDiv.className = 'code-line';
+
+                    // 行号
+                    const lineNum = document.createElement('span');
+                    lineNum.className = 'line-num';
+                    lineNum.textContent = index + 1;
+
+                    // 代码内容
+                    const lineContent = document.createElement('span');
+                    lineContent.className = 'line-content';
+                    lineContent.innerHTML = lineText || ' ';
+
+                    lineDiv.appendChild(lineNum);
+                    lineDiv.appendChild(lineContent);
+                    pre.appendChild(lineDiv);
+                });
+            });
+        };
+        document.addEventListener('DOMContentLoaded', window.__formatRenderCode);
+        window.__clearRenderContent = function() {
+            if (window.MathJax && MathJax.typesetClear) MathJax.typesetClear();
+            document.querySelector('main.render-content').replaceChildren();
+        };
+        window.__replaceRenderContent = async function(content) {
+            window.__clearRenderContent();
+            window.__tikzFinished = 0;
+            window.__tikzFailed = 0;
+            window.__svgStats = [];
+            window.mermaidError = null;
+            window.mermaidReady = false;
+            window.mathJaxReady = false;
+            const main = document.querySelector('main.render-content');
+            main.innerHTML = content;
+            window.__formatRenderCode();
+            await window.__ensureEngines(main);
+            if (window.mathJaxRequired) {
+                MathJax.texReset();
+                await MathJax.typesetPromise([main]);
+            }
+            window.mathJaxReady = true;
+            const diagrams = main.querySelectorAll('pre.mermaid');
+            if (diagrams.length) await mermaid.run({nodes: diagrams});
+            window.mermaidReady = true;
+        };
+    </script>
+</body>
+</html>
