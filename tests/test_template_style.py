@@ -135,7 +135,7 @@ def _function_body(source, name):
         elif source[index] == "}":
             depth -= 1
             if depth == 0:
-                return source[start + 1:index]
+                return source[start + 1 : index]
     raise AssertionError(f"Unclosed function: {name}")
 
 
@@ -152,7 +152,7 @@ def _async_tasks(lifecycle_body):
             elif lifecycle_body[index] == "}":
                 depth -= 1
                 if depth == 0:
-                    tasks.append(lifecycle_body[start + 1:index])
+                    tasks.append(lifecycle_body[start + 1 : index])
                     offset = index + 1
                     break
         else:
@@ -195,12 +195,14 @@ def test_code_chrome_uses_readable_theme_colors(template):
         expected_title = expected_lines = "var(--muted-color)"
     assert _css_declarations(source, title_selector).get("color") == expected_title
     assert _css_declarations(source, ".line-num").get("color") == expected_lines
-    assert "lineNum.setAttribute('aria-hidden', 'true')" in _function_body(source, "__formatRenderCode")
+    assert "lineNum.setAttribute('aria-hidden', 'true')" in _function_body(
+        source, "__formatRenderCode"
+    )
 
 
 def test_default_code_block_matches_document_palette():
     source = _source(TEMPLATES["default"])
-    assert "--code-bg: #f7f8fc;" in source
+    assert "--code-bg: #f5f6f8;" in source
     assert "--code-accent: var(--accent-color);" in source
     assert "background: var(--code-header-bg);" in source
     assert "pre .nf, pre .fm, pre .nd { color: #8250df; }" in source

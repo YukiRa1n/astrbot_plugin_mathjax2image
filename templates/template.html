@@ -202,30 +202,27 @@
 
     <style>
         :root {
-            /* 学术排版 + 现代中性配色：近白底、深灰正文、靛蓝强调 */
+            /* Quiet editorial typography keeps formulas and prose in focus. */
             --bg-color: #FCFCFD;        /* 中性近白（可被配置覆盖） */
             --body-font-size: 36px;
             --h1-scale: 1.55;
             --h2-scale: 1.25;
             --h3-scale: 1.10;
             --line-height: 1.7;
-            --text-color: #1f2328;
-            --heading-color: #0f172a;
-            --muted-color: #5b6472;
-            --accent-color: #3451b2;    /* 靛蓝强调色 */
-            --accent-soft: rgba(52, 81, 178, 0.06);
-            --accent-line: rgba(52, 81, 178, 0.35);
-            /* 中性半透明色，任意浅色背景下都协调 */
-            --rule-color: rgba(15, 23, 42, 0.12);
-            --surface: rgba(15, 23, 42, 0.035);
-            --inline-code-bg: rgba(15, 23, 42, 0.06);
-            --inline-code-color: #b4235a;
+            --text-color: #30343b;
+            --heading-color: #171b23;
+            --muted-color: #626b78;
+            --accent-color: #3156a0;
+            --accent-line: rgba(49, 86, 160, 0.3);
+            --rule-color: rgba(23, 27, 35, 0.13);
+            --surface: rgba(23, 27, 35, 0.025);
+            --inline-code-bg: rgba(23, 27, 35, 0.045);
+            --inline-code-color: #334766;
 
-            /* Code uses the same paper and indigo palette as the document. */
-            --code-bg: #f7f8fc;
-            --code-header-bg: rgba(52, 81, 178, 0.055);
-            --code-gutter-bg: rgba(52, 81, 178, 0.025);
-            --code-border: rgba(52, 81, 178, 0.14);
+            /* Neutral code surfaces do not compete with syntax colors. */
+            --code-bg: #f5f6f8;
+            --code-header-bg: transparent;
+            --code-border: rgba(23, 27, 35, 0.1);
             --code-text: #243047;
             --code-muted: var(--muted-color);
             --code-line-num: #687386;
@@ -233,6 +230,7 @@
 
             /* LaTeX 风格字体栈：英文优先 EB Garamond，中文后备 Noto Serif SC */
             --font-main: "EB Garamond", "Noto Serif SC", "Songti SC", serif;
+            --font-heading: "Noto Serif SC", "Songti SC", serif;
             /* Reuse the loaded CJK font when the server lacks a Chinese monospace font. */
             --font-code: "Fira Code", "Fira Mono", "Consolas", "Courier New", "Noto Serif SC", monospace;
         }
@@ -250,19 +248,20 @@
             color: var(--text-color);
             font-family: var(--font-main);
             line-height: var(--line-height);
-            padding: 60px 72px;
+            padding: 68px 76px;
             font-size: var(--body-font-size);
             -webkit-font-smoothing: antialiased;
             text-rendering: optimizeLegibility;
         }
 
         h1, h2, h3, h4, h5, h6 {
+            font-family: var(--font-heading);
             font-weight: 600;
             color: var(--heading-color);
-            line-height: 1.3;
-            letter-spacing: 0.01em;
-            margin-top: 1.3em;
-            margin-bottom: 0.55em;
+            line-height: 1.4;
+            letter-spacing: -0.015em;
+            margin-top: 1.55em;
+            margin-bottom: 0.65em;
         }
 
         .render-content {
@@ -286,35 +285,25 @@
             margin-bottom: 0;
         }
 
-        /* 一级标题：细分隔线 + 强调色短条 */
+        /* Title hierarchy comes from type and space rather than ornaments. */
         h1 {
-            position: relative;
             font-size: calc(1em * var(--h1-scale));
-            padding-bottom: 0.4em;
-            border-bottom: 1px solid var(--rule-color);
+            line-height: 1.3;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.65em;
         }
 
-        h1::after {
-            content: "";
-            position: absolute;
-            left: 0;
-            bottom: -2px;
-            width: 2.2em;
-            height: 3px;
-            border-radius: 3px;
-            background: var(--accent-color);
+        h1 + p {
+            color: var(--muted-color);
+            margin-bottom: 1.15em;
         }
 
-        /* 二级标题：左侧强调色竖条 */
         h2 {
             font-size: calc(1em * var(--h2-scale));
-            padding-left: 0.55em;
-            border-left: 0.14em solid var(--accent-color);
         }
 
         h3 {
             font-size: calc(1em * var(--h3-scale));
-            color: var(--accent-color);
         }
 
         h4, h5, h6 {
@@ -322,11 +311,11 @@
         }
 
         p {
-            letter-spacing: 0.02em;
+            letter-spacing: 0.005em;
             line-height: var(--line-height);
             /* 左对齐：中文与行内公式、代码混排时，两端对齐会把字距硬撑开 */
             text-align: left;
-            margin: 0 0 0.9em 0;
+            margin: 0 0 0.85em;
         }
 
         hr {
@@ -338,7 +327,7 @@
 
         /* --- 列表 --- */
         ul, ol {
-            padding-left: 1.6em;
+            padding-left: 1.35em;
             margin: 0.5em 0 0.9em;
         }
 
@@ -348,7 +337,7 @@
         }
 
         li::marker {
-            color: var(--accent-color);
+            color: var(--muted-color);
         }
 
         ol > li::marker {
@@ -371,33 +360,30 @@
             margin: 0.3em 0;
         }
 
-        /* --- 引用：强调色竖线 + 淡蓝底（中文不做伪斜体） --- */
+        /* A single rule separates quotations without adding another card. */
         blockquote {
-            margin: 1em 0;
-            padding: 0.6em 1em;
-            border-left: 0.14em solid var(--accent-color);
-            border-radius: 0 10px 10px 0;
-            background: var(--accent-soft);
-            color: #334155;
+            margin: 1.1em 0;
+            padding: 0.05em 0 0.05em 0.85em;
+            border-left: 2px solid var(--accent-line);
+            color: var(--muted-color);
         }
 
         blockquote p {
             margin: 0.3em 0;
         }
 
-        /* Quiet code cards share the document's academic visual language. */
+        /* Code labels and line numbers stay subordinate to the source. */
         pre {
             --gutter-width: 3em;
             position: relative;
             background: var(--code-bg);
             color: var(--code-text);
             border: 1px solid var(--code-border);
-            border-radius: 10px;
-            box-shadow: 0 3px 12px rgba(52, 81, 178, 0.04);
+            border-radius: 8px;
             padding: 0;
             font-family: var(--font-code);
-            font-size: 0.6em;
-            margin: 1.2em 0;
+            font-size: 0.65em;
+            margin: 1em 0;
             overflow: hidden;
             text-align: left;
         }
@@ -405,46 +391,20 @@
         .code-header {
             display: flex;
             align-items: center;
-            gap: 0.65em;
-            padding: 0.6em 1.35em;
+            padding: 0.65em 1.25em;
             background: var(--code-header-bg);
             border-bottom: 1px solid var(--code-border);
             color: var(--code-muted);
-            font-size: 0.75em;
+            font-size: 0.78em;
             font-weight: 500;
             line-height: 1.5;
-            letter-spacing: 0.04em;
-            text-transform: none;
-        }
-
-        .code-header::before {
-            content: "";
-            width: 0.55em;
-            height: 0.55em;
-            border-radius: 50%;
-            background: var(--code-accent);
-            opacity: 1;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
 
         .code-body {
             position: relative;
-            padding: 0.8em 0;
-            background: linear-gradient(
-                to right,
-                var(--code-gutter-bg) 0,
-                var(--code-gutter-bg) var(--gutter-width),
-                transparent var(--gutter-width)
-            );
-        }
-
-        /* Extend the gutter rule through the vertical padding. */
-        .code-body::before {
-            content: "";
-            position: absolute;
-            top: 0;
-            bottom: 0;
-            left: var(--gutter-width);
-            border-left: 1px solid var(--code-border);
+            padding: 0.85em 0;
         }
 
         .code-line {
@@ -467,7 +427,7 @@
         .line-content {
             flex: 1;
             min-width: 0;
-            padding-left: 1em;
+            padding-left: 0.5em;
             padding-right: 1.2em;
             line-height: 1.65;
             white-space: pre-wrap;
@@ -515,32 +475,32 @@
             font-size: 1em;
         }
 
-        /* --- 表格：圆角卡片，表头浅底 --- */
+        /* Open table edges follow the document's typographic grid. */
         table {
-            border-collapse: separate;
-            border-spacing: 0;
+            border-collapse: collapse;
             width: 100%;
-            margin: 1.1em 0;
-            font-size: 0.88em;
-            border: 1px solid var(--rule-color);
-            border-radius: 14px;
-            overflow: hidden;
+            margin: 1em 0 1.25em;
+            font-size: 0.85em;
         }
 
         th, td {
-            padding: 0.5em 0.9em;
+            padding: 0.6em 0.65em;
             text-align: left;
         }
 
         thead th {
             font-weight: 600;
             color: var(--heading-color);
-            background: var(--surface);
+            background: transparent;
             border-bottom: 1px solid var(--rule-color);
         }
 
         tbody tr + tr td {
             border-top: 1px solid var(--rule-color);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: 1px solid var(--rule-color);
         }
 
         /* --- 链接 --- */
@@ -562,11 +522,11 @@
 
         /* --- MathJax 公式样式 --- */
         .MathJax {
-            font-size: 1.1em !important;
+            font-size: 1.04em !important;
         }
 
         mjx-container[jax="CHTML"][display="true"] {
-            margin: 0.75em 0 !important;
+            margin: 1em 0 !important;
         }
 
         /* MathJax 中文文本字体对齐正文 */

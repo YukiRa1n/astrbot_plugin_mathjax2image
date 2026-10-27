@@ -15,6 +15,7 @@ async def main():
         "--names",
         nargs="+",
         default=[
+            "editorial",
             "math",
             "chemistry",
             "physics",
