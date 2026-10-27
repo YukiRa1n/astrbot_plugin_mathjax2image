@@ -954,6 +954,84 @@ async def test_llm_send_removes_artifact_after_embedding(tmp_path, monkeypatch):
     assert handler._last_rendered_image is None
 
 
+@pytest.mark.asyncio
+async def test_llm_send_restores_pending_after_platform_rejection(tmp_path, monkeypatch):
+    """A rejected send must leave the same artifact available for retry."""
+    import time
+
+    from astrbot_plugin_mathjax2image.handlers import llm_tool_handler as module
+    from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+
+    monkeypatch.setattr(module.Comp, "Image", MagicMock(), raising=False)
+    image_path = tmp_path / "pending-rejected.png"
+    image_path.write_bytes(b"pending-image")
+    timestamp = time.time()
+    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler._pending_images = {"session": (image_path, timestamp)}
+    handler._last_rendered_image = image_path
+    handler._context.send_message = AsyncMock(side_effect=[False, True])
+    handler._get_session_key = MagicMock(return_value="session")
+    event = MagicMock(unified_msg_origin="session")
+
+    try:
+        first_result = await handler.handle_send_image(event)
+
+        assert "失败" in first_result
+        assert handler._pending_images == {"session": (image_path, timestamp)}
+        assert image_path.read_bytes() == b"pending-image"
+        assert handler._last_rendered_image == image_path
+
+        second_result = await handler.handle_send_image(event)
+
+        assert "已发送" in second_result
+        assert "session" not in handler._pending_images
+        assert not image_path.exists()
+        assert handler._last_rendered_image is None
+        assert handler._context.send_message.await_count == 2
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_llm_send_restores_pending_after_send_exception(tmp_path, monkeypatch):
+    """An exception during delivery must leave the artifact available for retry."""
+    import time
+
+    from astrbot_plugin_mathjax2image.handlers import llm_tool_handler as module
+    from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+
+    monkeypatch.setattr(module.Comp, "Image", MagicMock(), raising=False)
+    image_path = tmp_path / "pending-exception.png"
+    image_path.write_bytes(b"pending-image")
+    timestamp = time.time()
+    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler._pending_images = {"session": (image_path, timestamp)}
+    handler._last_rendered_image = image_path
+    handler._context.send_message = AsyncMock(
+        side_effect=[RuntimeError("platform unavailable"), True]
+    )
+    handler._get_session_key = MagicMock(return_value="session")
+    event = MagicMock(unified_msg_origin="session")
+
+    try:
+        first_result = await handler.handle_send_image(event)
+
+        assert "platform unavailable" in first_result
+        assert handler._pending_images == {"session": (image_path, timestamp)}
+        assert image_path.read_bytes() == b"pending-image"
+        assert handler._last_rendered_image == image_path
+
+        second_result = await handler.handle_send_image(event)
+
+        assert "已发送" in second_result
+        assert "session" not in handler._pending_images
+        assert not image_path.exists()
+        assert handler._last_rendered_image is None
+        assert handler._context.send_message.await_count == 2
+    finally:
+        await handler.close()
+
+
 # ===== Regression tests for review fixes =====
 
 

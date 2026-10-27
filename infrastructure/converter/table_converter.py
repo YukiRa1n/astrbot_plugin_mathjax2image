@@ -5,7 +5,7 @@ LaTeX表格转换器
 
 import re
 
-from ...utils.linear_scan import find_pairs, substitute_spans
+from ...utils.linear_scan import find_pairs, scan_fenced_code, substitute_spans
 
 #: 参数（`\begin{table}[...]` 选项、`\caption{...}`）允许的最大长度。
 #: 限长后字符类不会在缺少闭合符时回扫到行尾：100 KB 全是
@@ -26,9 +26,53 @@ class TableConverter:
 
     _TABULAR_OPEN = "\\begin{tabular}"
     _TABULAR_CLOSE = "\\end{tabular}"
+    _PROTECTED_ENVS = (
+        ("\\begin{tikzpicture}", "\\end{tikzpicture}"),
+        ("\\begin{tikzcd}", "\\end{tikzcd}"),
+        ('<div class="tikz-diagram">', "</div>"),
+    )
 
     def convert(self, text: str) -> str:
-        """将LaTeX表格转换为Markdown格式"""
+        """将LaTeX表格转换为Markdown格式（跳过代码围栏与TikZ环境）"""
+        if (
+            self._TABULAR_OPEN not in text
+            and "\\begin{table}" not in text
+            and "\\end{table}" not in text
+            and "\\centering" not in text
+            and "\\caption{" not in text
+        ):
+            return text
+        protected = self._protected_spans(text)
+        if not protected:
+            return self._convert_segment(text)
+        pieces: list[str] = []
+        position = 0
+        for start, end in protected:
+            pieces.append(self._convert_segment(text[position:start]))
+            pieces.append(text[start:end])
+            position = end
+        pieces.append(self._convert_segment(text[position:]))
+        return "".join(pieces)
+
+    @classmethod
+    def _protected_spans(cls, text: str) -> list[tuple[int, int]]:
+        spans: list[tuple[int, int]] = list(scan_fenced_code(text))
+        for open_token, close_token in cls._PROTECTED_ENVS:
+            if open_token in text:
+                spans.extend(find_pairs(text, open_token, close_token))
+        if not spans:
+            return spans
+        spans.sort()
+        merged: list[tuple[int, int]] = []
+        for start, end in spans:
+            if merged and start < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _convert_segment(self, text: str) -> str:
+        """转换非代码、非TikZ区间内的LaTeX表格"""
         # 移除table环境包装（模式已限长，见 _MAX_ARGUMENT）
         text = _TABLE_BEGIN.sub("", text)
         text = _TABLE_END.sub("", text)

@@ -6,7 +6,7 @@ LaTeX预处理器
 import re
 from typing import TYPE_CHECKING
 
-from ...utils.linear_scan import find_pairs, scan_fenced_code
+from ...utils.linear_scan import find_pairs, scan_fenced_code, scan_math_blocks
 
 if TYPE_CHECKING:
     from .list_converter import ListConverter
@@ -40,6 +40,8 @@ class LatexPreprocessor:
 
     def preprocess(self, text: str) -> str:
         """预处理LaTeX文本"""
+        if "\r" in text:
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
         # 0. 大模型常把要画的图包进 ```tikz 代码块；按意图渲染成图
         text = self._unwrap_tikz_fences(text)
         # 1. 转换LaTeX文本命令为Markdown
@@ -63,23 +65,9 @@ class LatexPreprocessor:
 
         return text
 
-    #: Ordered ``(open, close, allow_newline)`` protected ranges. Scanned in one
-    #: linear pass instead of a lazy-regex alternation: an unmatched opening
-    #: delimiter used to cost O(n) at every occurrence, so a message made only
-    #: of ``\begin{tikzpicture}`` (or backticks) burned O(n^2) and froze the loop.
-    _PROTECTED_PAIRS = (
-        ("$$", "$$", True),
-        ("\\[", "\\]", True),
-        ("\\(", "\\)", True),
-        ("$", "$", False),
-        ("\\begin{tikzpicture}", "\\end{tikzpicture}", True),
-        ("\\begin{tikzcd}", "\\end{tikzcd}", True),
-        ("\\begin{align*}", "\\end{align*}", True),
-        ("\\begin{align}", "\\end{align}", True),
-        ("\\begin{equation*}", "\\end{equation*}", True),
-        ("\\begin{equation}", "\\end{equation}", True),
-        ("\\begin{gather*}", "\\end{gather*}", True),
-        ("\\begin{gather}", "\\end{gather}", True),
+    _TIKZ_ENVIRONMENTS = (
+        ("\\begin{tikzpicture}", "\\end{tikzpicture}"),
+        ("\\begin{tikzcd}", "\\end{tikzcd}"),
     )
     _MARKER_PAIRS = (("\\[", "\\]"), ("\\(", "\\)"))
     _TEXT_COMMAND = re.compile(r"\\(textbf|textit|emph)\{([^{}]*)\}")
@@ -87,10 +75,10 @@ class LatexPreprocessor:
     def _protected_ranges(self, text: str) -> list[tuple[int, int]]:
         """Linear scan of protected (non-transformable) ranges."""
         spans: list[tuple[int, int]] = list(scan_fenced_code(text))
-        for open_token, close_token, allow_newline in self._PROTECTED_PAIRS:
-            spans.extend(
-                find_pairs(text, open_token, close_token, allow_newline=allow_newline)
-            )
+        spans.extend(scan_math_blocks(text))
+        for open_token, close_token in self._TIKZ_ENVIRONMENTS:
+            if open_token in text:
+                spans.extend(find_pairs(text, open_token, close_token))
         spans.sort()
         merged: list[tuple[int, int]] = []
         for start, end in spans:

@@ -210,15 +210,40 @@ def _at_line_start(text: str, start: int) -> bool:
     return index < 0 or text[index] == "\n"
 
 
+def _is_closing_fence_tail(text: str, end: int) -> bool:
+    """闭合围栏行尾只允许空白字符直到换行或文本结尾（CommonMark）。"""
+    length = len(text)
+    index = end
+    while index < length and text[index] in (" ", "\t"):
+        index += 1
+    return index == length or text[index] == "\n"
+
+
+def _is_opening_fence_line(
+    text: str, start: int, run_length: int, char: str
+) -> bool:
+    """开启围栏所在行必须有换行，且反引号围栏的 info string 不得再含反引号。"""
+    after = start + run_length
+    line_end = text.find("\n", after)
+    if line_end == -1:
+        return False
+    if char == "`" and "`" in text[after:line_end]:
+        return False
+    return True
+
+
 def scan_fenced_code(text: str) -> list[tuple[int, int]]:
     """Locate fenced code blocks and inline code spans in a single pass.
 
-    Two CommonMark rules the first version missed are applied here:
+    CommonMark rules applied here:
 
     * a fence marker must sit at the start of a line (allowing indentation), so
       a run in the middle of prose is ordinary text, not a fence;
-    * the closing run must use the same character and be at least as long as the
-      opening one.
+    * a backtick opening fence's info string may not contain backticks (so a
+      line-start inline span like ```` ```a``` ```` is not mistaken for a fence);
+    * the closing run must use the same character, be at least as long as the
+      opening one, and have only optional spaces/tabs before the line end;
+    * inline code spans pair backtick runs of exact equal length on the same line.
 
     Without them, a document that merely *mentions* a fence (「见 ```mermaid
     代码块」) mis-paired every later fence: code samples were rendered as prose
@@ -241,18 +266,23 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
     #: delimiter run on the same line: re-finding the newline per run made a
     #: single long line of inline spans quadratic.
     line_limit = -1
+    no_closer_mask = 0
     runs = [
         (match.start(), match.end() - match.start(), match.group(0)[0])
         for match in _DELIMITER_RUN.finditer(text)
     ]
-    # 每个字符的“行首 run 长度后缀最大值”：判断“后面没有够长的闭合符”是 O(1)，
+    # 每个字符的“行首闭合 run 长度后缀最大值”：判断“后面没有够长的闭合符”是 O(1)，
     # 否则每个未闭合的开启符都要扫到文末，又变回 O(n^2)。
     longest_after = [0] * len(runs)
     longest = {"`": 0, "~": 0}
     for index in range(len(runs) - 1, -1, -1):
         start, run_length, char = runs[index]
         longest_after[index] = longest[char]
-        if run_length >= 3 and _at_line_start(text, start):
+        if (
+            run_length >= 3
+            and _at_line_start(text, start)
+            and _is_closing_fence_tail(text, start + run_length)
+        ):
             longest[char] = max(longest[char], run_length)
 
     for index, (start, run_length, char) in enumerate(runs):
@@ -263,6 +293,7 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
             run_length >= 3
             and longest_after[index] >= run_length
             and _at_line_start(text, start)
+            and _is_opening_fence_line(text, start, run_length, char)
         ):
             for candidate in range(index + 1, len(runs)):
                 close_start, close_length, close_char = runs[candidate]
@@ -270,6 +301,7 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
                     close_char == char
                     and close_length >= run_length
                     and _at_line_start(text, close_start)
+                    and _is_closing_fence_tail(text, close_start + close_length)
                 ):
                     end = close_start + close_length
                     spans.append((start, end))
@@ -277,24 +309,27 @@ def scan_fenced_code(text: str) -> list[tuple[int, int]]:
                     break
             continue  # inner delimiters are part of the block body
 
-        if char == "`":
-            # Inline spans: `+<no newline>`+, tick run bounded to stay O(1).
+        if char == "`" and run_length <= INLINE_TICKS_MAX:
+            # Inline spans: exact-length backtick run on the same line, bounded
+            # by INLINE_TICKS_MAX and per-line missing-length mask to stay O(n).
             if line_limit < start:
                 found = text.find("\n", start)
                 line_limit = length if found == -1 else found
-            limit = line_limit
-            ticks = min(run_length, INLINE_TICKS_MAX)
-            position = start
-            while ticks and position < start + run_length:
-                token = char * ticks
-                close = text.find(token, position + ticks)
-                if close != -1 and close + ticks <= limit:
-                    end = close + ticks
-                    spans.append((position, end))
-                    position = end
-                    consumed_until = end
-                else:
+                no_closer_mask = 0
+            if no_closer_mask & (1 << run_length):
+                continue
+            for candidate in range(index + 1, len(runs)):
+                close_start, close_length, close_char = runs[candidate]
+                if close_start >= line_limit:
+                    no_closer_mask |= 1 << run_length
                     break
+                if close_char == "`" and close_length == run_length:
+                    end = close_start + close_length
+                    spans.append((start, end))
+                    consumed_until = end
+                    break
+            else:
+                no_closer_mask |= 1 << run_length
     return spans
 
 

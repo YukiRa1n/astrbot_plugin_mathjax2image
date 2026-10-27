@@ -79,6 +79,15 @@ class PageRenderer:
             "cdn.jsdelivr.net",
         }
     )
+    _ALLOWED_REMOTE_PREFIXES = (
+        "https://astrbot-plugins.oss-cn-hangzhou.aliyuncs.com/astrbot-plugins/fonts/",
+        "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/",
+        "https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/",
+        "https://cdn.jsdelivr.net/npm/@fontsource/",
+        "https://cdn.jsdelivr.net/npm/mermaid@10.9.3/",
+        "https://cdn.jsdelivr.net/gh/tw93/Kami@6b399e93a5dfce0eaa7e3aabcc04cc260f01b8f6/assets/fonts/",
+        "https://unpkg.com/mermaid@10.9.3/",
+    )
 
     def __init__(
         self,
@@ -499,10 +508,7 @@ class PageRenderer:
             if parsed.scheme in {"about", "data", "blob"}:
                 await route.continue_()
                 return
-            if (
-                parsed.scheme == "https"
-                and parsed.hostname in self._ALLOWED_REMOTE_HOSTS
-            ):
+            if self._is_allowed_remote_url(route.request.url):
                 # Routing disables Chromium's HTTP cache. Cache only static GET
                 # assets, with a byte budget and TTL, across isolated pages.
                 if self._is_cacheable_asset(
@@ -523,13 +529,23 @@ class PageRenderer:
         self._watch_asset_downloads(page.context)
 
     @classmethod
+    def _is_allowed_remote_url(cls, url: str) -> bool:
+        """Whether ``url`` is an HTTPS resource under an allowlisted CDN prefix."""
+        parsed = urlparse(url)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname in cls._ALLOWED_REMOTE_HOSTS
+            and ".." not in parsed.path.split("/")
+            and url.startswith(cls._ALLOWED_REMOTE_PREFIXES)
+        )
+
+    @classmethod
     def _is_cacheable_asset(cls, request) -> bool:
         """Whether a request is an allowlisted static GET asset worth caching."""
         parsed = urlparse(request.url)
         return (
             request.method == "GET"
-            and parsed.scheme == "https"
-            and parsed.hostname in cls._ALLOWED_REMOTE_HOSTS
+            and cls._is_allowed_remote_url(request.url)
             and not parsed.query
             and parsed.path.endswith(_CACHEABLE_SUFFIXES)
         )

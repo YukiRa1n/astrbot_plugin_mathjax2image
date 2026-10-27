@@ -151,7 +151,7 @@ TikZ 与 MathJax 使用不同引擎。下面是两个 TikZ 后端共用的加载
 
 | 参数 | 作用 |
 | --- | --- |
-| `background_color` | 背景色，默认 `#FDFBF0` |
+| `background_color` | 背景色，默认 `#FCFCFD` |
 | `math_system_prompt` / `article_system_prompt` | `/math` 和 `/art` 的生成提示词 |
 | `tikz_timeout` / `mathjax_timeout` / `mermaid_timeout` | 各引擎渲染超时，单位毫秒 |
 | `fail_on_mathjax_timeout` | MathJax 超时是否拒绝出图 |

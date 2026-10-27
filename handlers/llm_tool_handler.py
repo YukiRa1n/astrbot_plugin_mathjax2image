@@ -177,16 +177,18 @@ class LLMToolHandler:
             if not entry:
                 self._schedule_pending_image_cleanup()
                 return "没有可发送的图片,请先使用 render_math 渲染内容"
-            image_path, _ = self._pending_images.pop(session_key)
+            image_path, timestamp = self._pending_images.pop(session_key)
             self._schedule_pending_image_cleanup()
 
         if not image_path.exists():
-            self._last_rendered_image = None
+            if getattr(self, "_last_rendered_image", None) == image_path:
+                self._last_rendered_image = None
             return f"图片文件不存在: {image_path}"
 
+        delivered = False
         try:
             image_name = image_path.name
-            image_bytes = await consume_artifact(image_path)
+            image_bytes = await asyncio.to_thread(image_path.read_bytes)
             # 读盘期间可能开始卸载；产物已回收，不再向平台投递
             if getattr(self, "_closed", False):
                 return "插件已卸载，未发送图片"
@@ -197,13 +199,30 @@ class LLMToolHandler:
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
                 return "发送图片失败: 平台不可用或已断开"
+            delivered = True
             return IMAGE_SENT_RESULT
         except Exception as e:
             logger.error(f"[MathJax2Image] 发送图片失败: {e}")
             return f"发送图片失败: {str(e)}"
         finally:
-            remove_artifact(image_path)
-            self._last_rendered_image = None
+            async with self._pending_lock:
+                if delivered:
+                    remove_artifact(image_path)
+                    if getattr(self, "_last_rendered_image", None) == image_path:
+                        self._last_rendered_image = None
+                elif (
+                    not getattr(self, "_closed", False)
+                    and image_path.is_file()
+                    and session_key not in self._pending_images
+                ):
+                    self._pending_images[session_key] = (image_path, timestamp)
+                    while len(self._pending_images) > self._MAX_PENDING_IMAGES:
+                        self._evict_oldest_pending_image()
+                else:
+                    remove_artifact(image_path)
+                    if getattr(self, "_last_rendered_image", None) == image_path:
+                        self._last_rendered_image = None
+                self._schedule_pending_image_cleanup()
 
     async def _send_image_direct(
         self, event: AstrMessageEvent, image_path: Path

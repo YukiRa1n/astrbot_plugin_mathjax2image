@@ -16,6 +16,7 @@ test_*.png
 # IDE
 .vscode/
 .idea/
+.agent/
 
 # 运行时数据
 data/

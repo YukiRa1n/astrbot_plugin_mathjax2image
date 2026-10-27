@@ -343,11 +343,14 @@ class MarkdownConverter:
 
     def convert_to_html(self, md_text: str, bg_color: str = DEFAULT_BG_COLOR) -> str:
         """将Markdown转换为完整HTML"""
+        if "\r" in md_text:
+            md_text = md_text.replace("\r\n", "\n").replace("\r", "\n")
         # 预处理前先做退化输入检查：纯标记字符的长文本会让 Python-Markdown
         # 自身的扫描器退化成超线性；大量未配对的 `[` 同样会让它的链接/引用
         # 扫描器反复回扫（100 KB 实测 100 秒以上）。两个判据都只在 markdown
         # 真正会处理的部分上计算（围栏/行内代码已被换成占位符）。
-        checked = _mask_code_spans(md_text, scan_fenced_code(md_text))
+        code_spans = scan_fenced_code(md_text)
+        checked = _mask_code_spans(md_text, code_spans)
         if self._is_degenerate_markup(checked) or (
             bracket_rescan_cost(checked, _BRACKET_RESCAN_BUDGET)
             > _BRACKET_RESCAN_BUDGET
@@ -356,15 +359,14 @@ class MarkdownConverter:
                 "内容几乎全为 Markdown/LaTeX 标记字符，或含大量未配对的 '['，"
                 "无法渲染；请提供正文文本"
             )
-        # 预处理
-        md_text = self._fix_tikz_comments(md_text)
-        md_text = self._preprocess_markdown(md_text)
-
-        # 保护插件内部生成的HTML、数学公式和代码块。
+        # 保护代码块、插件内部生成的HTML和数学公式。
+        # 先提取代码块再做预处理，避免代码块/行内代码里的 "\n"、标题或列表被改写。
         # token 让占位符在本次转换内唯一：用户正文里的同名标记无法顶替真块。
         token = uuid.uuid4().hex
-        md_text, code_blocks = self._extract_code_blocks(md_text, token)
+        md_text, code_blocks = self._extract_code_blocks(md_text, token, code_spans)
+        md_text = self._fix_tikz_comments(md_text)
         md_text, trusted_html_blocks = self._extract_trusted_html_blocks(md_text, token)
+        md_text = self._preprocess_markdown(md_text)
         declared_packages = set()
 
         ignored_packages = set()
@@ -504,24 +506,53 @@ class MarkdownConverter:
 
     def _preprocess_markdown(self, text: str) -> str:
         """预处理Markdown，自动修复常见格式问题"""
-        # 转义字符处理：\\n -> 真实换行（保护LaTeX命令）
-        text = re.sub(r"\\n(?![a-zA-Z])", "\n", text)
+        # 转义字符处理：\\n -> 真实换行（保护LaTeX命令与代码区间）
+        if "\\n" in text:
+            code_spans = (
+                scan_fenced_code(text) if ("`" in text or "~" in text) else []
+            )
+            if code_spans:
+                pieces: list[str] = []
+                cursor = 0
+                for start, end in code_spans:
+                    pieces.append(
+                        re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:start])
+                    )
+                    pieces.append(text[start:end])
+                    cursor = end
+                pieces.append(re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:]))
+                text = "".join(pieces)
+            else:
+                text = re.sub(r"\\n(?![a-zA-Z])", "\n", text)
 
         lines = text.split("\n")
         result = []
-        in_code_block = False
+        open_fence: tuple[str, int] | None = None
         # 当前列表中各层级的原始缩进（空格数），用于把 2/3 空格缩进归一为 4 空格
         list_indents: list[int] = []
 
         for line in lines:
             stripped = line.strip()
 
-            if stripped.startswith("```") or stripped.startswith("~~~"):
-                in_code_block = not in_code_block
-                result.append(line)
-                continue
-
-            if in_code_block:
+            if open_fence is None:
+                fence_match = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+                if fence_match and (
+                    fence_match.group(1)[0] == "~"
+                    or "`" not in fence_match.group(2)
+                ):
+                    open_fence = (
+                        fence_match.group(1)[0],
+                        len(fence_match.group(1)),
+                    )
+                    result.append(line)
+                    continue
+            else:
+                fence_char, fence_len = open_fence
+                if (
+                    len(stripped) >= fence_len
+                    and stripped == fence_char * len(stripped)
+                ):
+                    open_fence = None
                 result.append(line)
                 continue
 
@@ -575,7 +606,12 @@ class MarkdownConverter:
 
         return substitute_spans(text, scan_math_blocks(text), substitute), blocks
 
-    def _extract_code_blocks(self, text: str, token: str) -> tuple[str, list[str]]:
+    def _extract_code_blocks(
+        self,
+        text: str,
+        token: str,
+        spans: list[tuple[int, int]] | None = None,
+    ) -> tuple[str, list[str]]:
         """提取代码块（线性扫描，避免未闭合定界符触发二次复杂度）"""
         blocks = []
 
@@ -583,7 +619,9 @@ class MarkdownConverter:
             blocks.append(block)
             return _block_placeholder(token, "CODE", index)
 
-        return substitute_spans(text, scan_fenced_code(text), substitute), blocks
+        if spans is None:
+            spans = scan_fenced_code(text)
+        return substitute_spans(text, spans, substitute), blocks
 
     def _extract_trusted_html_blocks(
         self, text: str, token: str
@@ -767,9 +805,7 @@ class MarkdownConverter:
             with open(self._template_path, encoding="utf-8") as f:
                 self._template_cache = f.read()
 
-        safe_bg_color = (
-            bg_color if BG_COLOR_PATTERN.fullmatch(bg_color) else DEFAULT_BG_COLOR
-        )
+        safe_bg_color = resolve_bg_color(bg_color)
         template = self._template_cache
         for name, value in self._typography.items():
             variable = "--" + name.replace("_", "-")
