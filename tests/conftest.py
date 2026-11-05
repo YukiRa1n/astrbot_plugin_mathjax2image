@@ -67,11 +67,12 @@ def render_engine_factory(tmp_path, monkeypatch):
         lambda _name: tmp_path,
     )
 
-    def create(**settings):
+    def create(*, real_converters=False, **settings):
         engine = RenderOrchestrator(Path(__file__).parents[1], **settings)
         engine._dependency_installer.check_and_install = AsyncMock(return_value=True)
-        engine._latex_preprocessor.preprocess = lambda content: content
-        engine._markdown_converter.convert_to_html = lambda content, _bg: content
+        if not real_converters:
+            engine._latex_preprocessor.preprocess = lambda content: content
+            engine._markdown_converter.convert_to_html = lambda content, _bg: content
         return engine
 
     return create

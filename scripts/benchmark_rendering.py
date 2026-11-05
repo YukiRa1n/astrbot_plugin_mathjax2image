@@ -96,12 +96,14 @@ $$a\xmapsto{f}b \qquad \bbox[5px,border:1px solid gray]{\boldsymbol{x}}$$""",
         for name in args.cases:
             samples = []
             state = {}
+            document_starts = []
             original_screenshot = renderer._take_screenshot
 
             async def capture(page, output):
                 nonlocal state
                 await original_screenshot(page, output)
                 state = await page.evaluate("""() => ({
+                    documentStart: performance.timeOrigin,
                     math: document.querySelectorAll('mjx-container').length,
                     errors: Array.from(document.querySelectorAll('mjx-merror')).map(n => n.textContent),
                     undefined: Array.from(document.querySelectorAll('[data-mjx-error]')).map(n => n.textContent),
@@ -109,16 +111,17 @@ $$a\xmapsto{f}b \qquad \bbox[5px,border:1px solid gray]{\boldsymbol{x}}$$""",
                     tikz: document.querySelectorAll('.tikz-diagram svg').length
                 })""")
 
+                document_starts.append(state.pop("documentStart"))
+
             renderer._take_screenshot = capture
             try:
                 for index in range(max(1, args.runs) + 1):
                     output = args.output / f"{name}-{index}.png"
                     started = time.perf_counter()
-                    html = converter.convert_to_html(
-                        preprocessor.preprocess(cases[name])
-                    )
+                    source = cases[name]
                     if args.unique:
-                        html += f"<!-- sample {index} -->"
+                        source += f"\n\nSample {index}."
+                    html = converter.convert_to_html(preprocessor.preprocess(source))
                     await renderer.render_to_image(html, output)
                     samples.append(round((time.perf_counter() - started) * 1000, 2))
                     print(f"{name} {index}: {samples[-1]} ms", flush=True)
@@ -131,6 +134,8 @@ $$a\xmapsto{f}b \qquad \bbox[5px,border:1px solid gray]{\boldsymbol{x}}$$""",
                     "dimensions": dimensions,
                     "bytes": output.stat().st_size,
                     "state": state,
+                    "screenshots": len(document_starts),
+                    "documents_loaded": len(set(document_starts)),
                 }
             except Exception as exc:
                 results[name] = {"error": str(exc), "samples_ms": samples}
