@@ -93,7 +93,7 @@ async def test_failed_concurrent_images_share_one_attempt_and_later_retry(tmp_pa
 
 @pytest.mark.asyncio
 async def test_tikz_queue_leaves_capacity_for_plain_content(render_engine_factory):
-    engine = render_engine_factory()
+    engine = render_engine_factory(real_converters=True)
     renderer = engine._page_renderer
     entered, finish = asyncio.Event(), asyncio.Event()
     queued = asyncio.Event()
@@ -107,20 +107,20 @@ async def test_tikz_queue_leaves_capacity_for_plain_content(render_engine_factor
     renderer._tikz_slots.acquire = observed_acquire
 
     async def render(html_path, output):
-        if 'type="text/tikz"' in html_path.read_text():
+        if '<script type="text/tikz"' in html_path.read_text(encoding="utf-8"):
             entered.set()
             await finish.wait()
         output.write_bytes(html_path.read_bytes())
         return True
 
     renderer._do_render = AsyncMock(side_effect=render)
-    first = asyncio.create_task(engine.render('<script type="text/tikz">one</script>'))
+    first = asyncio.create_task(engine.render(_PLAIN_PICTURE))
     await entered.wait()
-    second = asyncio.create_task(engine.render('<script type="text/tikz">two</script>'))
+    second = asyncio.create_task(engine.render(_PLAIN_PICTURE.replace("1,1", "2,2")))
     try:
         await asyncio.wait_for(queued.wait(), 2)
         output = await asyncio.wait_for(engine.render("plain content"), timeout=1)
-        assert output.read_text() == "plain content"
+        assert "<p>plain content</p>" in output.read_text(encoding="utf-8")
         assert not first.done() and not second.done()
     finally:
         finish.set()
@@ -223,5 +223,3 @@ async def test_cancelled_cached_write_finishes_before_artifact_cleanup(
             await task
     assert outputs and not any(path.exists() for path in outputs)
     assert not list(tmp_path.glob("render_*.png"))
-
-

@@ -430,3 +430,39 @@ async def test_font_download_respects_disabled_cache(tmp_path):
     route.fetch.assert_not_awaited()
     route.continue_.assert_awaited_once()
     assert not renderer._cdn_pending
+
+
+@pytest.mark.asyncio
+async def test_same_font_requested_during_disk_lookup_downloads_once(
+    tmp_path, monkeypatch
+):
+    from astrbot_plugin_mathjax2image.infrastructure.browser import page_renderer
+
+    renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "cache")
+    checking, release = asyncio.Event(), asyncio.Event()
+    run_in_thread = page_renderer.run_in_thread
+
+    async def delayed_lookup(func, *args):
+        if func == renderer._disk_cache.get:
+            checking.set()
+            await release.wait()
+            return None
+        return await run_in_thread(func, *args)
+
+    monkeypatch.setattr(page_renderer, "run_in_thread", delayed_lookup)
+    response = MagicMock(status=200, headers={"content-type": "font/ttf"})
+    response.body = AsyncMock(return_value=b"font bytes")
+    response.dispose = AsyncMock()
+    first, second = _route(FULL_FONT), _route(FULL_FONT)
+    first.fetch = second.fetch = AsyncMock(return_value=response)
+    a = asyncio.create_task(renderer._serve_cached_resource(first))
+    await checking.wait()
+    b = asyncio.create_task(renderer._serve_cached_resource(second))
+    await asyncio.sleep(0)
+    release.set()
+    assert await asyncio.gather(a, b) == [True, True]
+    first.fetch.assert_awaited_once()
+    assert all(
+        r.fulfill.call_args.kwargs["body"] == b"font bytes" for r in (first, second)
+    )
+    assert not renderer._cdn_pending

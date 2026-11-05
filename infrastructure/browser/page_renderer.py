@@ -24,6 +24,7 @@ from .native_tikz import NativeTikzRenderer
 from .tikz_worker import optimize_tikz_worker
 
 _GOTO_TIMEOUT_MS = 60_000
+_RENDER_CONTENT = re.compile(r'<main class="render-content">([\s\S]*?)</main>')
 _MATH_REQUIRED_DECLARATION = re.compile(r"window\.mathJaxRequired = (true|false);")
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
 _CACHEABLE_SUFFIXES = (
@@ -221,7 +222,9 @@ class PageRenderer:
         Returns:
             Whether rendering completed without a timeout fallback.
         """
-        heavy = 'type="text/tikz"' in html
+        content = _RENDER_CONTENT.search(html)
+        start, end = content.span(1) if content else (0, len(html))
+        heavy = html.find('<script type="text/tikz"', start, end) != -1
         render_acquired = False
         if heavy:
             try:
@@ -566,7 +569,11 @@ class PageRenderer:
             )
             context.on(
                 "requestfailed",
-                lambda request: self._release_pending(request.url),
+                lambda request: (
+                    None
+                    if urlparse(request.url).path.endswith((".ttf", ".otf"))
+                    else self._release_pending(request.url)
+                ),
             )
         except Exception as exc:  # pragma: no cover - mocked or closed contexts
             logger.debug("[MathJax2Image] 无法监听资源下载: %s", exc)
@@ -589,28 +596,34 @@ class PageRenderer:
             return False
         url = route.request.url
         cached = self._lookup_resource(url)
-        if cached is None:
+        owner = None
+        while cached is None:
             pending = self._cdn_pending.get(url)
-            if pending is not None and time.monotonic() - pending[1] < _PENDING_TTL_S:
-                try:
-                    await asyncio.wait_for(asyncio.shield(pending[0]), _PENDING_TTL_S)
-                except asyncio.TimeoutError:
-                    pass
+            remaining = pending[1] + _PENDING_TTL_S - time.monotonic() if pending else 0
+            if remaining <= 0:
+                # Claim the miss before yielding, including during disk I/O.
+                owner = asyncio.get_running_loop().create_future()
+                self._cdn_pending[url] = (owner, time.monotonic())
+                break
+            try:
+                cached = await asyncio.wait_for(asyncio.shield(pending[0]), remaining)
+            except asyncio.TimeoutError:
+                pass
+            if cached is None:
                 cached = self._lookup_resource(url)
         if cached is None and self._disk_cache is not None:
-            hit = await run_in_thread(self._disk_cache.get, url)
-            if hit is not None:
-                # 重启后从磁盘恢复，免去重新下载（首个资源常需数秒）
-                cached = self._store_resource(url, *hit)
+            try:
+                hit = await run_in_thread(self._disk_cache.get, url)
+                if hit is not None:
+                    cached = self._store_resource(url, *hit)
+            except BaseException:
+                self._release_pending(url, owner=owner)
+                raise
         if cached is not None:
+            if owner is not None:
+                self._release_pending(url, cached, owner=owner)
             await cached.fulfill(route)
             return True
-        pending = self._cdn_pending.get(url)
-        if pending is None or time.monotonic() - pending[1] >= _PENDING_TTL_S:
-            self._cdn_pending[url] = (
-                asyncio.get_running_loop().create_future(),
-                time.monotonic(),
-            )
         if urlparse(url).path.endswith((".ttf", ".otf")):
             response = None
             try:
@@ -618,7 +631,7 @@ class PageRenderer:
                 # A redirect response is delivered to the browser to route again.
                 response = await route.fetch(timeout=30_000, max_redirects=0)
                 if response.status != 200:
-                    self._release_pending(url)
+                    self._release_pending(url, cached, owner=owner)
                     await route.fulfill(response=response)
                     return True
                 body = await response.body()
@@ -638,7 +651,7 @@ class PageRenderer:
             finally:
                 # Release before fulfill: requestfinished must not capture the
                 # same body again through Chromium's limited inspector buffer.
-                self._release_pending(url)
+                self._release_pending(url, cached, owner=owner)
                 if response is not None:
                     try:
                         await response.dispose()
@@ -693,8 +706,10 @@ class PageRenderer:
     async def _capture_response(self, request) -> None:
         """Store an asset the browser downloaded after a cache miss."""
         url = request.url
-        if url not in self._cdn_pending:
+        pending = self._cdn_pending.get(url)
+        if pending is None or urlparse(url).path.endswith((".ttf", ".otf")):
             return
+        resource = None
         try:
             response = await request.response()
             if response is None or response.status != 200:
@@ -705,17 +720,21 @@ class PageRenderer:
             )
             if self._disk_cache is not None:
                 await run_in_thread(self._disk_cache.put, url, body, content_type)
-            self._store_resource(url, body, content_type)
+            resource = self._store_resource(url, body, content_type)
         except Exception as exc:
             logger.debug("[MathJax2Image] 缓存已下载资源失败: %s: %s", url, exc)
         finally:
-            self._release_pending(url)
+            self._release_pending(url, resource, owner=pending[0])
 
-    def _release_pending(self, url: str) -> None:
+    def _release_pending(
+        self, url: str, resource: _CachedResource | None = None, *, owner=None
+    ) -> None:
         """Wake requests waiting for a browser download of ``url``."""
-        pending = self._cdn_pending.pop(url, None)
-        if pending is not None and not pending[0].done():
-            pending[0].set_result(None)
+        pending = self._cdn_pending.get(url)
+        if pending is not None and (owner is None or pending[0] is owner):
+            del self._cdn_pending[url]
+            if not pending[0].done():
+                pending[0].set_result(resource)
 
     def _setup_logging(self, page) -> None:
         """设置页面日志"""
@@ -727,7 +746,7 @@ class PageRenderer:
     async def _load_and_wait(self, page, html_path: Path) -> bool:
         """加载页面并等待渲染完成"""
         html = await asyncio.to_thread(html_path.read_text, encoding="utf-8")
-        content = re.search(r'<main class="render-content">([\s\S]*?)</main>', html)
+        content = _RENDER_CONTENT.search(html)
         resident_key = ""
         math_required = None
         if (
