@@ -103,7 +103,6 @@ class BrowserManager:
         self._page_wait_timeout = max(0.001, float(page_wait_timeout))
         self._max_idle_pages = min(self.max_pages, max(0, int(max_idle_pages)))
         self._idle_timeout = max(0.0, float(idle_timeout))
-        self._idle_deadline = 0.0
         self._idle_timer = None
         self._idle_cleanup_task = None
         self._playwright: Playwright | None = None
@@ -335,7 +334,6 @@ class BrowserManager:
                         self._page_available.set()
                         if self._idle_timeout > 0:
                             loop = asyncio.get_running_loop()
-                            self._idle_deadline = loop.time() + self._idle_timeout
                             if self._idle_timer is not None:
                                 self._idle_timer.cancel()
 
@@ -368,7 +366,10 @@ class BrowserManager:
     async def _expire_idle_pages(self) -> None:
         """Release idle renderer processes while retaining shared asset responses."""
         async with self._lock:
-            if self._closed or asyncio.get_running_loop().time() < self._idle_deadline:
+            # A new timer means another page was returned while this cleanup
+            # waited for the lock. Otherwise honor the timer that just fired:
+            # Windows asyncio timers can fire one clock tick before their due time.
+            if self._closed or self._idle_timer is not None:
                 return
             while not self._pool.empty():
                 page = self._pool.get_nowait()

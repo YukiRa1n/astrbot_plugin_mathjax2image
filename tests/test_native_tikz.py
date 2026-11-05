@@ -128,3 +128,45 @@ async def test_svg_ids_and_loader_removal(tmp_path):
         await compiler.render_html(
             TikzConverter(MagicMock())._wrap_tikz_html(r"\input{secrets}"), 1
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="Windows native job ownership")
+async def test_timeout_waits_for_descendants_to_release_stage_files(tmp_path):
+    import psutil
+
+    # The executable under test launches a helper, just as a converter can
+    # spawn a font tool. The helper keeps a file open until termination.
+    helper = tmp_path / "helper.py"
+    helper.write_text(
+        "import os, sys, time, subprocess\n"
+        "from pathlib import Path\n"
+        "if len(sys.argv) == 1:\n"
+        "    subprocess.run([sys.executable, __file__, 'leaf'], check=True)\n"
+        "else:\n"
+        "    locked = open('output.dvi', 'wb')\n"
+        "    Path('pids.tmp').write_text(f'{os.getppid()} {os.getpid()}')\n"
+        "    Path('pids.tmp').replace('pids')\n"
+        "    time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    compiler = NativeTikzRenderer()
+    task = asyncio.create_task(
+        compiler._run([sys.executable, str(helper)], tmp_path, os.environ.copy())
+    )
+    try:
+        for _ in range(200):
+            if (tmp_path / "pids").exists():
+                break
+            if task.done():
+                await task
+            await asyncio.sleep(0.02)
+        pids = list(map(int, (tmp_path / "pids").read_text().split()))
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(task, timeout=0.02)
+        assert all(not psutil.pid_exists(pid) for pid in pids)
+        (tmp_path / "output.dvi").unlink()
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
