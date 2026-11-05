@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
@@ -164,8 +163,10 @@ class NativeTikzRenderer:
                 index += 1
                 continue
             start = index
-            while index < length and code[index].isascii() and (
-                code[index].isalnum() or code[index] == "_"
+            while (
+                index < length
+                and code[index].isascii()
+                and (code[index].isalnum() or code[index] == "_")
             ):
                 index += 1
             name = code[start:index]
@@ -406,27 +407,34 @@ class NativeTikzRenderer:
         """
         # A file avoids unbounded PIPE buffering for verbose TeX failures.
         with (work / "stage.log").open("wb") as log:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=work,
-                env=env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=log,
-                stderr=asyncio.subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
-            try:
-                await process.wait()
-            finally:
-                if process.returncode is None:
-                    process.kill()
+            if os.name == "nt":
+                from .windows_native_job import run_windows_stage
+
+                returncode = await run_windows_stage(command, work, env, log)
+            else:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=work,
+                    env=env,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
                     await process.wait()
-        if process.returncode:
+                finally:
+                    if process.returncode is None:
+                        process.kill()
+                        await process.wait()
+                returncode = process.returncode
+        if returncode:
             # Summarise rather than forward the log tail. The tail is shaped by
             # attacker-controlled TeX and can carry file contents pulled in via
             # \input-family primitives straight back to the requester.
             with (work / "stage.log").open("rb") as log:
-                log.seek(max(0, (work / "stage.log").stat().st_size - _FAILURE_TAIL_BYTES))
+                log.seek(
+                    max(0, (work / "stage.log").stat().st_size - _FAILURE_TAIL_BYTES)
+                )
                 tail = log.read().decode(errors="replace")
             first_error = ""
             for line in tail.splitlines():
@@ -435,6 +443,5 @@ class NativeTikzRenderer:
                     break
             summary = (first_error or "compilation failed")[:_FAILURE_DETAIL_CHARS]
             raise RenderError(
-                f"Native TikZ {Path(command[0]).name} failed "
-                f"({process.returncode}): {summary}"
+                f"Native TikZ {Path(command[0]).name} failed ({returncode}): {summary}"
             )
