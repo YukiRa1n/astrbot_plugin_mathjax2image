@@ -18,10 +18,36 @@ except ModuleNotFoundError:  # pragma: no cover - standalone test support
 
 MAX_MERMAID_LENGTH = 50000  # 单个 mermaid 代码块最大长度（字符）
 
-_MERMAID_FENCE = re.compile(
-    r"^[ \t]*(?P<fence>[`~]{3,})[ \t]*mermaid[ \t]*\r?\n(?P<body>[\s\S]*?)(?:\r?\n[ \t]*|[ \t]*)(?P=fence)[`~]*[ \t]*$",
-    re.IGNORECASE,
+_MERMAID_OPEN_LINE = re.compile(
+    r"[ \t]*(?P<fence>[`~]{3,})[ \t]*mermaid[ \t]*", re.IGNORECASE
 )
+
+
+def _mermaid_body(block: str) -> str | None:
+    """Return the body of one scanned fence when it is a Mermaid block.
+
+    ``scan_fenced_code`` already guarantees that the first line opens the fence
+    and the last line closes it, so the body is simply what lies between them.
+    The previous single regex ended its lazy body with ``[ \\t]*(?P=fence)``,
+    which rescanned every run of spaces from each position inside it (20 000
+    spaces took 2.6 s).
+    """
+    first_newline = block.find("\n")
+    if first_newline == -1:
+        return None
+    opening = _MERMAID_OPEN_LINE.fullmatch(block, 0, first_newline)
+    if opening is None:
+        return None
+    last_newline = block.rfind("\n")
+    closing_from = last_newline + 1
+    if not re.fullmatch(
+        r"[ \t]*" + re.escape(opening.group("fence")) + r"[`~]*[ \t]*",
+        block[closing_from:],
+    ):
+        return None
+    if last_newline == first_newline:
+        return ""
+    return block[first_newline + 1 : last_newline]
 
 
 class MermaidConverter:
@@ -68,13 +94,11 @@ class MermaidConverter:
         pieces: list[str] = []
         position = 0
         for start, end in scan_fenced_code(text):
-            # Match within the scanner's span: ^ does not match a non-zero pos
-            # without MULTILINE, which skipped Mermaid blocks after other code.
-            match = _MERMAID_FENCE.fullmatch(text[start:end])
-            if match is None:
+            body = _mermaid_body(text[start:end])
+            if body is None:
                 continue
             pieces.append(text[position:start])
-            pieces.append(self._convert_mermaid_body(match.group("body")))
+            pieces.append(self._convert_mermaid_body(body))
             position = end
         if not pieces:
             return text
@@ -237,6 +261,6 @@ class MermaidConverter:
         if "\r" in text:
             text = text.replace("\r\n", "\n").replace("\r", "\n")
         return any(
-            _MERMAID_FENCE.match(text, start, end) is not None
+            _mermaid_body(text[start:end]) is not None
             for start, end in scan_fenced_code(text)
         )

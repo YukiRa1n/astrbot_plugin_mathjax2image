@@ -115,3 +115,28 @@ def test_native_tex_filter_rejects_bypasses(code):
 )
 def test_native_tex_filter_keeps_ordinary_drawings(code):
     NativeTikzRenderer._reject_unsafe_tex(code)
+
+
+def test_mermaid_fence_is_linear_on_whitespace():
+    from astrbot_plugin_mathjax2image.infrastructure.converter import MermaidConverter
+
+    source = "```mermaid\ngraph TD\n" + " " * 40000 + "A\n```"
+    assert _elapsed(MermaidConverter().convert, source) < 0.5
+
+
+@pytest.mark.parametrize(
+    "source, converted",
+    [
+        ("```mermaid\ngraph TD\nA-->B\n```", True),
+        ("  ~~~~ Mermaid \ngraph TD\nA-->B\n  ~~~~~~  ", True),
+        ("```mermaid\n```", False),
+        ("```mermaidx\ngraph TD\n```", False),
+        ("```python\nmermaid\n```", False),
+    ],
+)
+def test_mermaid_fence_recognition(source, converted):
+    from astrbot_plugin_mathjax2image.infrastructure.converter import MermaidConverter
+
+    converter = MermaidConverter()
+    assert ('<pre class="mermaid">' in converter.convert(source)) is converted
+    assert converter.has_mermaid(source) is (converted or source == "```mermaid\n```")
