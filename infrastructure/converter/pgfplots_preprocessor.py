@@ -35,12 +35,36 @@ def _has_unescaped_percent(
     return False
 
 
-def _group(source: str, start: int) -> tuple[str, int]:
+_DELIMITER_PAIRS = {"[": "]", "{": "}", "(": ")"}
+
+
+def _matching_delimiters(source: str) -> dict[int, int]:
+    """Map each balanced opener offset to its closer, one C-level scan per kind.
+
+    ``_group`` counts only its own delimiter kind, so per-kind stack matching
+    yields exactly the closer it would find. Without this table an unbalanced
+    ``[`` makes every later token rescan to the end of the source (O(n^2)).
+    """
+    matches: dict[int, int] = {}
+    for opening, closing in _DELIMITER_PAIRS.items():
+        stack: list[int] = []
+        for found in re.finditer(re.escape(opening) + "|" + re.escape(closing), source):
+            if found.group() == opening:
+                stack.append(found.start())
+            elif stack:
+                matches[stack.pop()] = found.start()
+    return matches
+
+
+def _group(
+    source: str, start: int, matches: dict[int, int] | None = None
+) -> tuple[str, int]:
     """Read a balanced TeX option, expression, or coordinate group.
 
     Args:
         source: TeX source string.
         start: Index of the opening delimiter.
+        matches: Optional table from ``_matching_delimiters(source)``.
 
     Returns:
         Group contents and the index immediately after the closing delimiter.
@@ -48,8 +72,13 @@ def _group(source: str, start: int) -> tuple[str, int]:
     Raises:
         ValueError: The group is unbalanced.
     """
+    if matches is not None:
+        end = matches.get(start)
+        if end is None:
+            raise ValueError("Unbalanced plot group")
+        return source[start + 1 : end], end + 1
     opening = source[start]
-    closing = {"[": "]", "{": "}", "(": ")"}[opening]
+    closing = _DELIMITER_PAIRS[opening]
     depth = 1
     for index in range(start + 1, len(source)):
         if source[index] == opening:
@@ -132,6 +161,7 @@ class PgfplotsPreprocessor:
         # 行首偏移用偏移表 + 二分，而不是每个 token 都 rfind 一遍整行：
         # 单行图形里 rfind 同样会退化成 O(n^2)。
         newline_positions = _positions(source, "\n")
+        matches = _matching_delimiters(source)
         while match := token.search(source, cursor):
             cursor = match.end()
             newline_index = bisect_left(newline_positions, match.start())
@@ -147,7 +177,7 @@ class PgfplotsPreprocessor:
                 while cursor < len(source) and source[cursor].isspace():
                     cursor += 1
                 if cursor < len(source) and source[cursor] == "[":
-                    options, cursor = _group(source, cursor)
+                    options, cursor = _group(source, cursor, matches)
                 parsed = {}
                 for item in _split(options):
                     key, _, value = item.partition("=")
@@ -193,14 +223,14 @@ class PgfplotsPreprocessor:
                 while cursor < len(source) and source[cursor].isspace():
                     cursor += 1
                 if source[cursor] == "{":
-                    expression, end = _group(source, cursor)
+                    expression, end = _group(source, cursor, matches)
                     expressions = [
                         settings.get("variable", "x"),
                         settings.get("variable y", "y"),
                         expression,
                     ]
                 elif source[cursor] == "(":
-                    expression, end = _group(source, cursor)
+                    expression, end = _group(source, cursor, matches)
                     expressions = [
                         item.strip().strip("{}") for item in _split(expression)
                     ]
