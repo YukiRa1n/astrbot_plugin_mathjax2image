@@ -52,9 +52,11 @@ class TikzPlotConverter:
         tikz_code = self._clean_html_entities(tikz_code)
         if budget is None:
             budget = [self.MAX_EVAL_POINTS]
-        pattern = (
-            r"\\draw\s*\[([^\]]*)\]\s*plot\s*\(\s*([^,]+)\s*,\s*\{([^}]+)\}\s*\)\s*;"
-        )
+        # The x expression must not be flanked by `\s*`: three adjacent
+        # quantifiers that all accept spaces backtrack cubically, so
+        # `plot(` followed by a few thousand spaces froze the event loop for
+        # minutes. `;` ends a TikZ path, so the scan also stops there.
+        pattern = r"\\draw\s*\[([^\]]*)\]\s*plot\s*\(([^,;]+),\s*\{([^}]+)\}\s*\)\s*;"
         tikz_code = re.sub(
             pattern, lambda match: self._convert_plot_cmd(match, budget), tikz_code
         )
@@ -85,7 +87,7 @@ class TikzPlotConverter:
             raise PreprocessError("TikZ 曲线采样总预算不足，请减少 samples 或拆分图形")
         try:
             points = self._generate_points(
-                *domain, samples, match.group(2), match.group(3)
+                *domain, samples, match.group(2).strip(), match.group(3)
             )
         except ValueError:
             return match.group(0)

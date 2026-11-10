@@ -39,10 +39,14 @@ _DENIED_TEX_COMMANDS = frozenset(
     afterassignment aftergroup expandafter noexpand futurelet
     pdfobj pdffiledump pdfximage pdfcatalog pdfannot pdfextension pdfunescapehex
     primitive ifx ifnum while
+    usename csuse letcs cslet csletcs csdef csgdef csedef csxdef csundef
+    ifcsdef ifcsundef ifcsmacro ifcsvoid ifcsstring expandargs explsyntaxon
     """.split()
 )
 #: Name fragments (substring match, already lowercased and without a trailing
 #: register number) that mark a control word as file, process, or IO access.
+#: ``typeout``/``wlog``/``warning``/``info``/``show``/``tracing`` write to the
+#: log; a recursive macro around them fills the disk before the timeout fires.
 _DENIED_TEX_NAME_PARTS = (
     "input",
     "include",
@@ -58,7 +62,21 @@ _DENIED_TEX_NAME_PARTS = (
     "csname",
     "scantokens",
     "primitive",
+    "image",
+    "typeout",
+    "wlog",
+    "warning",
+    "info",
+    "tracing",
 )
+#: Control words that begin with these prefixes are log/terminal dumps.
+_DENIED_TEX_NAME_PREFIXES = ("show",)
+#: TikZ/PGFplots path operations that read data or images from disk without any
+#: control word: ``plot file {x}``, ``\addplot table [..] {x}``, ``graphics {x}``.
+#: Only the next character is inspected, so option lists of any length are
+#: covered without a backtracking scan over them.
+_FILE_DATA_SOURCE = re.compile(r"\b(?:file|table|graphics)\b(?=\s*[\[{])")
+_TEX_COMMENT = re.compile(r"(?<!\\)%[^\n]*\n?")
 # Control *symbols* (backslash + one non-letter) that drawing code may use.
 _ALLOWED_TEX_SYMBOLS = frozenset("\\{}%$&_#@,;:! -'\"|./^~=*+<>()[?")
 _BEGIN_ENVIRONMENT = re.compile(r"\\begin\{([^}]*)\}")
@@ -179,17 +197,35 @@ class NativeTikzRenderer:
                 )
             # \openout1 / \read2 carry a register number.
             lowered = name.lower().rstrip("0123456789")
-            if lowered in _DENIED_TEX_COMMANDS or any(
-                part in lowered for part in _DENIED_TEX_NAME_PARTS
+            if (
+                lowered in _DENIED_TEX_COMMANDS
+                or any(part in lowered for part in _DENIED_TEX_NAME_PARTS)
+                or lowered.startswith(_DENIED_TEX_NAME_PREFIXES)
             ):
                 raise RenderError(
                     "Native TikZ rejected a file, process, or metaprogramming command"
                 )
+            if lowered in ("begin", "end"):
+                # TeX skips spaces and `%` comments before the argument, and
+                # \begin{X} runs \csname X\endcsname, so `\begin {input}{f}`
+                # is \input. Demand the canonical `{allowed}` form right here.
+                close = code.find("}", index + 1)
+                if (
+                    index >= length
+                    or code[index] != "{"
+                    or close == -1
+                    or code[index + 1 : close] not in _ALLOWED_ENVIRONMENTS
+                ):
+                    raise RenderError(
+                        "Native TikZ rejected an environment outside the drawing allowlist"
+                    )
         for match in _BEGIN_ENVIRONMENT.finditer(code):
             if match.group(1) not in _ALLOWED_ENVIRONMENTS:
                 raise RenderError(
                     "Native TikZ rejected an environment outside the drawing allowlist"
                 )
+        if _FILE_DATA_SOURCE.search(_TEX_COMMENT.sub("", code)):
+            raise RenderError("Native TikZ rejected a file-backed plot data source")
         if "^^" in code:
             raise RenderError("Native TikZ rejected a TeX character escape")
 

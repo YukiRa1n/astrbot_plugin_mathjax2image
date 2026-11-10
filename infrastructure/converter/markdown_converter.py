@@ -745,11 +745,16 @@ class MarkdownConverter:
         return pattern.sub(lambda m: blocks[int(m.group("index"))], html)
 
     def _restore_math_blocks(self, html: str, blocks: list[str], token: str) -> str:
-        """还原数学公式块"""
+        """还原数学公式块。
+
+        占位符是纯字母数字，Markdown 会把它原样放进 ``alt``/``href``/``title``
+        属性；引号不转义时，``![$" onerror="…$](x)`` 还原后就闭合属性并注入
+        事件处理器。MathJax 读取的是文本节点，``&quot;`` 不影响公式。
+        """
         if not blocks:
             return html
         return _placeholder_pattern(token, "MATH").sub(
-            lambda m: html_lib.escape(blocks[int(m.group("index"))], quote=False),
+            lambda m: html_lib.escape(blocks[int(m.group("index"))], quote=True),
             html,
         )
 
