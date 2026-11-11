@@ -103,7 +103,7 @@ $$\cancel{x} + \upalpha \centernot\implies y$$
 
 显式声明支持：`ams`、`amscd`、`bbox`、`boldsymbol`、`braket`、`cancel`、`cases`、`centernot`、`color`、`empheq`、`enclose`、`extpfeil`、`gensymb`、`mathtools`、`mhchem`、`newcommand`、`physics`、`textcomp`、`textmacros`、`unicode`、`upgreek`、`verb`。
 
-常见 LaTeX 包名也可使用：`amsmath` / `amsfonts` / `amssymb` 映射到 `ams`，`bm` 映射到 `boldsymbol`，`xcolor` 映射到 `color`。不支持的包和带选项的 `\usepackage[...]{...}` 会明确报错。
+常见 LaTeX 包名也可使用：`amsmath` / `amsfonts` / `amssymb` 映射到 `ams`，`bm` 映射到 `boldsymbol`，`xcolor` 映射到 `color`。未在清单中的无选项 `\usepackage{...}` 会自动忽略并记录日志，带选项的 `\usepackage[...]{...}` 会明确报错。
 
 `physics` 会改变部分命令语法，须显式声明（或在公式中使用 `\require{physics}`）；此时使用完整的导数、括号与向量命令，并移除冲突的简化宏。`physics` 和 `braket` 不能同时声明：前者使用 `\braket{a}{b}`，后者使用 `\braket{a|b}`。
 
@@ -151,7 +151,7 @@ TikZ 与 MathJax 使用不同引擎。下面是两个 TikZ 后端共用的加载
 
 | 参数 | 作用 |
 | --- | --- |
-| `background_color` | 背景色，默认 `#FCFCFD` |
+| `background_color` | 背景色，默认 `#FCFCFD`（旧默认值 `#FDFBF0` 自动按新默认处理） |
 | `math_system_prompt` / `article_system_prompt` | `/math` 和 `/art` 的生成提示词 |
 | `tikz_timeout` / `mathjax_timeout` / `mermaid_timeout` | 各引擎渲染超时，单位毫秒 |
 | `fail_on_mathjax_timeout` | MathJax 超时是否拒绝出图 |
@@ -180,10 +180,10 @@ TikZ 与 MathJax 使用不同引擎。下面是两个 TikZ 后端共用的加载
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `precompute_pgfplots` | `true` | 为可识别的 `addplot3` 表达式预计算网格 |
-| `plot_max_points` | 6400 | 每幅图可预计算的三维采样点预算 |
+| `plot_max_points` | 6400 | 单篇文档内多幅 TikZ 共享的可预计算三维采样点总预算 |
 | `max_concurrent_tikz` | 1 | 同时执行的重型 TikZ 渲染数，普通公式仍可并行 |
 
-保持 `samples × samples y` 的原始点数、端点和遍历顺序；超过预算会报错，不悄悄降低三维精度。普通二维 `draw plot` 每条曲线最多 2000 点、每幅图最多 4000 次采样求值。自定义宏、样式和不能可靠解析的表达式回退原生 TeX；这种情况下预计算点数限制并不是原生 TeX 的总工作量限制，仍由超时约束。仅设置兼容版本的 `pgfplotsset` 不影响优化。
+保持 `samples × samples y` 的原始点数、端点和遍历顺序；超过预算会报错，不悄悄降低三维精度。普通二维 `draw plot` 每条曲线最多 2000 点、单篇文档内累计最多 4000 次采样求值。自定义宏、样式和不能可靠解析的表达式回退原生 TeX；这种情况下预计算点数限制并不是原生 TeX 的总工作量限制，仍由超时约束。仅设置兼容版本的 `pgfplotsset` 不影响优化。
 
 ### 引擎优化实测
 
@@ -229,7 +229,8 @@ python scripts/benchmark_heavy.py --output ./heavy-output --cases dense-curve su
 | `render_queue_timeout` | 30000 | 排队超时，单位毫秒；不改变引擎自身的渲染超时 |
 | `browser_max_idle_pages` | 1 | 最多保留的空闲页面；0 表示归还时立即释放 |
 | `browser_idle_timeout` | 30 | 空闲页面回收时间，单位秒；0 关闭定时回收 |
-| `resource_cache_max_mb` | 64 | 静态资源缓存容量，单位 MiB；0 关闭 |
+| `resource_cache_max_mb` | 64 | 静态资源内存缓存容量，单位 MiB；0 关闭 |
+| `asset_disk_cache_max_mb` | 256 | 静态资源磁盘缓存容量，单位 MiB；0 关闭 |
 | `image_cache_max_mb` | 8 | 图片缓存容量，单位 MiB；0 关闭 |
 
 页面回收后仍保留浏览器进程及独立资源缓存，重新出图无需再下载已缓存的字体或脚本。缓存容量限制不等于浏览器总内存限制；优先压低峰值内存时，可把运行并发调为 1。

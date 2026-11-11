@@ -72,10 +72,11 @@ _DENIED_TEX_NAME_PARTS = (
 #: Control words that begin with these prefixes are log/terminal dumps.
 _DENIED_TEX_NAME_PREFIXES = ("show",)
 #: TikZ/PGFplots path operations that read data or images from disk without any
-#: control word: ``plot file {x}``, ``\addplot table [..] {x}``, ``graphics {x}``.
-#: Only the next character is inspected, so option lists of any length are
-#: covered without a backtracking scan over them.
-_FILE_DATA_SOURCE = re.compile(r"\b(?:file|table|graphics)\b(?=\s*[\[{])")
+#: control word: ``plot file {x}``, ``\addplot table [..] {x}``, ``table from {x}``,
+#: ``plot file \macro``, ``graphics {x}``.
+_FILE_DATA_SOURCE = re.compile(r"\b(?:file|table|graphics)\b(?=\s*(?:[\[{\\]|from\b))")
+_PLOT_STATEMENT = re.compile(r"(?:\\addplot\s*3?\+?|\bplot\b)")
+_PLOT_SOURCE_KEYWORD = re.compile(r"\b(?:file|table|graphics)\b")
 _TEX_COMMENT = re.compile(r"(?<!\\)%[^\n]*\n?")
 # Control *symbols* (backslash + one non-letter) that drawing code may use.
 _ALLOWED_TEX_SYMBOLS = frozenset("\\{}%$&_#@,;:! -'\"|./^~=*+<>()[?")
@@ -138,9 +139,15 @@ class NativeTikzRenderer:
                 continue
             if name not in _ALLOWED_BLOCK_ATTRIBUTES:
                 return False
-            # Values become TeX preamble or a worker concatenation; keep them to
-            # the characters a package/library list can legitimately contain.
-            if not re.fullmatch(r"[A-Za-z0-9_,.\-\[\]:{}\" ]*", value):
+            if name == "data-disable-cache":
+                if value != "true":
+                    return False
+                continue
+            if name == "data-tikz-libraries":
+                if not re.fullmatch(r"[A-Za-z0-9_.,-]*", value):
+                    return False
+                continue
+            if not re.fullmatch(r'[A-Za-z0-9_,.\-\{\}": ]*', value):
                 return False
         # Whatever is left after removing balanced attributes must be whitespace.
         return not re.sub(pattern, "", source).strip()
@@ -224,7 +231,11 @@ class NativeTikzRenderer:
                 raise RenderError(
                     "Native TikZ rejected an environment outside the drawing allowlist"
                 )
-        if _FILE_DATA_SOURCE.search(_TEX_COMMENT.sub("", code)):
+        uncommented = _TEX_COMMENT.sub("", code)
+        if _FILE_DATA_SOURCE.search(uncommented) or any(
+            _PLOT_STATEMENT.search(stmt) and _PLOT_SOURCE_KEYWORD.search(stmt)
+            for stmt in uncommented.split(";")
+        ):
             raise RenderError("Native TikZ rejected a file-backed plot data source")
         if "^^" in code:
             raise RenderError("Native TikZ rejected a TeX character escape")

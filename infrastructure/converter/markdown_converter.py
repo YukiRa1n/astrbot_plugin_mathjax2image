@@ -25,6 +25,8 @@ from ...utils.linear_scan import (
     strip_usepackage_declarations,
     substitute_spans,
 )
+from .mermaid_converter import MAX_MERMAID_LENGTH
+from .tikz_converter import TikzConverter
 
 # 受控 HTML 块的起始字面量。转换器生成的 TikZ 块可能带 data-* 属性
 # （<script type="text/tikz" data-tex-packages='...'>），因此起始字面量只覆盖到
@@ -434,10 +436,13 @@ class MarkdownConverter:
         html_body = self._restore_math_blocks(html_body, math_blocks, token)
         html_body = self._restore_code_blocks(html_body, code_blocks, token)
 
-        # 应用模板
-        result = self._apply_template(html_body, bg_color)
-        result = result.replace("{{MATH_REQUIRED}}", json.dumps(bool(math_blocks)))
-        result = result.replace("{{MATH_PACKAGES}}", json.dumps(sorted(packages)))
+        # 应用模板（先替换壳层配置占位符，最后注入 {{CONTENT}}，防止代码块字面量被篡改）
+        result = self._apply_template(
+            html_body,
+            bg_color,
+            math_required=bool(math_blocks),
+            math_packages=sorted(packages),
+        )
         # MathJax 与 TikZJax 始终保留：页面外壳与内容类型无关，常驻页面才能在
         # 公式、TikZ、纯文本文档之间直接复用，而不必每次切换都重新加载并初始化
         # （TikZ worker 约 1 秒）。两者在不需要时只加载脚本，不做排版或编译。
@@ -508,16 +513,12 @@ class MarkdownConverter:
         """预处理Markdown，自动修复常见格式问题"""
         # 转义字符处理：\\n -> 真实换行（保护LaTeX命令与代码区间）
         if "\\n" in text:
-            code_spans = (
-                scan_fenced_code(text) if ("`" in text or "~" in text) else []
-            )
+            code_spans = scan_fenced_code(text) if ("`" in text or "~" in text) else []
             if code_spans:
                 pieces: list[str] = []
                 cursor = 0
                 for start, end in code_spans:
-                    pieces.append(
-                        re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:start])
-                    )
+                    pieces.append(re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:start]))
                     pieces.append(text[start:end])
                     cursor = end
                 pieces.append(re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:]))
@@ -537,8 +538,7 @@ class MarkdownConverter:
             if open_fence is None:
                 fence_match = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
                 if fence_match and (
-                    fence_match.group(1)[0] == "~"
-                    or "`" not in fence_match.group(2)
+                    fence_match.group(1)[0] == "~" or "`" not in fence_match.group(2)
                 ):
                     open_fence = (
                         fence_match.group(1)[0],
@@ -548,9 +548,8 @@ class MarkdownConverter:
                     continue
             else:
                 fence_char, fence_len = open_fence
-                if (
-                    len(stripped) >= fence_len
-                    and stripped == fence_char * len(stripped)
+                if len(stripped) >= fence_len and stripped == fence_char * len(
+                    stripped
                 ):
                     open_fence = None
                 result.append(line)
@@ -695,6 +694,29 @@ class MarkdownConverter:
             # to what a package or library list can contain.
             if not ATTRIBUTE_VALUE_PATTERN.fullmatch(value):
                 return None
+            if name == "data-disable-cache":
+                if value != "true":
+                    return None
+            elif name == "data-tikz-libraries":
+                if not re.fullmatch(r"[A-Za-z0-9_.,-]*", value):
+                    return None
+                libraries = [item for item in value.split(",") if item]
+                if any(
+                    item not in TikzConverter.SUPPORTED_LIBRARIES for item in libraries
+                ):
+                    return None
+            elif name == "data-tex-packages":
+                try:
+                    parsed = json.loads(value)
+                except ValueError:
+                    return None
+                if not isinstance(parsed, dict) or any(
+                    not isinstance(pkg, str)
+                    or pkg not in TikzConverter.SUPPORTED_PACKAGES
+                    or opts != ""
+                    for pkg, opts in parsed.items()
+                ):
+                    return None
             attributes[name] = value
             cursor += 1
 
@@ -705,17 +727,24 @@ class MarkdownConverter:
             block,
         )
         if tikz_match:
-            # 内容中不允许出现 script 标签(防闭合注入)
-            if re.search(r"</?script", tikz_match.group(2), re.IGNORECASE):
+            body = tikz_match.group(2)
+            # 内容中不允许出现 script/main 标签(防闭合注入)或危险原语/超长载荷
+            if (
+                len(body) > 512000
+                or re.search(r"</?(?:script|main)", body, re.IGNORECASE)
+                or re.search(r"\\(?:special|loop)(?![a-zA-Z])", body)
+            ):
                 return False
-            return self._tokenize_attributes(tikz_match.group(1)) is not None
+            attrs = self._tokenize_attributes(tikz_match.group(1))
+            return attrs is not None and attrs.get("data-disable-cache") == "true"
 
         mermaid_match = re.fullmatch(
             r'<pre class="mermaid">\n([\s\S]*?)\n</pre>', block
         )
         if mermaid_match:
-            return "<" not in mermaid_match.group(1) and ">" not in mermaid_match.group(
-                1
+            body = mermaid_match.group(1)
+            return (
+                len(body) <= MAX_MERMAID_LENGTH and "<" not in body and ">" not in body
             )
 
         return bool(re.fullmatch(r'<div class="error">[^<>]*</div>', block))
@@ -804,7 +833,14 @@ class MarkdownConverter:
         """仅保留安全的代码语言标识"""
         return language if LANGUAGE_PATTERN.fullmatch(language) else ""
 
-    def _apply_template(self, html_body: str, bg_color: str) -> str:
+    def _apply_template(
+        self,
+        html_body: str,
+        bg_color: str,
+        *,
+        math_required: bool = False,
+        math_packages: list[str] | None = None,
+    ) -> str:
         """应用HTML模板"""
         if self._template_cache is None:
             with open(self._template_path, encoding="utf-8") as f:
@@ -821,12 +857,17 @@ class MarkdownConverter:
                 template,
                 count=1,
             )
-        full_html = template.replace("{{CONTENT}}", html_body)
         # Match any existing --bg-color value (template default may differ in case)
-        full_html = re.sub(
+        template = re.sub(
             r"--bg-color:\s*#[0-9a-fA-F]{3,8}\s*;",
             f"--bg-color: {safe_bg_color};",
-            full_html,
+            template,
             count=1,
         )
-        return full_html
+        template = template.replace(
+            "{{MATH_REQUIRED}}", json.dumps(bool(math_required))
+        )
+        template = template.replace(
+            "{{MATH_PACKAGES}}", json.dumps(list(math_packages or ()))
+        )
+        return template.replace("{{CONTENT}}", html_body)

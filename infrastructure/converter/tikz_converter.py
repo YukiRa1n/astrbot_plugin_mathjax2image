@@ -294,7 +294,7 @@ class TikzConverter:
         缺少该属性时即使 tex_files 已部署也不会加载库。
         """
         safe_document = re.sub(
-            r"</script", r"<\/script", tikz_document, flags=re.IGNORECASE
+            r"</(script|main)", r"<\/\1", tikz_document, flags=re.IGNORECASE
         )
         attrs = ""
         if tex_packages:
@@ -762,9 +762,12 @@ class TikzConverter:
                 )
                 return False
 
-        # 检测 \loop / 递归 \def（无限循环风险）
+        # 检测 \loop / 递归 \def（无限循环风险）及 \special（原始 SVG/DVI 注入风险）
         if re.search(r"\\loop(?![a-zA-Z])", tikz_code):
             logger.warning("[MathJax2Image] TikZ 含 \\loop，已拒绝渲染")
+            return False
+        if re.search(r"\\special(?![a-zA-Z])", tikz_code):
+            logger.warning("[MathJax2Image] TikZ 含 \\special，已拒绝渲染")
             return False
 
         return True

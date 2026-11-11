@@ -145,9 +145,9 @@
         "default": true
     },
     "plot_max_points": {
-        "description": "单个 TikZ 图的 3D 采样点数上限",
+        "description": "单篇文档 TikZ 3D 采样点数总预算",
         "type": "int",
-        "hint": "默认 6400（80×80）。超过时明确报错，不自动降低 3D 曲面精度；更高点数仍可能达到 TeX 时间或内存限制",
+        "hint": "默认 6400（例如单图 80×80，或同一文档多幅 TikZ 共享该预算）。超过时明确报错，不自动降低 3D 曲面精度；更高点数仍可能达到 TeX 时间或内存限制",
         "default": 6400
     },
     "max_concurrent_tikz": {

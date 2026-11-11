@@ -24,7 +24,7 @@ from .native_tikz import NativeTikzRenderer
 from .tikz_worker import optimize_tikz_worker
 
 _GOTO_TIMEOUT_MS = 60_000
-_RENDER_CONTENT = re.compile(r'<main class="render-content">([\s\S]*?)</main>')
+_RENDER_CONTENT = re.compile(r'<main class="render-content">([\s\S]*)</main>')
 _MATH_REQUIRED_DECLARATION = re.compile(r"window\.mathJaxRequired = (true|false);")
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
 _CACHEABLE_SUFFIXES = (
@@ -152,6 +152,8 @@ class PageRenderer:
         self._cdn_cache_limit = max(0, int(resource_cache_max_mb)) * 1024 * 1024
         # URL → (浏览器下载完成的通知, 登记时间)
         self._cdn_pending: dict[str, tuple[asyncio.Future, float]] = {}
+        # page → [(url, owner_future)]，异常中断时立即唤醒同资源的并发等待者
+        self._page_pending_assets: dict = {}
         # 已监听下载事件的浏览器上下文（上下文关闭后自动移除）
         self._watched_contexts: weakref.WeakSet = weakref.WeakSet()
         self._image_cache = OrderedDict()
@@ -333,6 +335,10 @@ class PageRenderer:
         finally:
             if page is not None:
                 self._current_page_uris.pop(page, None)
+                tracked = self._page_pending_assets.pop(page, ())
+                if exception_occurred:
+                    for pending_url, pending_owner in tracked:
+                        self._release_pending(pending_url, owner=pending_owner)
                 await self._browser_manager.release_page(page, exception_occurred)
 
     def _get_inject_script(self) -> str:
@@ -358,17 +364,55 @@ class PageRenderer:
             // TikZJax inserts SVG with the HTML fragment parser, whose depth
             // limit flattens dense PGFplots groups and corrupts inherited paint.
             // Parse SVG as XML so every transform and color scope survives.
+            const blockedSvgTags = new Set([
+                'script', 'foreignobject', 'iframe', 'object', 'embed', 'image'
+            ]);
             const parseFragment = Range.prototype.createContextualFragment;
             Range.prototype.createContextualFragment = function(markup) {
                 if (typeof markup === 'string') {
                     const source = markup.trimStart();
-                    if ((source.startsWith('<svg') || source.startsWith('<?xml')) &&
-                        source.includes('<g')) {
+                    if (source.startsWith('<svg') || source.startsWith('<?xml')) {
                         const compact = window.__compactSvgOutput && window.__compactSvgOutput(source);
                         if (compact) return parseFragment.call(this, compact);
                         const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
-                        if (parsed.documentElement.localName === 'svg' &&
-                            !parsed.querySelector('parsererror')) {
+                        if (!parsed.documentElement ||
+                            parsed.documentElement.localName.toLowerCase() !== 'svg' ||
+                            parsed.querySelector('parsererror')) {
+                            window.__tikzFailed++;
+                            throw new Error('Invalid SVG XML output');
+                        }
+                        const inspectQueue = [parsed.documentElement];
+                        while (inspectQueue.length) {
+                            const elem = inspectQueue.pop();
+                            const tag = (elem.localName || '').toLowerCase();
+                            if (blockedSvgTags.has(tag)) {
+                                window.__tikzFailed++;
+                                throw new Error('Blocked unsafe SVG element: ' + tag);
+                            }
+                            for (const attribute of Array.from(elem.attributes)) {
+                                const attrName = attribute.name.toLowerCase();
+                                const attrVal = attribute.value.trim();
+                                if (attrName.startsWith('on')) {
+                                    window.__tikzFailed++;
+                                    throw new Error('Blocked unsafe SVG event attribute');
+                                }
+                                if ((attrName === 'href' || attrName === 'xlink:href' || attrName.endsWith(':href')) &&
+                                    attrVal && !attrVal.startsWith('#')) {
+                                    window.__tikzFailed++;
+                                    throw new Error('Blocked external SVG href');
+                                }
+                                if ((tag === 'set' || tag.startsWith('animate')) &&
+                                    attrName === 'attributename') {
+                                    const targetAttr = attrVal.toLowerCase();
+                                    if (targetAttr === 'href' || targetAttr.endsWith(':href')) {
+                                        window.__tikzFailed++;
+                                        throw new Error('Blocked animated SVG href');
+                                    }
+                                }
+                            }
+                            for (const child of elem.children) inspectQueue.push(child);
+                        }
+                        {
                             const inherited = new Set([
                                 'fill', 'fill-rule', 'fill-opacity', 'stroke',
                                 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
@@ -516,11 +560,15 @@ class PageRenderer:
                 # assets, with a byte budget and TTL, across isolated pages.
                 if self._is_cacheable_asset(
                     route.request
-                ) and await self._serve_cached_resource(route):
+                ) and await self._serve_cached_resource(route, page=page):
                     return
                 # 未命中时由浏览器自己下载（其 DNS/连接回退远快于驱动端
                 # 请求），下载完成后由 _capture_response 写入缓存。
-                await route.continue_()
+                try:
+                    await route.continue_()
+                except BaseException:
+                    self._release_pending(route.request.url)
+                    raise
                 return
             logger.warning(
                 "[MathJax2Image] 已阻止渲染页面访问非白名单资源: %s",
@@ -578,7 +626,7 @@ class PageRenderer:
         except Exception as exc:  # pragma: no cover - mocked or closed contexts
             logger.debug("[MathJax2Image] 无法监听资源下载: %s", exc)
 
-    async def _serve_cached_resource(self, route) -> bool:
+    async def _serve_cached_resource(self, route, page=None) -> bool:
         """Serve a cached asset or download a full font before delivering it.
 
         Full TTF/OTF fonts can exceed Chromium's response inspector buffer.
@@ -588,6 +636,7 @@ class PageRenderer:
 
         Args:
             route: An already allowlisted static GET request.
+            page: Optional page owning the intercepted request.
 
         Returns:
             Whether the route was fulfilled and needs no browser download.
@@ -604,6 +653,8 @@ class PageRenderer:
                 # Claim the miss before yielding, including during disk I/O.
                 owner = asyncio.get_running_loop().create_future()
                 self._cdn_pending[url] = (owner, time.monotonic())
+                if page is not None:
+                    self._page_pending_assets.setdefault(page, []).append((url, owner))
                 break
             try:
                 cached = await asyncio.wait_for(asyncio.shield(pending[0]), remaining)
@@ -758,12 +809,15 @@ class PageRenderer:
             # and never retain their state for the following document.
             stateful_math = re.search(
                 r"\\(?:[egx]?def|let|global|(?:re)?newcommand|providecommand|"
-                r"DeclareMathOperator|(?:re)?newenvironment|newtheorem)\b",
+                r"DeclareMathOperator|(?:re)?newenvironment|newtheorem|"
+                r"Newextarrow|mathtoolsset|DeclarePairedDelimiter(?:X|XPP)?|"
+                r"newtagform|usetagform|mhchemoptions|"
+                r"require|unicode|style|cssId|class|href)\b",
                 content.group(1),
             )
             if not stateful_math:
                 shell = html[: content.start(1)] + html[content.end(1) :]
-                shell += str('class="mermaid"' in content.group(1))
+                shell += str('<pre class="mermaid">' in content.group(1))
                 # 是否需要公式只影响本次排版，不应让公式/TikZ/纯文本文档
                 # 之间切换时重新加载页面；复用时单独传入页面
                 declaration = _MATH_REQUIRED_DECLARATION.search(shell)
@@ -900,8 +954,11 @@ class PageRenderer:
                         // 一次，几十 KB 的图在 60 s 等待里开销很可观。
                         if (svg.querySelector('animate') &&
                             svg.querySelector('[fill-opacity="0.2"]')) return null;
-                        // Collapsed SVG paint scopes may leave no group nodes.
-                        if (!svg.querySelector('path,line,text,circle,ellipse,rect,polygon,polyline,use')) return null;
+                        // Collapsed SVG paint scopes may leave no group nodes; empty/coordinate-only
+                        // drawings have an empty SVG once native compilation or TikZJax finishes.
+                        const nativeStatic = !window.__engines?.tikzjax && !document.querySelector('script[type="text/tikz"]');
+                        if (!svg.querySelector('path,line,text,circle,ellipse,rect,polygon,polyline,use') &&
+                            !nativeStatic && (window.__tikzFinished || 0) < containers.length) return null;
                         totalElements += svg.querySelectorAll('path,line,text,circle,ellipse,rect,polygon,polyline,g,use').length;
                     }
                     return {success: true, diagrams: containers.length, count: totalElements};
