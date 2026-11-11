@@ -588,7 +588,7 @@ def test_non_math_to_math_resident_reuse_waits_for_typeset_promise():
                 appendChild(el) {
                     if (el.src && el.src.includes('tex-chtml.js')) {
                         setTimeout(() => {
-                            MathJax.startup.options = { typeset: MathJax.startup.typeset };
+                            // Real MathJax 3.2.2 has no MathJax.startup.options object.
                             MathJax.startup.defaultReady = () => {
                                 MathJax.startup.promise = Promise.resolve();
                             };

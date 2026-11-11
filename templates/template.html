@@ -46,6 +46,7 @@
     <!-- MathJax 配置 -->
     <script id="MathJax-config">
         window.mathJaxRequired = {{MATH_REQUIRED}};
+        const initialTypeset = Boolean(window.mathJaxRequired);
         // MathJax 按需异步加载；排版前需等它启动完成
         window.__mathJaxStartup = new Promise(resolve => { window.__resolveMathJaxStartup = resolve; });
         const requestedPackages = {{MATH_PACKAGES}};
@@ -179,9 +180,8 @@
             },
             startup: {
                 // 常驻页面复用时由 __replaceRenderContent 显式排版
-                typeset: window.mathJaxRequired,
+                typeset: initialTypeset,
                 ready: () => {
-                    const initialTypeset = MathJax.startup.options.typeset !== false;
                     console.log('MathJax is ready');
                     MathJax.startup.defaultReady();
                     MathJax.startup.promise.then(() => {
