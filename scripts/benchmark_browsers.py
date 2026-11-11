@@ -146,7 +146,7 @@ def build_math_html(content: str) -> str:
     processed = preprocessor.preprocess(content)
     return MarkdownConverter(
         PLUGIN_DIR / "templates" / "template.html"
-    ).convert_to_html(processed, "#FDFBF0")
+    ).convert_to_html(processed, "#FCFCFD")
 
 
 async def wait_for_features(page: Page, name: str) -> dict[str, int | bool]:
@@ -247,9 +247,11 @@ async def benchmark_engine(
                 console_errors = []
                 page.on(
                     "console",
-                    lambda message: console_errors.append(message.text)
-                    if message.type == "error"
-                    else None,
+                    lambda message: (
+                        console_errors.append(message.text)
+                        if message.type == "error"
+                        else None
+                    ),
                 )
                 page.on("pageerror", lambda error: console_errors.append(str(error)))
                 try:

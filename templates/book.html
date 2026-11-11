@@ -248,6 +248,15 @@
             display: flow-root;
         }
 
+        .render-content img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        p, li, th, td {
+            overflow-wrap: anywhere;
+        }
+
         .render-content > :first-child {
             margin-top: 0;
         }
@@ -370,7 +379,7 @@
             right: 0;
             padding: 0.45em 1.2em;
             background: var(--code-header);
-            color: var(--code-muted);
+            color: var(--muted-color);
             font-size: 0.85em;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -386,7 +395,7 @@
             width: var(--gutter-width);
             text-align: right;
             padding-right: 0.9em;
-            color: var(--code-muted);
+            color: var(--muted-color);
             line-height: 1.65;
             user-select: none;
             flex-shrink: 0;
@@ -394,12 +403,13 @@
 
         .line-content {
             flex: 1;
+            min-width: 0;
             padding-left: 0.6em;
             padding-right: 1.2em;
             line-height: 1.65;
             white-space: pre-wrap;
             word-wrap: break-word;
-            overflow-wrap: break-word;
+            overflow-wrap: anywhere;
         }
 
         /* Pygments tokens use readable ink colors on the light code surface. */
@@ -616,52 +626,53 @@
                         'https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js'
                     ];
                     var idx = 0;
-                    function initMermaid() {
-                        try {
-                            mermaid.initialize({
-                                startOnLoad: false,
-                                theme: 'base',
-                                securityLevel: 'strict',
-                                themeVariables: {
-                                    primaryColor: '#F1F4FB',
-                                    primaryTextColor: '#1f2328',
-                                    primaryBorderColor: '#3451b2',
-                                    lineColor: '#5b6472',
-                                    secondaryColor: '#F3F4F6',
-                                    tertiaryColor: '#FCFCFD',
-                                    fontFamily: '"EB Garamond", "Noto Serif SC", serif',
-                                    fontSize: '18px',
-                                    nodeBorder: '#3451b2',
-                                    clusterBkg: '#F3F4F6',
-                                    clusterBorder: '#cbd5e1',
-                                    edgeLabelBackground: '#FCFCFD'
-                                },
-                                flowchart: {
-                                    curve: 'basis',
-                                    padding: 20,
-                                    nodeSpacing: 50,
-                                    rankSpacing: 50,
-                                    htmlLabels: true
-                                }
-                            });
-                            window.__mermaidInitialized = true;
-                            resolve();
-                        } catch (e) {
-                            reject(e);
-                        }
-                    }
                     function tryNext() {
-                        if (window.mermaid) {
-                            initMermaid();
-                            return;
-                        }
                         if (idx >= sources.length) {
                             reject(new Error('Mermaid CDN unavailable'));
                             return;
                         }
                         var s = document.createElement('script');
                         s.src = sources[idx++];
-                        s.onload = initMermaid;
+                        s.onload = function() {
+                            try {
+                                const bodyFontSize = parseFloat(window.getComputedStyle(document.body).fontSize) || 16;
+                                const mermaidFontSize = Math.max(12, Math.min(24, bodyFontSize * 0.5));
+                                mermaid.initialize({
+                                    startOnLoad: false,
+                                    theme: 'base',
+                                    securityLevel: 'strict',
+                                    themeVariables: {
+                                        primaryColor: '#faf9f5',
+                                        primaryTextColor: '#141413',
+                                        primaryBorderColor: '#1B365D',
+                                        lineColor: '#6b6a64',
+                                        secondaryColor: '#eeede5',
+                                        tertiaryColor: '#F5F4ED',
+                                        fontFamily: window.getComputedStyle(document.body).fontFamily,
+                                        fontSize: mermaidFontSize + 'px',
+                                        nodeBorder: '#1B365D',
+                                        clusterBkg: '#eeede5',
+                                        clusterBorder: '#b9c4d1',
+                                        edgeLabelBackground: '#F5F4ED'
+                                    },
+                                    flowchart: {
+                                        curve: 'basis',
+                                        padding: 20,
+                                        nodeSpacing: 50,
+                                        rankSpacing: 50,
+                                        htmlLabels: true
+                                    }
+                                });
+                                window.__mermaidInitialized = true;
+                                resolve();
+                            } catch (e) {
+                                reject(e);
+                            }
+                        };
+                        if (window.mermaid) {
+                            s.onload();
+                            return;
+                        }
                         s.onerror = function() {
                             s.remove();
                             tryNext();
@@ -703,7 +714,7 @@
     <!-- Reusable content lifecycle; engines stay loaded between compatible jobs. -->
     <script>
         window.__formatRenderCode = function() {
-            document.querySelectorAll('pre code').forEach(function(codeBlock) {
+            document.querySelectorAll('pre:not(.mermaid) code').forEach(function(codeBlock) {
                 const pre = codeBlock.parentElement;
                 const language = /(?:^|\s)language-([A-Za-z0-9_-]+)/.exec(codeBlock.className);
                 if (language) pre.dataset.lang = language[1];
@@ -727,6 +738,7 @@
                     // 行号
                     const lineNum = document.createElement('span');
                     lineNum.className = 'line-num';
+                    lineNum.setAttribute('aria-hidden', 'true');
                     lineNum.textContent = index + 1;
 
                     // 代码内容
@@ -745,35 +757,41 @@
             if (window.MathJax && MathJax.typesetClear) MathJax.typesetClear();
             document.querySelector('main.render-content').replaceChildren();
         };
-        window.__replaceRenderContent = async function(content) {
+        window.__replaceRenderContent = function(content) {
             window.__clearRenderContent();
             window.__tikzFinished = 0;
             window.__tikzFailed = 0;
             window.__svgStats = [];
             window.mermaidError = null;
-            window.mermaidReady = false;
-            window.mathJaxReady = false;
             const main = document.querySelector('main.render-content');
             main.innerHTML = content;
             window.__formatRenderCode();
-            await window.__ensureEngines(main);
-            if (window.mathJaxRequired) {
-                MathJax.texReset();
-                await MathJax.typesetPromise([main]);
-            }
-            window.mathJaxReady = true;
             const diagrams = main.querySelectorAll('pre.mermaid');
-            if (diagrams.length) {
+            window.mathJaxReady = !window.mathJaxRequired;
+            window.mermaidReady = !diagrams.length;
+            (async function() {
                 try {
-                    await window.__ensureMermaid();
-                    await mermaid.run({nodes: diagrams});
-                    window.mermaidReady = true;
+                    await window.__ensureEngines(main);
+                    if (window.mathJaxRequired) {
+                        MathJax.texReset();
+                        await MathJax.typesetPromise([main]);
+                        window.mathJaxReady = true;
+                    }
                 } catch (err) {
-                    console.warn('[MathJax2Image] Mermaid run failed', err);
-                    window.mermaidError = err && err.message ? err.message : String(err);
+                    console.warn('[MathJax2Image] MathJax typeset failed', err);
                 }
-            } else {
-                window.mermaidReady = true;
+            })();
+            if (diagrams.length) {
+                (async function() {
+                    try {
+                        await window.__ensureMermaid();
+                        await mermaid.run({nodes: diagrams});
+                        window.mermaidReady = true;
+                    } catch (err) {
+                        console.warn('[MathJax2Image] Mermaid run failed', err);
+                        window.mermaidError = err && err.message ? err.message : String(err);
+                    }
+                })();
             }
         };
     </script>

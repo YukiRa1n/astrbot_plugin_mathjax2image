@@ -121,6 +121,31 @@ def test_native_tex_filter_keeps_ordinary_drawings(code):
     NativeTikzRenderer._reject_unsafe_tex(code)
 
 
+def test_mermaid_fence_is_linear_on_whitespace():
+    from astrbot_plugin_mathjax2image.infrastructure.converter import MermaidConverter
+
+    source = "```mermaid\ngraph TD\n" + " " * 40000 + "A\n```"
+    assert _elapsed(MermaidConverter().convert, source) < 0.5
+
+
+@pytest.mark.parametrize(
+    "source, converted",
+    [
+        ("```mermaid\ngraph TD\nA-->B\n```", True),
+        ("  ~~~~ Mermaid \ngraph TD\nA-->B\n  ~~~~~~  ", True),
+        ("```mermaid\n```", False),
+        ("```mermaidx\ngraph TD\n```", False),
+        ("```python\nmermaid\n```", False),
+    ],
+)
+def test_mermaid_fence_recognition(source, converted):
+    from astrbot_plugin_mathjax2image.infrastructure.converter import MermaidConverter
+
+    converter = MermaidConverter()
+    assert ('<pre class="mermaid">' in converter.convert(source)) is converted
+    assert converter.has_mermaid(source) is (converted or source == "```mermaid\n```")
+
+
 def test_tikz_converter_rejects_special_and_escapes_closing_main():
     converter = TikzConverter(TikzPlotConverter())
     blocked = converter.convert(
@@ -530,3 +555,77 @@ def test_nested_enumerate_and_set_notation_and_wake_prefix_and_bool_eval():
         assert "if (initialTypeset) window.mathJaxReady = true;" in tpl
         assert "delete window.__engines[name];" in tpl
         assert "window.__ensureMermaid" in tpl
+
+
+def test_non_math_to_math_resident_reuse_waits_for_typeset_promise():
+    import json
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+
+    html = MarkdownConverter(template_path=_TEMPLATE).convert_to_html("Plain text")
+    scripts = re.findall(r"<script[^>]*>([\s\S]*?)</script>", html)
+    # Execute config + engine + lifecycle scripts against a minimal DOM stub:
+    # Job 1 starts with mathJaxRequired=false (typeset=false), then Job 2 sets
+    # mathJaxRequired=true and calls __replaceRenderContent('$x$').
+    harness = (
+        """
+        globalThis.window = globalThis;
+        const mainNode = {
+            innerHTML: '',
+            replaceChildren() {},
+            querySelector() { return null; },
+            querySelectorAll() { return []; },
+        };
+        globalThis.document = {
+            readyState: 'complete',
+            body: {},
+            head: {
+                appendChild(el) {
+                    if (el.src && el.src.includes('tex-chtml.js')) {
+                        setTimeout(() => {
+                            MathJax.startup.options = { typeset: MathJax.startup.typeset };
+                            MathJax.startup.defaultReady = () => {
+                                MathJax.startup.promise = Promise.resolve();
+                            };
+                            MathJax.texReset = () => {};
+                            MathJax.typesetClear = () => {};
+                            MathJax.typesetPromise = () => new Promise(r => {
+                                globalThis.__finishTypeset = r;
+                            });
+                            el.onload();
+                            MathJax.startup.ready();
+                        }, 5);
+                    }
+                }
+            },
+            addEventListener() {},
+            createElement(tag) { return { tag }; },
+            querySelector(sel) { return sel === 'main.render-content' ? mainNode : null; },
+            querySelectorAll() { return []; },
+        };
+        globalThis.getComputedStyle = () => ({ fontSize: '36px', fontFamily: 'serif' });
+        """
+        + "\n".join(scripts)
+        + """
+        (async () => {
+            window.mathJaxRequired = true;
+            window.__replaceRenderContent('<p>$x$</p>');
+            await new Promise(r => setTimeout(r, 20));
+            const readyBeforeTypeset = window.mathJaxReady;
+            globalThis.__finishTypeset();
+            await new Promise(r => setTimeout(r, 10));
+            const readyAfterTypeset = window.mathJaxReady;
+            console.log(JSON.stringify({ readyBeforeTypeset, readyAfterTypeset }));
+        })();
+        """
+    )
+    proc = subprocess.run(
+        [node, "-e", harness], capture_output=True, text=True, check=True, timeout=10
+    )
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result == {"readyBeforeTypeset": False, "readyAfterTypeset": True}

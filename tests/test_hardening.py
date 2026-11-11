@@ -888,3 +888,120 @@ def test_usepackage_inside_a_fence_is_protected_after_an_inline_mention():
     html = _converter().convert_to_html(_preprocessor().preprocess(payload))
     # 代码块可能被语法高亮拆成多个 <span>，比较去掉标签后的文本
     assert "\\usepackage{pgfplots}" in re.sub(r"<[^>]+>", "", html)
+
+
+def test_escaped_newline_inside_code_and_inline_code_is_preserved():
+    """代码块与行内代码中的 ``\\n`` 字面量不得被 ``_preprocess_markdown`` 拆成物理换行。"""
+    payload = '行内 `\\n` 换行符：\n\n```python\nlines = text.split("\\n")\n```\n'
+    html = _converter().convert_to_html(_preprocessor().preprocess(payload))
+    assert "<code>\\n</code>" in html
+    code_match = re.search(r"<pre><code[^>]*>([\s\S]*?)</code></pre>", html)
+    assert code_match is not None
+    import html as html_lib
+
+    plain_code = html_lib.unescape(re.sub(r"<[^>]+>", "", code_match.group(1)))
+    assert 'lines = text.split("\\n")' in plain_code
+    assert "\n" not in plain_code.strip()
+
+
+def test_line_start_triple_backtick_inline_code_and_closing_fence_tail():
+    """行首的 ```` ```a``` ```` 是行内代码而非开启围栏；闭合围栏后跟非空白字符时不闭合。"""
+    text = "```a```\n\n```python\n```not_closer\nx = 1\n```\n"
+    spans = scan_fenced_code(text)
+    assert [text[a:b] for a, b in spans] == [
+        "```a```",
+        "```python\n```not_closer\nx = 1\n```",
+    ]
+
+
+def test_unmatched_single_backtick_does_not_consume_double_backtick_span():
+    """孤立的单反引号不得吞掉后续双反引号行内代码的起始定界符。"""
+    text = "孤立的 ` 符号然后 ``$not_math$`` 结束\n"
+    spans = scan_fenced_code(text)
+    assert [text[a:b] for a, b in spans] == ["``$not_math$``"]
+    html = _converter().convert_to_html(text)
+    assert "<code>$not_math$</code>" in html
+    assert (
+        '"mathJaxRequired": false' in html or "window.mathJaxRequired = false" in html
+    )
+
+
+def test_mermaid_list_and_table_respect_code_fences_and_tikz():
+    """Mermaid、列表与表格转换器必须跳过代码围栏与 TikZ 环境。"""
+    pre = _preprocessor()
+    # 1. 正文提及 ```mermaid 后跟 ```python 代码块，不得误匹配成 Mermaid 图
+    mention = "正文里提到 ```mermaid\n下面是代码：\n```python\nx = 1\n```\n"
+    out_mention = pre.preprocess(mention)
+    assert '<pre class="mermaid">' not in out_mention
+    assert "```python\nx = 1\n```" in out_mention
+
+    # 2. 4 反引号代码块内嵌 ```mermaid 示例，必须保持为源码
+    nested_mermaid = "````markdown\n```mermaid\ngraph TD; A-->B;\n```\n````\n"
+    assert '<pre class="mermaid">' not in pre.preprocess(nested_mermaid)
+
+    # 3. 代码块内的 itemize / tabular 示例不得被转为 Markdown 列表或表格
+    latex_sample = (
+        "```latex\n"
+        "\\begin{itemize}\n\\item first\n\\end{itemize}\n"
+        "\\begin{tabular}{cc} a & b \\\\ c & d \\end{tabular}\n"
+        "```\n"
+    )
+    assert pre.preprocess(latex_sample) == latex_sample
+
+    # 4. TikZ 节点内的 tabular 不得被 TableConverter 提前改写为管道表格
+    tikz_with_tabular = (
+        "\\begin{tikzpicture}\n"
+        "\\node {\\begin{tabular}{cc} a & b \\\\ c & d \\end{tabular}};\n"
+        "\\end{tikzpicture}"
+    )
+    out_tikz = pre.preprocess(tikz_with_tabular)
+    assert 'class="tikz-diagram"' in out_tikz
+    assert "\\begin{tabular}{cc}" in out_tikz
+    assert "| a | b |" not in out_tikz
+
+
+def test_math_environments_and_crlf_in_preprocessor():
+    """multline / alignat 内的文本命令受保护，且 CRLF 换行下 ```tikz 正常拆包。"""
+    pre = _preprocessor()
+    math_env = "\\begin{multline}\n\\textbf{A} = 1\n\\end{multline}"
+    assert "**A**" not in pre.preprocess(math_env)
+
+    crlf_tikz = (
+        "```tikz\r\n"
+        "\\begin{tikzpicture}\r\n\\draw (0,0) -- (1,1);\r\n\\end{tikzpicture}\r\n"
+        "```\r\n"
+    )
+    assert 'class="tikz-diagram"' in pre.preprocess(crlf_tikz)
+
+
+def test_network_allowlist_blocks_arbitrary_cdn_paths():
+    """网络白名单只放行模板所需的 CDN 路径前缀，拒绝同域任意包与路径穿越。"""
+    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
+        PageRenderer,
+    )
+
+    assert PageRenderer._is_allowed_remote_url(
+        "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"
+    )
+    assert PageRenderer._is_allowed_remote_url(
+        "https://cdn.jsdelivr.net/npm/@drgrice1/tikzjax@1.0.0-beta24/dist/tikzjax.js"
+    )
+    assert PageRenderer._is_allowed_remote_url(
+        "https://unpkg.com/mermaid@10.9.3/dist/mermaid.min.js"
+    )
+    assert not PageRenderer._is_allowed_remote_url(
+        "https://cdn.jsdelivr.net/gh/attacker/repo/payload.ttf"
+    )
+    assert not PageRenderer._is_allowed_remote_url(
+        "https://unpkg.com/some-other-pkg@1.0.0/index.js"
+    )
+    assert not PageRenderer._is_allowed_remote_url(
+        "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/../../gh/attacker/repo/x.ttf"
+    )
+
+
+def test_legacy_beige_background_never_used_in_html():
+    """旧米色默认背景 ``#FDFBF0`` 即使直接传入 ``convert_to_html`` 也一律转为近白 ``#FCFCFD``。"""
+    html = _converter().convert_to_html("正文", "#FDFBF0")
+    assert "--bg-color: #FCFCFD;" in html
+    assert "#FDFBF0" not in html.upper()

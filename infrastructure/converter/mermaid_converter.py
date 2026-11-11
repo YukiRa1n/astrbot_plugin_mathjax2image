@@ -6,6 +6,8 @@ Mermaid图表转换器
 import html
 import re
 
+from ...utils.linear_scan import scan_fenced_code
+
 try:
     from astrbot.api import logger
 except ModuleNotFoundError:  # pragma: no cover - standalone test support
@@ -15,6 +17,37 @@ except ModuleNotFoundError:  # pragma: no cover - standalone test support
 
 
 MAX_MERMAID_LENGTH = 50000  # 单个 mermaid 代码块最大长度（字符）
+
+_MERMAID_OPEN_LINE = re.compile(
+    r"[ \t]*(?P<fence>[`~]{3,})[ \t]*mermaid[ \t]*", re.IGNORECASE
+)
+
+
+def _mermaid_body(block: str) -> str | None:
+    """Return the body of one scanned fence when it is a Mermaid block.
+
+    ``scan_fenced_code`` already guarantees that the first line opens the fence
+    and the last line closes it, so the body is simply what lies between them.
+    The previous single regex ended its lazy body with ``[ \\t]*(?P=fence)``,
+    which rescanned every run of spaces from each position inside it (20 000
+    spaces took 2.6 s).
+    """
+    first_newline = block.find("\n")
+    if first_newline == -1:
+        return None
+    opening = _MERMAID_OPEN_LINE.fullmatch(block, 0, first_newline)
+    if opening is None:
+        return None
+    last_newline = block.rfind("\n")
+    closing_from = last_newline + 1
+    if not re.fullmatch(
+        r"[ \t]*" + re.escape(opening.group("fence")) + r"[`~]*[ \t]*",
+        block[closing_from:],
+    ):
+        return None
+    if last_newline == first_newline:
+        return ""
+    return block[first_newline + 1 : last_newline]
 
 
 class MermaidConverter:
@@ -46,7 +79,7 @@ class MermaidConverter:
     ]
 
     def convert(self, text: str) -> str:
-        """转换所有Mermaid代码块
+        """转换所有Mermaid代码块（仅转换顶层合法围栏，忽略正文提及与外层代码块嵌套）
 
         Args:
             text: 包含Mermaid代码块的文本
@@ -54,16 +87,31 @@ class MermaidConverter:
         Returns:
             转换后的文本，mermaid代码块被替换为HTML格式
         """
-        # 匹配 ```mermaid ... ``` 代码块
-        pattern = r"```mermaid\s*\n([\s\S]*?)```"
-
-        converted = re.sub(pattern, self._convert_mermaid_block, text)
-
-        return converted
+        if "mermaid" not in text.lower():
+            return text
+        if "\r" in text:
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+        pieces: list[str] = []
+        position = 0
+        for start, end in scan_fenced_code(text):
+            body = _mermaid_body(text[start:end])
+            if body is None:
+                continue
+            pieces.append(text[position:start])
+            pieces.append(self._convert_mermaid_body(body))
+            position = end
+        if not pieces:
+            return text
+        pieces.append(text[position:])
+        return "".join(pieces)
 
     def _convert_mermaid_block(self, match: re.Match) -> str:
-        """转换单个Mermaid代码块"""
-        raw_code = match.group(1)
+        """转换单个Mermaid代码块（兼容旧调用签名）"""
+        body = match.group("body") if "body" in match.groupdict() else match.group(1)
+        return self._convert_mermaid_body(body)
+
+    def _convert_mermaid_body(self, raw_code: str) -> str:
+        """转换单个Mermaid代码块内容"""
         if len(raw_code) > MAX_MERMAID_LENGTH:
             logger.warning(
                 f"[MathJax2Image] Mermaid代码过长: {len(raw_code)} > {MAX_MERMAID_LENGTH}"
@@ -203,5 +251,12 @@ class MermaidConverter:
         return "unknown"
 
     def has_mermaid(self, text: str) -> bool:
-        """检查文本是否包含Mermaid代码块"""
-        return bool(re.search(r"```mermaid\s*\n", text))
+        """检查文本是否包含顶层Mermaid代码块"""
+        if "mermaid" not in text.lower():
+            return False
+        if "\r" in text:
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+        return any(
+            _mermaid_body(text[start:end]) is not None
+            for start, end in scan_fenced_code(text)
+        )
