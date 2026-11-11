@@ -4,7 +4,10 @@
 """
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..plugin_types import ValidationResult
 
 
 @runtime_checkable
@@ -29,11 +32,11 @@ class ILatexPreprocessor(Protocol):
 class ILatexValidator(Protocol):
     """LaTeX验证器接口"""
 
-    def validate(self, text: str) -> tuple[bool, str]:
+    def validate(self, text: str) -> "ValidationResult":
         """验证LaTeX语法
 
         Returns:
-            (is_valid, error_message)
+            ValidationResult(is_valid, errors)
         """
         ...
 
@@ -170,13 +173,13 @@ class ISafeEvaluator(Protocol):
 class IMermaidConverter(Protocol):
     """Mermaid转换器接口"""
 
-    async def convert_mermaid(self, mermaid_code: str) -> str:
-        """将Mermaid代码转换为图片或其他格式
+    def convert(self, text: str) -> str:
+        """将包含Mermaid代码块的文本转换为受控HTML格式
 
         Args:
-            mermaid_code: Mermaid代码
+            text: 包含Mermaid代码块的文本
 
         Returns:
-            转换后的内容
+            转换后的文本
         """
         ...

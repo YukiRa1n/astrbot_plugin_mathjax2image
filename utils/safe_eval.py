@@ -89,9 +89,9 @@ class SafeMathEvaluator(ast.NodeVisitor):
 
     def visit_Constant(self, node: ast.Constant) -> float:
         """访问常量节点（数字）"""
-        if isinstance(node.value, (int, float)):
+        if type(node.value) in (int, float):
             # 超大 int（如 999**999）转 float 会抛 OverflowError，先检查位数
-            if isinstance(node.value, int) and node.value.bit_length() > 256:
+            if type(node.value) is int and node.value.bit_length() > 256:
                 raise ValueError("Numeric constant too large")
             logger.debug(f"[SafeEval] [PROCESS] Constant value={node.value}")
             return float(node.value)

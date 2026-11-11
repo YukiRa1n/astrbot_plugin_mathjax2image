@@ -41,6 +41,7 @@
                 inlineMath: [['$', '$'], ['\\(', '\\)']],
                 displayMath: [['$$', '$$'], ['\\[', '\\]']],
                 packages: {'[+]': ['ams', 'newcommand', 'boldsymbol', 'mathtools', 'extpfeil', ...requestedPackages]},
+                autoload: {html: []},
                 macros: {
                     // 群论/代数
                     Stab: '\\operatorname{Stab}',
@@ -167,11 +168,12 @@
                 // 常驻页面复用时由 __replaceRenderContent 显式排版
                 typeset: window.mathJaxRequired,
                 ready: () => {
+                    const initialTypeset = MathJax.startup.options.typeset !== false;
                     console.log('MathJax is ready');
                     MathJax.startup.defaultReady();
                     MathJax.startup.promise.then(() => {
                         console.log('MathJax initial typesetting complete');
-                        window.mathJaxReady = true;
+                        if (initialTypeset) window.mathJaxReady = true;
                         window.__resolveMathJaxStartup();
                     });
                 }
@@ -182,7 +184,7 @@
             for (const name of ['dd', 'dv', 'pdv', 'abs', 'norm', 'Re', 'Im', 'Res', 'rank', 'op', 'set']) {
                 delete MathJax.tex.macros[name];
             }
-            MathJax.tex.autoload = {braket: []};
+            MathJax.tex.autoload.braket = [];
         }
         if (requestedPackages.includes('braket')) delete MathJax.tex.macros.set;
     </script>
@@ -575,9 +577,15 @@
                             node.href = url;
                         }
                         node.onload = resolve;
-                        node.onerror = () => reject(new Error('Failed to load ' + url));
+                        node.onerror = () => {
+                            node.remove();
+                            reject(new Error('Failed to load ' + url));
+                        };
                         document.head.appendChild(node);
-                    })));
+                    }))).catch(err => {
+                        delete window.__engines[name];
+                        throw err;
+                    });
             }
             return window.__engines[name];
         };
@@ -596,75 +604,98 @@
     <!-- Mermaid：优先 unpkg，失败回退 jsdelivr -->
     <script>
         window.mermaidReady = false;
-        (function loadMermaid() {
-            var sources = [
-                'https://unpkg.com/mermaid@10.9.3/dist/mermaid.min.js',
-                'https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js'
-            ];
-            var idx = 0;
-            function tryNext() {
-                if (!document.querySelector('pre.mermaid')) {
+        window.__mermaidPromise = null;
+        window.__ensureMermaid = function() {
+            if (window.mermaid && window.__mermaidInitialized) {
+                return Promise.resolve();
+            }
+            if (!window.__mermaidPromise) {
+                window.__mermaidPromise = new Promise(function(resolve, reject) {
+                    var sources = [
+                        'https://unpkg.com/mermaid@10.9.3/dist/mermaid.min.js',
+                        'https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js'
+                    ];
+                    var idx = 0;
+                    function initMermaid() {
+                        try {
+                            mermaid.initialize({
+                                startOnLoad: false,
+                                theme: 'base',
+                                securityLevel: 'strict',
+                                themeVariables: {
+                                    primaryColor: '#F1F4FB',
+                                    primaryTextColor: '#1f2328',
+                                    primaryBorderColor: '#3451b2',
+                                    lineColor: '#5b6472',
+                                    secondaryColor: '#F3F4F6',
+                                    tertiaryColor: '#FCFCFD',
+                                    fontFamily: '"EB Garamond", "Noto Serif SC", serif',
+                                    fontSize: '18px',
+                                    nodeBorder: '#3451b2',
+                                    clusterBkg: '#F3F4F6',
+                                    clusterBorder: '#cbd5e1',
+                                    edgeLabelBackground: '#FCFCFD'
+                                },
+                                flowchart: {
+                                    curve: 'basis',
+                                    padding: 20,
+                                    nodeSpacing: 50,
+                                    rankSpacing: 50,
+                                    htmlLabels: true
+                                }
+                            });
+                            window.__mermaidInitialized = true;
+                            resolve();
+                        } catch (e) {
+                            reject(e);
+                        }
+                    }
+                    function tryNext() {
+                        if (window.mermaid) {
+                            initMermaid();
+                            return;
+                        }
+                        if (idx >= sources.length) {
+                            reject(new Error('Mermaid CDN unavailable'));
+                            return;
+                        }
+                        var s = document.createElement('script');
+                        s.src = sources[idx++];
+                        s.onload = initMermaid;
+                        s.onerror = function() {
+                            s.remove();
+                            tryNext();
+                        };
+                        document.head.appendChild(s);
+                    }
+                    tryNext();
+                }).catch(function(err) {
+                    window.__mermaidPromise = null;
+                    throw err;
+                });
+            }
+            return window.__mermaidPromise;
+        };
+        (function runInitialMermaid() {
+            function start() {
+                var nodes = document.querySelectorAll('pre.mermaid');
+                if (!nodes.length) {
                     window.mermaidReady = true;
                     return;
                 }
-                if (idx >= sources.length) {
-                    console.warn('[MathJax2Image] Mermaid CDN unavailable');
-                    window.mermaidError = 'Mermaid CDN unavailable';
-                    return;
-                }
-                var s = document.createElement('script');
-                s.src = sources[idx++];
-                s.onload = function() {
-                    try {
-                        mermaid.initialize({
-                            startOnLoad: false,
-                            theme: 'base',
-                            securityLevel: 'strict',
-                            themeVariables: {
-                                primaryColor: '#F1F4FB',
-                                primaryTextColor: '#1f2328',
-                                primaryBorderColor: '#3451b2',
-                                lineColor: '#5b6472',
-                                secondaryColor: '#F3F4F6',
-                                tertiaryColor: '#FCFCFD',
-                                fontFamily: '"EB Garamond", "Noto Serif SC", serif',
-                                fontSize: '18px',
-                                nodeBorder: '#3451b2',
-                                clusterBkg: '#F3F4F6',
-                                clusterBorder: '#cbd5e1',
-                                edgeLabelBackground: '#FCFCFD'
-                            },
-                            flowchart: {
-                                curve: 'basis',
-                                padding: 20,
-                                nodeSpacing: 50,
-                                rankSpacing: 50,
-                                htmlLabels: true
-                            }
-                        });
-                        var nodes = document.querySelectorAll('pre.mermaid');
-                        if (!nodes.length) {
-                            window.mermaidReady = true;
-                            return;
-                        }
-                        mermaid.run({ nodes: nodes }).then(function() {
-                            window.mermaidReady = true;
-                        }).catch(function(err) {
-                            console.warn('[MathJax2Image] Mermaid run failed', err);
-                            window.mermaidError = String(err);
-                        });
-                    } catch (e) {
-                        console.warn('[MathJax2Image] Mermaid init failed', e);
-                        window.mermaidError = String(e);
-                    }
-                };
-                s.onerror = tryNext;
-                document.head.appendChild(s);
+                window.__ensureMermaid().then(function() {
+                    return mermaid.run({ nodes: nodes });
+                }).then(function() {
+                    window.mermaidReady = true;
+                }).catch(function(err) {
+                    console.warn('[MathJax2Image] Mermaid failed', err);
+                    window.mermaidError = err && err.message ? err.message : String(err);
+                });
             }
             if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', tryNext);
+                document.addEventListener('DOMContentLoaded', start);
             } else {
-                tryNext();
+                start();
             }
         })();
     </script>
@@ -732,8 +763,18 @@
             }
             window.mathJaxReady = true;
             const diagrams = main.querySelectorAll('pre.mermaid');
-            if (diagrams.length) await mermaid.run({nodes: diagrams});
-            window.mermaidReady = true;
+            if (diagrams.length) {
+                try {
+                    await window.__ensureMermaid();
+                    await mermaid.run({nodes: diagrams});
+                    window.mermaidReady = true;
+                } catch (err) {
+                    console.warn('[MathJax2Image] Mermaid run failed', err);
+                    window.mermaidError = err && err.message ? err.message : String(err);
+                }
+            } else {
+                window.mermaidReady = true;
+            }
         };
     </script>
 </body>

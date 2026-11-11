@@ -21,6 +21,9 @@ _TIKZ_FENCE = re.compile(
     r"(?P<fence>[`~]{3,})[ \t]*tikz[ \t]*\n(?P<body>[\s\S]*?)\n[ \t]*(?P=fence)[`~]*[ \t]*$",
     re.IGNORECASE,
 )
+_SPOOFED_TRUSTED_HTML = re.compile(
+    r'<(?:div class="tikz-diagram"><script type="text/tikz"|pre class="mermaid"\s*>|div class="error">)'
+)
 
 
 class LatexPreprocessor:
@@ -42,10 +45,12 @@ class LatexPreprocessor:
         """预处理LaTeX文本"""
         # 0. 大模型常把要画的图包进 ```tikz 代码块；按意图渲染成图
         text = self._unwrap_tikz_fences(text)
+        # 0b. 在插件转换器生成受控 HTML 块之前，转义用户输入里伪造的受控块前缀（保留代码围栏）
+        text = self._escape_spoofed_trusted_html(text)
         # 1. 转换LaTeX文本命令为Markdown
         text = self._convert_text_commands(text)
 
-        # 2. 处理集合表示法（数学区间受保护，需再过一遍，但代码围栏必须跳过）
+        # 2. 单遍处理集合表示法（跳过代码围栏与 TikZ/表格环境，避免重复改写或破坏节点花括号）
         text = self._fix_set_notation_outside_code(text)
 
         # 3. 处理LaTeX列表
@@ -134,28 +139,63 @@ class LatexPreprocessor:
         pieces.append(self._transform_segment(text[position:]))
         return "".join(pieces)
 
+    def _escape_spoofed_trusted_html(self, text: str) -> str:
+        """Escape user-supplied lookalikes of plugin-generated HTML blocks outside code."""
+        if (
+            '<div class="tikz-diagram">' not in text
+            and '<pre class="mermaid"' not in text
+            and '<div class="error">' not in text
+        ):
+            return text
+        spans = scan_fenced_code(text)
+        if not spans:
+            return _SPOOFED_TRUSTED_HTML.sub(lambda m: "&lt;" + m.group(0)[1:], text)
+        pieces: list[str] = []
+        position = 0
+        for start, end in spans:
+            pieces.append(
+                _SPOOFED_TRUSTED_HTML.sub(
+                    lambda m: "&lt;" + m.group(0)[1:], text[position:start]
+                )
+            )
+            pieces.append(text[start:end])
+            position = end
+        pieces.append(
+            _SPOOFED_TRUSTED_HTML.sub(
+                lambda m: "&lt;" + m.group(0)[1:], text[position:]
+            )
+        )
+        return "".join(pieces)
+
     def _transform_segment(self, segment: str) -> str:
-        """Apply text-command rewrites and set-notation only outside math ranges."""
+        """Apply text-command rewrites only outside protected ranges."""
         if not segment:
             return segment
         if segment.startswith(("\\[", "\\(")):
             return segment
-        segment = self._TEXT_COMMAND.sub(self._replace_text_command, segment)
-        return self._fix_set_notation(segment)
+        return self._TEXT_COMMAND.sub(self._replace_text_command, segment)
 
     def _fix_set_notation_outside_code(self, text: str) -> str:
-        """在全文中应用集合表示法改写，但绝不进入代码围栏/行内代码。
-
-        第 1 步的文本命令改写会跳过受保护的数学区间，所以集合表示法需要
-        再整体跑一遍；而那时也顺便改到了代码示例，`{a \\mid b}` 会被改成
-        `\\lbrace a \\mid b\\rbrace`，示例源码就不再是源码。
-        """
-        spans = scan_fenced_code(text)
+        """在全文单遍应用集合表示法改写，但跳过代码围栏、TikZ 与表格环境。"""
+        spans: list[tuple[int, int]] = list(scan_fenced_code(text))
+        for env in ("tikzpicture", "tikzcd", "tabular"):
+            spans.extend(
+                find_pairs(
+                    text, f"\\begin{{{env}}}", f"\\end{{{env}}}", allow_newline=True
+                )
+            )
         if not spans:
             return self._fix_set_notation(text)
+        spans.sort()
+        merged: list[tuple[int, int]] = []
+        for start, end in spans:
+            if merged and start < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
         pieces: list[str] = []
         position = 0
-        for start, end in spans:
+        for start, end in merged:
             pieces.append(self._fix_set_notation(text[position:start]))
             pieces.append(text[start:end])
             position = end

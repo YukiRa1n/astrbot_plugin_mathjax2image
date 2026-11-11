@@ -4,6 +4,7 @@ window.__compactSvgOutput = function(source) {
     const paint = new Set(['fill', 'fill-rule', 'fill-opacity', 'stroke',
         'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit',
         'stroke-dasharray', 'stroke-dashoffset', 'stroke-opacity', 'color']);
+    const blockedTags = new Set(['script', 'foreignobject', 'iframe', 'object', 'embed', 'image']);
     const tokens = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<\/?[\w:.-]+\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/g;
     const stack = [];
     const output = [];
@@ -34,14 +35,24 @@ window.__compactSvgOutput = function(source) {
             continue;
         }
         const selfClosing = token.endsWith('/>');
+        const lowerTag = name.includes(':') ? name.split(':').pop().toLowerCase() : name.toLowerCase();
+        if (blockedTags.has(lowerTag)) return null;
         const end = selfClosing ? '/>' : '>';
         const raw = token.slice(name.length + 1, -end.length);
         const attributes = Object.create(null);
         const attributePattern = /([\w:.-]+)\s*=\s*("[^"]*"|'[^']*')/g;
         if (raw.replace(attributePattern, '').trim()) return null;
         for (const attribute of raw.matchAll(attributePattern)) {
-            if (attribute[1] in attributes) return null;
-            attributes[attribute[1]] = attribute[2];
+            const attrName = attribute[1];
+            const localAttr = (attrName.includes(':') ? attrName.split(':').pop() : attrName).toLowerCase();
+            const unquoted = attribute[2].slice(1, -1).trim();
+            if (localAttr.startsWith('on')) return null;
+            if (localAttr === 'href' && !unquoted.startsWith('#')) return null;
+            if ((lowerTag === 'animate' || lowerTag === 'set') &&
+                localAttr === 'attributename' &&
+                unquoted.toLowerCase().endsWith('href')) return null;
+            if (attrName in attributes) return null;
+            attributes[attrName] = attribute[2];
         }
         const drop = name === 'g' && Object.keys(attributes).every(key => paint.has(key));
         const previous = inherited;

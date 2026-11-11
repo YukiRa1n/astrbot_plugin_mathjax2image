@@ -187,13 +187,13 @@ class CommandHandler:
         full_msg = (event.get_message_str() or "").strip()
         if full_msg:
             cmd = re.escape(cmd_name)
-            # 1) 消息以命令开头；唤醒前缀 "/" 通常已被框架去掉，也可能保留
+            # 1) 消息以命令开头；唤醒前缀（如 "/"、"!"、"." 等）可能已被框架去掉，也可能保留
             match = re.match(
-                rf"/?{cmd}(?![A-Za-z0-9_])[\s:：]*", full_msg, re.IGNORECASE
+                rf"[^\w\s]?{cmd}(?![A-Za-z0-9_])[\s:：]*", full_msg, re.IGNORECASE
             )
             if match is None:
-                # 2) 命令前还有其他文本时，只接受带斜杠且后跟空白的形式
-                match = re.search(rf"/{cmd}\s+", full_msg, re.IGNORECASE)
+                # 2) 命令前还有其他文本时，接受带单字符唤醒前缀且后跟空白的形式
+                match = re.search(rf"[^\w\s]{cmd}\s+", full_msg, re.IGNORECASE)
             if match is not None:
                 rest = full_msg[match.end() :].strip()
                 if rest:

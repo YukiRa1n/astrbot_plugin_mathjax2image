@@ -17,9 +17,18 @@ _HANDLE = wintypes.HANDLE
 _kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
 _kernel.CreateJobObjectW.restype = _HANDLE
 _kernel.AssignProcessToJobObject.argtypes = [_HANDLE, _HANDLE]
+_kernel.AssignProcessToJobObject.restype = wintypes.BOOL
 _kernel.ResumeThread.argtypes = [_HANDLE]
 _kernel.ResumeThread.restype = wintypes.DWORD
 _kernel.TerminateJobObject.argtypes = [_HANDLE, wintypes.UINT]
+_kernel.TerminateJobObject.restype = wintypes.BOOL
+_kernel.SetInformationJobObject.argtypes = [
+    _HANDLE,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    wintypes.DWORD,
+]
+_kernel.SetInformationJobObject.restype = wintypes.BOOL
 _kernel.QueryInformationJobObject.argtypes = [
     _HANDLE,
     ctypes.c_int,
@@ -27,12 +36,52 @@ _kernel.QueryInformationJobObject.argtypes = [
     wintypes.DWORD,
     ctypes.c_void_p,
 ]
+_kernel.QueryInformationJobObject.restype = wintypes.BOOL
 # A job's active count may reach zero before its terminating processes have
 # released their file handles. Wait on the processes themselves.
 _kernel.IsProcessInJob.argtypes = [_HANDLE, _HANDLE, ctypes.POINTER(wintypes.BOOL)]
+_kernel.IsProcessInJob.restype = wintypes.BOOL
 _CREATE_SUSPENDED = 0x00000004
 _JOB_PROCESS_IDS = 3
+_JOB_EXTENDED_LIMIT_INFO = 9
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _WAIT_QUERY_ACCESS = 0x00101000  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
+    ]
+
+
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+        ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
 
 
 def _member_handles(job: int, handles: ExitStack) -> list[int]:
@@ -65,7 +114,8 @@ def _member_handles(job: int, handles: ExitStack) -> list[int]:
         try:
             handle = _winapi.OpenProcess(_WAIT_QUERY_ACCESS, False, pid)
         except OSError as exc:
-            if exc.winerror == 87:  # Already exited.
+            # 87: already exited; 5: PID already recycled by a protected process.
+            if exc.winerror in (5, 87):
                 continue
             raise
         handles.callback(_winapi.CloseHandle, handle)
@@ -88,6 +138,15 @@ def _run_job(
         if not job:
             raise ctypes.WinError(ctypes.get_last_error())
         handles.callback(_winapi.CloseHandle, job)
+        limits = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not _kernel.SetInformationJobObject(
+            job,
+            _JOB_EXTENDED_LIMIT_INFO,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
 
         # Limit inherited handles to stdin and the shared stdout/stderr log.
         with ExitStack() as streams:
@@ -142,12 +201,14 @@ def _run_job(
             return 1
         finally:
             if assigned:
+                members: list[int] = []
                 try:
                     members = _member_handles(job, handles)
                 finally:
                     if not _kernel.TerminateJobObject(job, 1):
                         raise ctypes.WinError(ctypes.get_last_error())
-                for handle in members:
+                extra = _member_handles(job, handles)
+                for handle in [*members, *extra]:
                     _winapi.WaitForSingleObject(handle, _winapi.INFINITE)
             else:
                 _winapi.TerminateProcess(process, 1)
