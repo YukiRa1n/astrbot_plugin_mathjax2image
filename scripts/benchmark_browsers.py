@@ -247,9 +247,11 @@ async def benchmark_engine(
                 console_errors = []
                 page.on(
                     "console",
-                    lambda message: console_errors.append(message.text)
-                    if message.type == "error"
-                    else None,
+                    lambda message: (
+                        console_errors.append(message.text)
+                        if message.type == "error"
+                        else None
+                    ),
                 )
                 page.on("pageerror", lambda error: console_errors.append(str(error)))
                 try:

@@ -219,9 +219,7 @@ def _is_closing_fence_tail(text: str, end: int) -> bool:
     return index == length or text[index] == "\n"
 
 
-def _is_opening_fence_line(
-    text: str, start: int, run_length: int, char: str
-) -> bool:
+def _is_opening_fence_line(text: str, start: int, run_length: int, char: str) -> bool:
     """开启围栏所在行必须有换行，且反引号围栏的 info string 不得再含反引号。"""
     after = start + run_length
     line_end = text.find("\n", after)

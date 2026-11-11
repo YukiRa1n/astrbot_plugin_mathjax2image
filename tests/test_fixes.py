@@ -59,7 +59,9 @@ def test_font_path_traversal_sanitized():
 
 def test_browser_launch_args_no_dangerous_flags():
     """Browser launch args must not contain --disable-web-security or --allow-file-access-from-files."""
-    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import BrowserManager
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
 
     source = inspect.getsource(BrowserManager.get_browser)
     assert "--disable-web-security" not in source
@@ -69,8 +71,12 @@ def test_browser_launch_args_no_dangerous_flags():
 @pytest.mark.asyncio
 async def test_font_route_uses_safe_name(tmp_path):
     """handle_font_route must sanitize font_name via Path.name before building path."""
-    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import PageRenderer
-    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import BrowserManager
+    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
+        PageRenderer,
+    )
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
 
     static_dir = tmp_path / "static"
     fonts_dir = static_dir / "fonts"
@@ -101,8 +107,12 @@ async def test_font_route_uses_safe_name(tmp_path):
 @pytest.mark.asyncio
 async def test_font_route_serves_valid_font(tmp_path):
     """Legitimate font requests should still be served correctly via route.fulfill(path=...)."""
-    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import PageRenderer
-    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import BrowserManager
+    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
+        PageRenderer,
+    )
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
 
     static_dir = tmp_path / "static"
     fonts_dir = static_dir / "fonts"
@@ -243,7 +253,9 @@ class TestPendingImagesTTL:
 
     def test_cleanup_removes_expired(self, tmp_path):
         import time
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler.__new__(LLMToolHandler)
         handler._pending_images = {}
@@ -265,7 +277,9 @@ class TestPendingImagesTTL:
 
     def test_cleanup_keeps_fresh_entries(self, tmp_path):
         import time
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler.__new__(LLMToolHandler)
         handler._pending_images = {}
@@ -283,7 +297,9 @@ class TestPendingImagesTTL:
     @pytest.mark.asyncio
     async def test_pending_image_expires_without_send_image(self, tmp_path):
         import asyncio
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler(MagicMock(), MagicMock())
         handler._IMAGE_TTL_SECONDS = 0.02
@@ -338,7 +354,9 @@ class TestPendingImagesLock:
     def test_lock_created_in_init(self):
         """LLMToolHandler.__init__ must create an asyncio.Lock as _pending_lock."""
         import asyncio
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         # 真正跑 __init__：旧写法用 __new__ 再自己赋值，再断言自己赋的值，
         # 即使实现删掉这把锁也照样通过。
@@ -352,7 +370,9 @@ class TestPendingImagesLock:
     async def test_handle_render_math_uses_lock(self, tmp_path, monkeypatch):
         """handle_render_math must guard _pending_images writes with the lock."""
         import asyncio
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler.__new__(LLMToolHandler)
         handler._pending_images = {}
@@ -370,6 +390,7 @@ class TestPendingImagesLock:
 
         async def _no_sleep(_):
             return None
+
         monkeypatch.setattr(
             "astrbot_plugin_mathjax2image.handlers.llm_tool_handler.asyncio.sleep",
             _no_sleep,
@@ -385,7 +406,9 @@ class TestPendingImagesLock:
     async def test_handle_render_math_cleans_old_entry(self, tmp_path, monkeypatch):
         """When overwriting a session entry, the previous file must be unlinked."""
         import asyncio
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler.__new__(LLMToolHandler)
         handler._pending_images = {}
@@ -407,6 +430,7 @@ class TestPendingImagesLock:
 
         async def _no_sleep(_):
             return None
+
         monkeypatch.setattr(
             "astrbot_plugin_mathjax2image.handlers.llm_tool_handler.asyncio.sleep",
             _no_sleep,
@@ -473,19 +497,23 @@ class TestRenderOrchestratorFullUuid:
 
         async def _no_check(_self):
             return True
+
         monkeypatch.setattr(
             "astrbot_plugin_mathjax2image.infrastructure.browser.dependency_installer.PlaywrightDependencyInstaller.check_and_install",
             _no_check,
         )
 
         import asyncio
+
         asyncio.run(ro.render("hello"))
 
         name = captured["output"].name
         assert name.startswith("render_")
         assert name.endswith(".png")
-        uuid_part = name[len("render_"):-len(".png")]
-        assert len(uuid_part) == 32, f"Expected full 32-char UUID, got {len(uuid_part)}: {uuid_part}"
+        uuid_part = name[len("render_") : -len(".png")]
+        assert len(uuid_part) == 32, (
+            f"Expected full 32-char UUID, got {len(uuid_part)}: {uuid_part}"
+        )
         assert re.fullmatch(r"[0-9a-f]{32}", uuid_part)
 
 
@@ -496,6 +524,7 @@ class TestMermaidLengthLimit:
         from astrbot_plugin_mathjax2image.infrastructure.converter.mermaid_converter import (
             MAX_MERMAID_LENGTH,
         )
+
         assert MAX_MERMAID_LENGTH == 50000
 
     def test_oversized_mermaid_block_rejected(self):
@@ -579,7 +608,7 @@ class TestPageRendererFontRouteUsesPath:
         source = inspect.getsource(PageRenderer._setup_font_routes)
         assert "route.fulfill(path=" in source
         assert "with open(font_path" not in source
-        assert 'fulfill(body=' not in source
+        assert "fulfill(body=" not in source
 
     @pytest.mark.asyncio
     async def test_font_route_fulfill_called_with_path(self, tmp_path):
@@ -712,7 +741,9 @@ class TestHandleSendImageUsesLock:
     async def test_send_refuses_after_close(self, tmp_path):
         """卸载后不得再投递；旧测试只 inspect 源码文本，实现改坏也会通过。"""
         import time
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler(MagicMock(), MagicMock())
         handler._get_session_key = MagicMock(return_value="session-close")
@@ -732,7 +763,9 @@ class TestHandleSendImageUsesLock:
     @pytest.mark.asyncio
     async def test_handle_send_image_no_pending(self):
         import asyncio
-        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
+        from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import (
+            LLMToolHandler,
+        )
 
         handler = LLMToolHandler.__new__(LLMToolHandler)
         handler._pending_images = {}
@@ -754,6 +787,7 @@ class TestSafeEvalResultSizeLimit:
 
         result = safe_eval_math("999**999")
         import math
+
         assert math.isnan(result)
 
     def test_moderate_power_allowed(self):
@@ -902,7 +936,12 @@ def test_bg_color_replacement_matches_template_default(tmp_path):
             "# 标题\n\n正文 $a+b$\n\n$$x^2$$",
         ),
         ("render", "render\n# 标题\n正文", "#", "# 标题\n正文"),
-        ("math", "/math Fourier transform basics", "Fourier", "Fourier transform basics"),
+        (
+            "math",
+            "/math Fourier transform basics",
+            "Fourier",
+            "Fourier transform basics",
+        ),
         ("render", "/render$E=mc^2$", "", "$E=mc^2$"),
         ("art", "ART：人工智能的发展", "人工智能的发展", "人工智能的发展"),
         # 命令名只是更长单词的前缀时不能误匹配，回退到框架参数
@@ -955,7 +994,9 @@ async def test_llm_send_removes_artifact_after_embedding(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_llm_send_restores_pending_after_platform_rejection(tmp_path, monkeypatch):
+async def test_llm_send_restores_pending_after_platform_rejection(
+    tmp_path, monkeypatch
+):
     """A rejected send must leave the same artifact available for retry."""
     import time
 

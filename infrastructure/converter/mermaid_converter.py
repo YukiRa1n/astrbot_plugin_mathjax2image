@@ -107,11 +107,7 @@ class MermaidConverter:
 
     def _convert_mermaid_block(self, match: re.Match) -> str:
         """转换单个Mermaid代码块（兼容旧调用签名）"""
-        body = (
-            match.group("body")
-            if "body" in match.groupdict()
-            else match.group(1)
-        )
+        body = match.group("body") if "body" in match.groupdict() else match.group(1)
         return self._convert_mermaid_body(body)
 
     def _convert_mermaid_body(self, raw_code: str) -> str:

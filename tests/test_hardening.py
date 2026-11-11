@@ -892,10 +892,7 @@ def test_usepackage_inside_a_fence_is_protected_after_an_inline_mention():
 
 def test_escaped_newline_inside_code_and_inline_code_is_preserved():
     """代码块与行内代码中的 ``\\n`` 字面量不得被 ``_preprocess_markdown`` 拆成物理换行。"""
-    payload = (
-        "行内 `\\n` 换行符：\n\n"
-        '```python\nlines = text.split("\\n")\n```\n'
-    )
+    payload = '行内 `\\n` 换行符：\n\n```python\nlines = text.split("\\n")\n```\n'
     html = _converter().convert_to_html(_preprocessor().preprocess(payload))
     assert "<code>\\n</code>" in html
     code_match = re.search(r"<pre><code[^>]*>([\s\S]*?)</code></pre>", html)
@@ -924,7 +921,9 @@ def test_unmatched_single_backtick_does_not_consume_double_backtick_span():
     assert [text[a:b] for a, b in spans] == ["``$not_math$``"]
     html = _converter().convert_to_html(text)
     assert "<code>$not_math$</code>" in html
-    assert '"mathJaxRequired": false' in html or "window.mathJaxRequired = false" in html
+    assert (
+        '"mathJaxRequired": false' in html or "window.mathJaxRequired = false" in html
+    )
 
 
 def test_mermaid_list_and_table_respect_code_fences_and_tikz():

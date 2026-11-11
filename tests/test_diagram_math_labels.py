@@ -58,11 +58,10 @@ def test_ambiguous_or_native_labels_are_preserved(label):
 
 def test_mermaid_fence_converts_after_another_code_block():
     source = (
-        '```python\nprint("code")\n```\n\n'
-        '```mermaid\nflowchart LR\n A --> B\n```\n'
+        '```python\nprint("code")\n```\n\n```mermaid\nflowchart LR\n A --> B\n```\n'
     )
     converted = MermaidConverter().convert(source)
-    assert '```python' in converted
+    assert "```python" in converted
     assert '<pre class="mermaid">' in converted
 
 
