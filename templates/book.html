@@ -167,7 +167,7 @@
             },
             startup: {
                 // 常驻页面复用时由 __replaceRenderContent 显式排版
-                typeset: initialTypeset,
+                typeset: window.mathJaxRequired,
                 ready: () => {
                     console.log('MathJax is ready');
                     MathJax.startup.defaultReady();
