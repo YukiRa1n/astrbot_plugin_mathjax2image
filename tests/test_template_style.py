@@ -202,10 +202,11 @@ def test_code_chrome_uses_readable_theme_colors(template):
 
 def test_default_code_block_matches_document_palette():
     source = _source(TEMPLATES["default"])
-    assert "--code-bg: #f5f6f8;" in source
+    assert "--code-bg: #f2f4f8;" in source
+    assert "--code-sheet-bg: #ffffff;" in source
     assert "--code-accent: var(--accent-color);" in source
-    assert "background: var(--code-header-bg);" in source
-    assert "pre .nf, pre .fm, pre .nd { color: #8250df; }" in source
+    assert "background: var(--code-sheet-bg);" in source
+    assert "pre .nf, pre .fm, pre .nd { color: #7a492e; font-weight: 500; }" in source
 
 
 @pytest.mark.parametrize("template", TEMPLATES.values(), ids=TEMPLATES)

@@ -54,7 +54,7 @@ MathJax 3.2.2、TikZJax beta24 和 Mermaid 10.9.3 使用固定版本 CDN；字�
 
 **部署边界：** 原生 TeX 是本机程序。插件禁用 shell escape、限制文件访问、过滤常见危险指令并使用临时目录，但这些措施不构成完整沙箱。接收不可信用户输入时，应把启用原生后端的 AstrBot 部署在无敏感挂载、低权限的隔离容器中；默认 WASM 路线仍可直接使用。
 
-默认采用现代编辑风模板：EB Garamond / Noto Serif SC、近白背景、1150px 宽和 36px 正文，以标题层级、留白和细线表格组织内容。已保存的自定义背景、字号和标题比例仍优先生效。
+默认采用现代编辑风模板：EB Garamond / Noto Serif SC、近白背景、1150px 宽和 36px 正文，以细线标题锚点、三线表与内嵌白卡代码块组织内容。已保存的自定义背景、字号和标题比例仍优先生效。
 
 书籍样式仅保留为[参考模板](templates/book.html)和[预览](examples/book_theme.png)，默认不会加载；其字体许可与模板来源见 [NOTICE](templates/NOTICE.md)。
 
