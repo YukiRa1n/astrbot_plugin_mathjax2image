@@ -434,6 +434,7 @@ class NativeTikzRenderer:
                         node.set(key, value)
                 ET.register_namespace("", "http://www.w3.org/2000/svg")
                 ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+                svg.set("data-tikz-backend", "native")
                 replacements.append(ET.tostring(svg, encoding="unicode"))
         html = _insert_replacements(html, matches, replacements)
         return re.sub(

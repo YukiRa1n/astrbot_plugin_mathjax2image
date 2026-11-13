@@ -14,6 +14,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -39,6 +40,7 @@ class AssetDiskCache:
         self._directory = Path(directory)
         self._max_bytes = max(0, int(max_bytes))
         self._total_bytes: int | None = None
+        self._lock = threading.RLock()
 
     @property
     def enabled(self) -> bool:
@@ -67,26 +69,27 @@ class AssetDiskCache:
         if not self.enabled:
             return None
         body_path, meta_path = self._paths(url)
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if meta.get("url") != url:
+        with self._lock:
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta.get("url") != url:
+                    return None
+                max_age = self.max_age(url)
+                if max_age is not None and time.time() - meta["stored"] > max_age:
+                    self._remove(body_path, meta_path)
+                    return None
+                body = body_path.read_bytes()
+                if len(body) != meta.get("size"):
+                    self._remove(body_path, meta_path)
+                    return None
+            except (OSError, ValueError, KeyError, TypeError):
                 return None
-            max_age = self.max_age(url)
-            if max_age is not None and time.time() - meta["stored"] > max_age:
-                self._remove(body_path, meta_path)
-                return None
-            body = body_path.read_bytes()
-            if len(body) != meta.get("size"):
-                self._remove(body_path, meta_path)
-                return None
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
-        # 以访问时间作为 LRU 依据；失败不影响命中
-        try:
-            os.utime(meta_path)
-        except OSError:
-            pass
-        return body, str(meta.get("content_type") or "application/octet-stream")
+            # 以访问时间作为 LRU 依据；失败不影响命中
+            try:
+                os.utime(meta_path)
+            except OSError:
+                pass
+            return body, str(meta.get("content_type") or "application/octet-stream")
 
     def put(self, url: str, body: bytes, content_type: str) -> bool:
         """Store a response body atomically, evicting old entries if needed."""
@@ -100,20 +103,24 @@ class AssetDiskCache:
             "size": size,
             "stored": time.time(),
         }
-        try:
-            self._directory.mkdir(parents=True, exist_ok=True)
-            previous = body_path.stat().st_size if body_path.exists() else 0
-            self._atomic_write(body_path, body)
-            # 元数据最后写入：读取方以元数据存在且大小一致为完整条目
-            self._atomic_write(
-                meta_path, json.dumps(meta, ensure_ascii=False).encode("utf-8")
-            )
-        except OSError:
-            return False
-        if self._total_bytes is not None:
-            self._total_bytes += size - previous
-        self._evict()
-        return True
+        with self._lock:
+            try:
+                self._directory.mkdir(parents=True, exist_ok=True)
+                previous = body_path.stat().st_size if body_path.exists() else 0
+                self._atomic_write(body_path, body)
+                # 元数据最后写入：读取方以元数据存在且大小一致为完整条目
+                self._atomic_write(
+                    meta_path, json.dumps(meta, ensure_ascii=False).encode("utf-8")
+                )
+            except OSError:
+                return False
+            if self._total_bytes is not None:
+                self._total_bytes += size - previous
+            try:
+                self._evict()
+            except OSError:
+                self._total_bytes = None
+            return True
 
     def _atomic_write(self, path: Path, data: bytes) -> None:
         fd, tmp_name = tempfile.mkstemp(dir=str(self._directory), suffix=".tmp")

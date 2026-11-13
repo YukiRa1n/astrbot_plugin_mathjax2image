@@ -37,9 +37,11 @@ MAX_TIKZ_FOREACH_DEPTH = 2  # 最大 \foreach 嵌套深度
 # 超过上限的声明按“未匹配”处理（原文保留）。
 _PREAMBLE_PACKAGE = re.compile(r"\\usepackage(?:\[([^\]]{0,200})\])?\{([^{}]{0,200})\}")
 _PREAMBLE_LIBRARY = re.compile(r"\\usetikzlibrary\{([^{}]{0,200})\}")
+_PREAMBLE_PGFPLOTS_LIBRARY = re.compile(r"\\usepgfplotslibrary\{([^{}]{0,200})\}")
 _STRIP_PACKAGE = re.compile(r"\\usepackage(\[[^\]]{0,200}\])?\{[^}]{0,200}\}")
 _STRIP_DOCUMENTCLASS = re.compile(r"\\documentclass(\[[^\]]{0,200}\])?\{[^}]{0,200}\}")
 _STRIP_LIBRARY = re.compile(r"\\usetikzlibrary\{[^}]{0,200}\}")
+_STRIP_PGFPLOTS_LIBRARY = re.compile(r"\\usepgfplotslibrary\{[^}]{0,200}\}")
 _STRIP_DOCUMENT = re.compile(r"\\(?:begin|end)\{document\}")
 _STRIP_PAGESTYLE = re.compile(r"\\(this)?pagestyle\{[^}]{0,200}\}")
 
@@ -69,6 +71,31 @@ class TikzConverter:
         "circuitikz": "circuitikz 不支持（TikZJax 无此包），请用 TikZ 原生命令",
         "chemfig": "chemfig 不支持（TikZJax 无此包），请用 TikZ 原生命令",
     }
+    #: Standalone pgfplots environments wrapped in ``tikzpicture`` when used bare.
+    _STANDALONE_PGFPLOTS_ENVIRONMENTS = (
+        "axis",
+        "loglogaxis",
+        "semilogxaxis",
+        "semilogyaxis",
+        "polaraxis",
+        "groupplot",
+    )
+    #: Allowed pgfplots libraries emitted cleanly after ``\\pgfplotsset``.
+    SUPPORTED_PGFPLOTS_LIBRARIES = frozenset(
+        {
+            "colorbrewer",
+            "colormaps",
+            "dateplot",
+            "fillbetween",
+            "groupplots",
+            "patchplots",
+            "polar",
+            "smithchart",
+            "statistics",
+            "ternary",
+            "units",
+        }
+    )
 
     def convert(self, text: str) -> str:
         """Convert all TikZ environments with budgets local to this document.
@@ -89,7 +116,7 @@ class TikzConverter:
             close_token = f"\\end{{{environment}}}"
             # 代码围栏内部的 TikZ 是示例源码，必须原样保留：若当成真图转换，
             # 代码块内容会变成插件生成的 HTML 片段，读者看到的就不是用户写的代码。
-            spans = self._outside_code_fences(
+            spans = self._outside_protected(
                 find_pairs(text, open_token, close_token), text
             )
             if environment in self._REJECTED_ENVIRONMENTS:
@@ -105,6 +132,28 @@ class TikzConverter:
                     spans,
                     lambda index, block: self._convert_tikz_block_span(
                         index, block, plot_budget, surface_budget
+                    ),
+                )
+
+        # Standalone pgfplots axis/groupplot environments outside fences and
+        # already-converted diagrams are wrapped in a tikzpicture automatically.
+        for environment in self._STANDALONE_PGFPLOTS_ENVIRONMENTS:
+            open_token = f"\\begin{{{environment}}}"
+            if open_token not in text:
+                continue
+            close_token = f"\\end{{{environment}}}"
+            spans = self._outside_protected(
+                find_pairs(text, open_token, close_token), text
+            )
+            if spans:
+                text = substitute_spans(
+                    text,
+                    spans,
+                    lambda index, block: self._convert_tikz_block_span(
+                        index,
+                        f"\\begin{{tikzpicture}}\n{block}\n\\end{{tikzpicture}}",
+                        plot_budget,
+                        surface_budget,
                     ),
                 )
 
@@ -126,6 +175,35 @@ class TikzConverter:
             )
 
         return text
+
+    @staticmethod
+    def _outside_protected(
+        spans: list[tuple[int, int]], text: str
+    ) -> list[tuple[int, int]]:
+        """Drop spans inside code fences/inline code or already-converted diagrams."""
+        protected: list[tuple[int, int]] = list(scan_fenced_code(text))
+        if '<div class="tikz-diagram">' in text:
+            protected.extend(
+                find_pairs(text, '<div class="tikz-diagram">', "</script></div>")
+            )
+        if not protected:
+            return spans
+        protected.sort()
+        merged: list[tuple[int, int]] = []
+        for s, e in protected:
+            if merged and s < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+        kept: list[tuple[int, int]] = []
+        index = 0
+        for start, end in spans:
+            while index < len(merged) and merged[index][1] <= start:
+                index += 1
+            if index < len(merged) and merged[index][0] <= start < merged[index][1]:
+                continue
+            kept.append((start, end))
+        return kept
 
     @staticmethod
     def _outside_code_fences(
@@ -207,6 +285,7 @@ class TikzConverter:
         explicit_packages, explicit_libraries = self._extract_preamble_directives(
             tikz_code
         )
+        explicit_pgfplots_libs = self._extract_pgfplots_libraries(tikz_code)
         tikz_code = self._strip_preamble_directives(tikz_code)
 
         # 预处理plot命令
@@ -219,6 +298,13 @@ class TikzConverter:
         tikzlibraries = list(
             dict.fromkeys(explicit_libraries + self._detect_libraries(tikz_code))
         )
+        pgfplots_libs = list(
+            dict.fromkeys(
+                explicit_pgfplots_libs + self._detect_pgfplots_libraries(tikz_code)
+            )
+        )
+        if pgfplots_libs and "pgfplots" not in packages:
+            packages.append("pgfplots")
 
         logger.info(f"[MathJax2Image] TikZ包: {packages}, 库: {tikzlibraries}")
 
@@ -228,8 +314,15 @@ class TikzConverter:
         # usetikzlibrary/document 包装，否则嵌套 document 报错）。
         # The worker format does not preload AMS commands such as \mathbb.
         tex_packages = dict.fromkeys(packages, "")
+        tikz_document = tikz_code
+        if pgfplots_libs and "pgfplots" in packages:
+            tikz_document = (
+                f"\\pgfplotsset{{compat=1.16}}\n"
+                f"\\usepgfplotslibrary{{{','.join(pgfplots_libs)}}}\n"
+                f"{tikz_code}"
+            )
         return self._wrap_tikz_html(
-            tikz_code,
+            tikz_document,
             tex_packages=tex_packages,
             tikz_libraries=tikzlibraries,
         )
@@ -254,12 +347,36 @@ class TikzConverter:
                     libraries.append(library)
         return packages, libraries
 
+    @classmethod
+    def _extract_pgfplots_libraries(cls, tikz_code: str) -> list[str]:
+        """Extract allowlisted ``\\usepgfplotslibrary`` names."""
+        libs: list[str] = []
+        for match in _PREAMBLE_PGFPLOTS_LIBRARY.finditer(tikz_code):
+            for lib in match.group(1).split(","):
+                lib = lib.strip()
+                if lib in cls.SUPPORTED_PGFPLOTS_LIBRARIES and lib not in libs:
+                    libs.append(lib)
+        return libs
+
+    @classmethod
+    def _detect_pgfplots_libraries(cls, tikz_code: str) -> list[str]:
+        """Infer required allowlisted pgfplots libraries from diagram commands."""
+        libs: list[str] = []
+        if "groupplot" in tikz_code or "\\nextgroupplot" in tikz_code:
+            libs.append("groupplots")
+        if "polaraxis" in tikz_code:
+            libs.append("polar")
+        if "fill between" in tikz_code:
+            libs.append("fillbetween")
+        return libs
+
     @staticmethod
     def _strip_preamble_directives(tikz_code: str) -> str:
         """剥离用户输入中的 preamble 指令（模式已限长，见 _PREAMBLE_PACKAGE）。"""
         code = _STRIP_DOCUMENTCLASS.sub("", tikz_code)
         code = _STRIP_PACKAGE.sub("", code)
         code = _STRIP_LIBRARY.sub("", code)
+        code = _STRIP_PGFPLOTS_LIBRARY.sub("", code)
         code = _STRIP_DOCUMENT.sub("", code)
         return _STRIP_PAGESTYLE.sub("", code)
 
@@ -352,7 +469,12 @@ class TikzConverter:
 
         if "tikzcd" in tikz_code or "\\arrow" in tikz_code:
             packages.append("tikz-cd")
-        if "axis" in tikz_code or "addplot" in tikz_code:
+        if (
+            "axis" in tikz_code
+            or "addplot" in tikz_code
+            or "groupplot" in tikz_code
+            or "\\nextgroupplot" in tikz_code
+        ):
             packages.append("pgfplots")
         if "tdplot" in tikz_code or "3d" in tikz_code.lower():
             packages.append("tikz-3dplot")

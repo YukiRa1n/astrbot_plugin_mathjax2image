@@ -727,3 +727,246 @@ async def test_native_tikz_allows_bracket_backtick_and_pgfplots_axis_variants(tm
         r"\begin{tikzpicture}\node {$\left[a\right]$ \`a};\end{tikzpicture}",
     ):
         renderer._reject_unsafe_tex(code)
+
+
+def test_asset_disk_cache_concurrent_put_get_and_evict_are_thread_safe(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from astrbot_plugin_mathjax2image.infrastructure.browser.asset_disk_cache import (
+        AssetDiskCache,
+    )
+
+    cache = AssetDiskCache(tmp_path, max_bytes=200)
+    payload = b"x" * 60
+
+    def worker(idx: int) -> None:
+        for round_idx in range(12):
+            url = f"https://cdn.jsdelivr.net/npm/pkg@1.0.0/f{(idx + round_idx) % 6}.js"
+            assert cache.put(url, payload, "application/javascript") is True
+            got = cache.get(url)
+            if got is not None:
+                assert got[0] == payload
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(worker, range(6)))
+
+
+@pytest.mark.asyncio
+async def test_resident_plain_to_math_uses_cold_timeout_and_disk_cache_works_with_zero_mem(
+    tmp_path,
+):
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
+    from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
+        PageRenderer,
+    )
+    from astrbot_plugin_mathjax2image.utils.config import safe_bool
+
+    assert safe_bool(None, default=True) is True
+    assert safe_bool(None) is False
+    assert safe_bool(1) is False
+
+    renderer = PageRenderer(
+        BrowserManager(max_pages=1),
+        tmp_path,
+        mathjax_timeout=0,
+        tikz_timeout=0,
+        mermaid_timeout=0,
+        screenshot_timeout=0,
+        resource_cache_max_mb=0,
+        asset_cache_dir=tmp_path / "disk_cache",
+        asset_disk_cache_max_mb=1,
+    )
+    assert renderer._mathjax_timeout == 1
+    assert renderer._tikz_timeout == 1
+    assert renderer._mermaid_timeout == 1
+    assert renderer._screenshot_timeout == 1
+
+    # resource_cache_max_mb=0 still hits asset_disk_cache without retaining in RAM
+    url = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"
+    assert renderer._disk_cache.put(url, b"window.MathJax={};", "text/javascript")
+    route = MagicMock()
+    route.request.url = url
+    route.fulfill = AsyncMock()
+    assert await renderer._serve_cached_resource(route) is True
+    route.fulfill.assert_awaited_once()
+    assert not renderer._cdn_cache
+
+    # Reused plain-text page (MathJax never loaded) must get >= 60s wait timeout
+    html_file = tmp_path / "doc.html"
+    html_file.write_text(
+        '<html><script>window.mathJaxRequired = true; window.__replaceRenderContent = () => {};</script><body><main class="render-content">$x$</main></body></html>',
+        encoding="utf-8",
+    )
+    waited_timeouts = []
+    page = MagicMock()
+    page.evaluate = AsyncMock(side_effect=[True, False, None, True])
+
+    async def fake_wait_for_function(_expr, timeout=None):
+        waited_timeouts.append(timeout)
+
+    page.wait_for_function = fake_wait_for_function
+    renderer._wait_for_mermaid = AsyncMock()
+    renderer._wait_for_tikz = AsyncMock()
+    await renderer._load_and_wait(page, html_file)
+    assert waited_timeouts[-1] >= 60_000
+
+    # Warm page (MathJax already loaded) uses configured mathjax_timeout
+    renderer._mathjax_timeout = 1234
+    page2 = MagicMock()
+    page2.evaluate = AsyncMock(side_effect=[True, True, None, True])
+    page2.wait_for_function = fake_wait_for_function
+    await renderer._load_and_wait(page2, html_file)
+    assert waited_timeouts[-1] == 1234
+
+
+@pytest.mark.asyncio
+async def test_browser_manager_close_cancels_hung_idle_cleanup_task():
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
+
+    manager = BrowserManager(max_pages=1)
+    browser = MagicMock()
+    browser.close = AsyncMock()
+    playwright = MagicMock()
+    playwright.stop = AsyncMock()
+    manager._browser = browser
+    manager._owns_browser = True
+    manager._playwright = playwright
+
+    async def hung_cleanup():
+        await asyncio.sleep(60)
+
+    manager._idle_cleanup_task = asyncio.create_task(hung_cleanup())
+    await asyncio.sleep(0)
+
+    await asyncio.wait_for(manager.close(), timeout=1.5)
+    browser.close.assert_awaited_once()
+    playwright.stop.assert_awaited_once()
+
+
+def test_converter_edge_cases_from_re_review():
+    from astrbot_plugin_mathjax2image.infrastructure.converter import (
+        LatexPreprocessor,
+        ListConverter,
+        MarkdownConverter,
+        MermaidConverter,
+        TableConverter,
+        TikzConverter,
+        TikzPlotConverter,
+    )
+    from astrbot_plugin_mathjax2image.utils.linear_scan import scan_math_blocks
+
+    # 1. Escaped dollar \$ does not break subsequent $...$ matching
+    escaped_line = r"Price is \$5 and $a*b + c*d$."
+    spans = scan_math_blocks(escaped_line)
+    assert [escaped_line[s:e] for s, e in spans] == ["$a*b + c*d$"]
+
+    pre = LatexPreprocessor(
+        TikzConverter(TikzPlotConverter()),
+        ListConverter(),
+        TableConverter(),
+        MermaidConverter(),
+    )
+    md = MarkdownConverter(template_path=_TEMPLATE)
+    html_dollar = md.convert_to_html(pre.preprocess(escaped_line))
+    assert "<em>" not in html_dollar
+    assert "$a*b + c*d$" in html_dollar
+
+    # 2. Set notation skips macro/script brace arguments (\frac, \text, subscript)
+    pre_expr = pre.preprocess(r"$\frac{1}{a \mid b} + \text{u \mid v} + {x \mid x > 0}$")
+    assert r"\frac{1}{a \mid b}" in pre_expr
+    assert r"\text{u \mid v}" in pre_expr
+    assert r"\lbrace x \mid x > 0\rbrace " in pre_expr
+
+    # 3. TableConverter handles escaped \& and matrix internal & / \\ and \\[4pt]
+    tab = (
+        "\\begin{tabular}{ll}\n"
+        "\\hline\n"
+        "Name & Formula \\\\\n"
+        "\\hline\n"
+        "R \\& D & $\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}$ \\\\[4pt]\n"
+        "\\hline\n"
+        "\\end{tabular}"
+    )
+    md_tab = TableConverter().convert(tab)
+    assert "| Name | Formula |" in md_tab
+    assert r"| R \& D | $\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ |" in md_tab
+    assert "[4pt]" not in md_tab
+
+    # 4. ListConverter ignores \itemsep
+    lst = "\\begin{itemize}\n\\itemsep 0pt\n\\item First\n\\end{itemize}"
+    converted_lst = ListConverter().convert(lst)
+    assert "- First" in converted_lst
+    assert r"\itemsep 0pt" in converted_lst
+    assert "- sep" not in converted_lst
+
+    # 5. Ignored package with options succeeds; MathJax package with options raises
+    html_ctex = md.convert_to_html("\\usepackage[UTF8]{ctex}\nHello $x$")
+    assert "ctex" not in html_ctex
+    with pytest.raises(ValueError, match="package options"):
+        md.convert_to_html("\\usepackage[italicdiff]{physics}\nHello $x$")
+
+    # 6. Matrix \\n preserved while outside \\n expands; adjacent code fence unwraps <p>
+    matrix_doc = "$$\\begin{pmatrix} a \\\\ n \\end{pmatrix}$$\nLine1\\n# Heading"
+    html_matrix = md.convert_to_html(pre.preprocess(matrix_doc))
+    assert r"\begin{pmatrix} a \\ n \end{pmatrix}" in html_matrix
+    assert "<h1>Heading</h1>" in html_matrix
+
+    adj_fence = "Intro:\n```python\nx = 1\n```\nOutro"
+    html_fence = md.convert_to_html(adj_fence)
+    assert "<p><pre>" not in html_fence
+    assert "</pre></p>" not in html_fence
+    assert "<p>Intro:</p>" in html_fence
+    assert "<p>Outro</p>" in html_fence
+
+    # 7. 4-space indented fence & 4-space #define are treated cleanly without double <pre>
+    indented_fence = "    ```python\n    #define MAX 1\n    ```"
+    html_indented = md.convert_to_html(indented_fence)
+    assert html_indented.count("<pre>") == 1
+    assert "<h1>" not in html_indented
+
+    # 8. Standalone pgfplots groupplot / loglogaxis converted cleanly with groupplots lib
+    standalone_gp = (
+        "\\usepgfplotslibrary{groupplots}\n"
+        "\\begin{groupplot}[group style={group size=2 by 1}]\n"
+        "\\nextgroupplot \\addplot {x};\n"
+        "\\nextgroupplot \\addplot {x^2};\n"
+        "\\end{groupplot}"
+    )
+    html_gp = md.convert_to_html(pre.preprocess(standalone_gp))
+    assert '<div class="tikz-diagram"><script type="text/tikz"' in html_gp
+    assert r"\usepgfplotslibrary{groupplots}" in html_gp
+    assert r"\begin{tikzpicture}" in html_gp
+    assert html_gp.count('<script type="text/tikz"') == 1
+
+
+def test_svg_output_js_blocks_animate_variants_and_entity_encoded_href():
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+
+    plugin_dir = Path(__file__).resolve().parents[1]
+    svg_js = (plugin_dir / "static" / "svg_output.js").read_text(encoding="utf-8")
+    probe = (
+        "globalThis.window = globalThis;\n"
+        + svg_js
+        + """
+        const blocked = [
+            '<svg><g fill="red"><animateTransform attributeName="href" to="https://evil.example/"/></g></svg>',
+            '<svg><g fill="red"><set attributeName="&#104;ref" to="https://evil.example/"/></g></svg>',
+            '<svg><g fill="red"><use xlink:href="&#104;ttps://evil.example/#x"/></g></svg>',
+        ];
+        console.log(JSON.stringify(blocked.map(s => window.__compactSvgOutput(s))));
+        """
+    )
+    proc = subprocess.run(
+        [node, "-e", probe], capture_output=True, text=True, check=True, timeout=10
+    )
+    assert json.loads(proc.stdout.strip()) == [None, None, None]

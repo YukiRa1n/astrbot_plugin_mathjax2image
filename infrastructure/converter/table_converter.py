@@ -5,7 +5,12 @@ LaTeX表格转换器
 
 import re
 
-from ...utils.linear_scan import find_pairs, scan_fenced_code, substitute_spans
+from ...utils.linear_scan import (
+    _has_odd_backslashes,
+    find_pairs,
+    scan_fenced_code,
+    substitute_spans,
+)
 
 #: 参数（`\begin{table}[...]` 选项、`\caption{...}`）允许的最大长度。
 #: 限长后字符类不会在缺少闭合符时回扫到行尾：100 KB 全是
@@ -109,22 +114,96 @@ class TableConverter:
                     return body[index + 1 :]
         return body  # 未闭合：按普通内容处理，不猜
 
-    def _convert_tabular(self, content: str) -> str:
-        """转换tabular内容"""
-        # 移除\\hline
-        content = re.sub(r"\\hline\s*", "", content)
+    @staticmethod
+    def _split_tabular_rows(content: str) -> list[list[str]]:
+        """Split a tabular body into rows and cells at top-level delimiters only.
 
-        # 按\\\\分割行
-        rows = re.split(r"\\\\\s*", content)
-        md_rows = []
+        Ignores escaped ``\\&`` and any ``&`` or ``\\\\`` inside nested braces or
+        environments (such as ``\\begin{pmatrix} ... \\end{pmatrix}``), and
+        strips top-level ``\\hline`` commands plus ``\\\\[...]`` row spacing.
+        """
+        rows: list[list[str]] = []
+        current_row: list[str] = []
+        cell_start = 0
+        brace_depth = 0
+        env_depth = 0
+        length = len(content)
+        index = 0
 
-        for row in rows:
-            row = row.strip()
-            if not row:
+        def _flush_cell(end: int, *, drop_trailing_hline: bool = False) -> None:
+            raw_cell = content[cell_start:end]
+            if drop_trailing_hline:
+                raw_cell = re.sub(r"\\hline(?![A-Za-z])\s*$", "", raw_cell)
+            cleaned = " ".join(raw_cell.splitlines()).strip()
+            current_row.append(cleaned)
+
+        while index < length:
+            ch = content[index]
+            if ch == "{" and not _has_odd_backslashes(content, index):
+                brace_depth += 1
+                index += 1
+                continue
+            if ch == "}" and not _has_odd_backslashes(content, index):
+                brace_depth = max(0, brace_depth - 1)
+                index += 1
+                continue
+            if content.startswith("\\begin{", index) and not _has_odd_backslashes(
+                content, index
+            ):
+                env_depth += 1
+                index += 7
+                continue
+            if content.startswith("\\end{", index) and not _has_odd_backslashes(
+                content, index
+            ):
+                env_depth = max(0, env_depth - 1)
+                index += 5
                 continue
 
-            # 按&分割列
-            cells = [c.strip() for c in row.split("&")]
+            if brace_depth == 0 and env_depth == 0:
+                if (
+                    content.startswith("\\hline", index)
+                    and not _has_odd_backslashes(content, index)
+                    and (index + 6 >= length or not content[index + 6].isalpha())
+                ):
+                    if content[cell_start:index].strip() == "":
+                        cell_start = index + 6
+                        while cell_start < length and content[cell_start].isspace():
+                            cell_start += 1
+                        index = cell_start
+                        continue
+                if content.startswith("\\\\", index) and not _has_odd_backslashes(
+                    content, index
+                ):
+                    _flush_cell(index, drop_trailing_hline=True)
+                    if any(current_row):
+                        rows.append(current_row)
+                    current_row = []
+                    index += 2
+                    spacing = re.match(
+                        r"[ \t]*(?:\[[^\]\n]{0,40}\])?\s*", content[index:]
+                    )
+                    if spacing:
+                        index += spacing.end()
+                    cell_start = index
+                    continue
+                if ch == "&" and not _has_odd_backslashes(content, index):
+                    _flush_cell(index)
+                    index += 1
+                    cell_start = index
+                    continue
+            index += 1
+
+        _flush_cell(length, drop_trailing_hline=True)
+        if any(current_row):
+            rows.append(current_row)
+        return rows
+
+    def _convert_tabular(self, content: str) -> str:
+        """转换tabular内容"""
+        md_rows = []
+
+        for cells in self._split_tabular_rows(content):
             md_rows.append("| " + " | ".join(cells) + " |")
 
             # 首个真正输出的行才是表头。旧实现用原始切分的下标 i == 0 判断，

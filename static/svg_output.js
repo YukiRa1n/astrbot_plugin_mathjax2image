@@ -42,15 +42,29 @@ window.__compactSvgOutput = function(source) {
         const attributes = Object.create(null);
         const attributePattern = /([\w:.-]+)\s*=\s*("[^"]*"|'[^']*')/g;
         if (raw.replace(attributePattern, '').trim()) return null;
+        const decodeEntities = text => text
+            .replace(/&#x([0-9a-fA-F]+);?/g, (_, hex) => {
+                const cp = Number.parseInt(hex, 16);
+                return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+            })
+            .replace(/&#(\d+);?/g, (_, dec) => {
+                const cp = Number.parseInt(dec, 10);
+                return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+            })
+            .replace(/&(lt|gt|amp|quot|apos);/gi, (_, entityName) => (
+                {lt: '<', gt: '>', amp: '&', quot: '"', apos: "'"}[entityName.toLowerCase()]
+            ));
         for (const attribute of raw.matchAll(attributePattern)) {
             const attrName = attribute[1];
             const localAttr = (attrName.includes(':') ? attrName.split(':').pop() : attrName).toLowerCase();
-            const unquoted = attribute[2].slice(1, -1).trim();
+            const unquoted = decodeEntities(attribute[2].slice(1, -1)).trim();
             if (localAttr.startsWith('on')) return null;
-            if (localAttr === 'href' && !unquoted.startsWith('#')) return null;
-            if ((lowerTag === 'animate' || lowerTag === 'set') &&
-                localAttr === 'attributename' &&
-                unquoted.toLowerCase().endsWith('href')) return null;
+            if (localAttr === 'href' && unquoted && !unquoted.startsWith('#')) return null;
+            if ((lowerTag === 'set' || lowerTag.startsWith('animate')) &&
+                localAttr === 'attributename') {
+                const targetAttr = unquoted.toLowerCase();
+                if (targetAttr === 'href' || targetAttr.endsWith(':href')) return null;
+            }
             if (attrName in attributes) return null;
             attributes[attrName] = attribute[2];
         }

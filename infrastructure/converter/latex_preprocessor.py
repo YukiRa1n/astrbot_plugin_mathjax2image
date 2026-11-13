@@ -6,7 +6,12 @@ LaTeX预处理器
 import re
 from typing import TYPE_CHECKING
 
-from ...utils.linear_scan import find_pairs, scan_fenced_code, scan_math_blocks
+from ...utils.linear_scan import (
+    _has_odd_backslashes,
+    find_pairs,
+    scan_fenced_code,
+    scan_math_blocks,
+)
 
 if TYPE_CHECKING:
     from .list_converter import ListConverter
@@ -73,9 +78,51 @@ class LatexPreprocessor:
     _TIKZ_ENVIRONMENTS = (
         ("\\begin{tikzpicture}", "\\end{tikzpicture}"),
         ("\\begin{tikzcd}", "\\end{tikzcd}"),
+        ("\\begin{axis}", "\\end{axis}"),
+        ("\\begin{loglogaxis}", "\\end{loglogaxis}"),
+        ("\\begin{semilogxaxis}", "\\end{semilogxaxis}"),
+        ("\\begin{semilogyaxis}", "\\end{semilogyaxis}"),
+        ("\\begin{polaraxis}", "\\end{polaraxis}"),
+        ("\\begin{groupplot}", "\\end{groupplot}"),
     )
     _MARKER_PAIRS = (("\\[", "\\]"), ("\\(", "\\)"))
     _TEXT_COMMAND = re.compile(r"\\(textbf|textit|emph)\{([^{}]*)\}")
+    _SET_NOTATION = re.compile(r"\{([^{}]{0,200}?\\mid(?![A-Za-z])[^{}]{0,200}?)\}")
+    _TEX_ARG_PREFIX_COMMANDS = frozenset(
+        {
+            "text",
+            "textbf",
+            "textit",
+            "textrm",
+            "mathrm",
+            "mathbf",
+            "mathcal",
+            "mathbb",
+            "mathsf",
+            "mathtt",
+            "mathit",
+            "operatorname",
+            "mbox",
+            "hbox",
+            "vbox",
+            "frac",
+            "dfrac",
+            "tfrac",
+            "cfrac",
+            "binom",
+            "tbinom",
+            "dbinom",
+            "overset",
+            "underset",
+            "stackrel",
+            "sqrt",
+            "underline",
+            "overline",
+            "widehat",
+            "widetilde",
+            "boxed",
+        }
+    )
 
     def _protected_ranges(self, text: str) -> list[tuple[int, int]]:
         """Linear scan of protected (non-transformable) ranges."""
@@ -166,7 +213,17 @@ class LatexPreprocessor:
     def _fix_set_notation_outside_code(self, text: str) -> str:
         """在全文单遍应用集合表示法改写，但跳过代码围栏、TikZ 与表格环境。"""
         spans: list[tuple[int, int]] = list(scan_fenced_code(text))
-        for env in ("tikzpicture", "tikzcd", "tabular"):
+        for env in (
+            "tikzpicture",
+            "tikzcd",
+            "tabular",
+            "axis",
+            "loglogaxis",
+            "semilogxaxis",
+            "semilogyaxis",
+            "polaraxis",
+            "groupplot",
+        ):
             spans.extend(
                 find_pairs(
                     text, f"\\begin{{{env}}}", f"\\end{{{env}}}", allow_newline=True
@@ -196,13 +253,39 @@ class LatexPreprocessor:
         return marker + match.group(2) + marker
 
     def _fix_set_notation(self, text: str) -> str:
-        """修复集合表示法 {... \\mid ...}
+        """Rewrite bare set-builder braces ``{... \\mid ...}`` as ``\\lbrace ...\\rbrace``.
 
-        使用限制长度的非贪婪匹配，防止灾难性回溯（ReDoS）
+        Skips escaped ``\\{`` braces and macro/script brace arguments (such as
+        ``\\frac{1}{a \\mid b}``, ``\\text{a \\mid b}``, and ``x^{a \\mid b}``).
         """
-        # 限制每个部分最多 200 字符，防止正则表达式引擎指数级回溯
-        return re.sub(
-            r"(?<!\\)\{([^{}]{0,200}?\\mid[^{}]{0,200}?)\}",
-            r"\\lbrace \1\\rbrace ",
-            text,
-        )
+        if "\\mid" not in text:
+            return text
+
+        def _replace(match: re.Match[str]) -> str:
+            start = match.start()
+            if _has_odd_backslashes(text, start):
+                return match.group(0)
+            if start > 0 and (
+                text[start - 1].isalpha() or text[start - 1] in ("}", "^", "_", "]")
+            ):
+                return match.group(0)
+            probe = start - 1
+            while probe >= 0 and text[probe] in (" ", "\t"):
+                probe -= 1
+            if probe >= 0 and text[probe] in ("}", "^", "_", "]"):
+                return match.group(0)
+            if probe >= 0 and text[probe].isalpha():
+                cmd_end = probe + 1
+                cmd_start = probe
+                while cmd_start > 0 and text[cmd_start - 1].isalpha():
+                    cmd_start -= 1
+                if (
+                    cmd_start > 0
+                    and text[cmd_start - 1] == "\\"
+                    and not _has_odd_backslashes(text, cmd_start - 1)
+                    and text[cmd_start:cmd_end] in self._TEX_ARG_PREFIX_COMMANDS
+                ):
+                    return match.group(0)
+            return f"\\lbrace {match.group(1)}\\rbrace "
+
+        return self._SET_NOTATION.sub(_replace, text)

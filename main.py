@@ -90,9 +90,7 @@ class MathJax2ImagePlugin(Star):
 
         # 校验 TikZ 后端：非法值会让 PageRenderer 在构造期抛 ValueError，
         # 直接导致插件加载失败，因此与 browser_engine 一样先归一化。
-        raw_backend = normalized_choice(
-            self.config.get("tikz_backend", "wasm"), "wasm"
-        )
+        raw_backend = normalized_choice(self.config.get("tikz_backend", "wasm"), "wasm")
         tikz_backend = raw_backend if raw_backend in _TIKZ_BACKENDS else "wasm"
         if tikz_backend != raw_backend:
             logger.warning(
@@ -125,14 +123,16 @@ class MathJax2ImagePlugin(Star):
             asset_disk_cache_max_mb=_cfg_int("asset_disk_cache_max_mb", 256),
             image_cache_max_mb=_cfg_int("image_cache_max_mb", 8),
             precompute_pgfplots=safe_bool(
-                self.config.get("precompute_pgfplots", True)
+                self.config.get("precompute_pgfplots", True), default=True
             ),
             plot_max_points=_cfg_int("plot_max_points", 6400),
             max_concurrent_tikz=_cfg_int("max_concurrent_tikz", 1),
             tikz_backend=tikz_backend,
             native_tex_bin=str(self.config.get("native_tex_bin", "") or "").strip(),
             typography=self.config.get("typography", {}),
-            resident_engines=safe_bool(self.config.get("resident_engines", True)),
+            resident_engines=safe_bool(
+                self.config.get("resident_engines", True), default=True
+            ),
         )
 
         # LLM编排器

@@ -82,8 +82,9 @@ class ListConverter:
                     stack.pop()
                 continue
 
-            if stripped.startswith(r"\item"):
-                content = re.sub(r"^\\item\s*", "", stripped)
+            item_match = re.match(r"^\\item(?![A-Za-z])\s*(.*)$", stripped)
+            if item_match:
+                content = item_match.group(1)
                 indent = "    " * max(0, len(stack) - 1)
                 if stack and stack[-1] is not None:
                     stack[-1] += 1

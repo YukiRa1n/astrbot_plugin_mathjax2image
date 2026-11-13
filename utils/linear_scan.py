@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 
 # Runs of a single code-fence delimiter, located in C so the scan does not pay
 # Python-level per-character cost.
@@ -40,7 +40,17 @@ INLINE_TICKS_MAX = 8
 FENCE_SCAN_MAX = 64
 
 
-def _occurrences(text: str, token: str) -> list[int]:
+def _has_odd_backslashes(text: str, pos: int) -> bool:
+    """Return True when ``pos`` is preceded by an odd number of backslashes."""
+    count = 0
+    index = pos - 1
+    while index >= 0 and text[index] == "\\":
+        count += 1
+        index -= 1
+    return (count & 1) == 1
+
+
+def _occurrences(text: str, token: str, *, skip_escaped: bool = False) -> list[int]:
     """All start offsets of ``token`` in ``text``, in ascending order."""
     offsets: list[int] = []
     cursor = 0
@@ -48,7 +58,8 @@ def _occurrences(text: str, token: str) -> list[int]:
         found = text.find(token, cursor)
         if found < 0:
             return offsets
-        offsets.append(found)
+        if not (skip_escaped and _has_odd_backslashes(text, found)):
+            offsets.append(found)
         cursor = found + 1
 
 
@@ -58,6 +69,7 @@ def find_pairs(
     close_token: str,
     *,
     allow_newline: bool = True,
+    skip_escaped: bool = False,
 ) -> list[tuple[int, int]]:
     """Locate non-overlapping ``open_token ... close_token`` spans, left to right.
 
@@ -74,6 +86,8 @@ def find_pairs(
         close_token: Literal closing delimiter.
         allow_newline: When False, a match may not span a line break (mirrors
             ``open .*? close`` where ``.`` does not match ``\\n``).
+        skip_escaped: When True, ignore delimiter occurrences preceded by an
+            odd number of backslashes (such as literal ``\\$``).
 
     Returns:
         List of ``(start, end)`` spans, never overlapping.
@@ -83,12 +97,14 @@ def find_pairs(
         return (
             spans
             if not open_token or not close_token
-            else _overlapping_pairs(text, open_token, close_token, allow_newline)
+            else _overlapping_pairs(
+                text, open_token, close_token, allow_newline, skip_escaped=skip_escaped
+            )
         )
-    opens = _occurrences(text, open_token)
+    opens = _occurrences(text, open_token, skip_escaped=skip_escaped)
     if not opens:
         return spans
-    closes = _occurrences(text, close_token)
+    closes = _occurrences(text, close_token, skip_escaped=skip_escaped)
     # Walk both lists with monotonic cursors. `closes` must never be shifted:
     # `pop(0)` costs O(len(closes)) and `pop(index)` costs O(len(closes)-index),
     # which made an ordinary document such as `\(x\)` repeated -- or many
@@ -124,7 +140,12 @@ def find_pairs(
 
 
 def _overlapping_pairs(
-    text: str, open_token: str, close_token: str, allow_newline: bool
+    text: str,
+    open_token: str,
+    close_token: str,
+    allow_newline: bool,
+    *,
+    skip_escaped: bool = False,
 ) -> list[tuple[int, int]]:
     """Fallback for tokens where the closer contains the opener (``$$``/``$$``)."""
     spans: list[tuple[int, int]] = []
@@ -134,7 +155,18 @@ def _overlapping_pairs(
         start = text.find(open_token, cursor)
         if start < 0:
             break
-        close = text.find(close_token, start + len(open_token))
+        if skip_escaped and _has_odd_backslashes(text, start):
+            cursor = start + 1
+            continue
+        search_from = start + len(open_token)
+        while True:
+            close = text.find(close_token, search_from)
+            if close < 0:
+                break
+            if skip_escaped and _has_odd_backslashes(text, close):
+                search_from = close + 1
+                continue
+            break
         if close < 0:
             break
         if not allow_newline:
@@ -197,15 +229,18 @@ def find_brace_arguments(text: str, command: str) -> list[tuple[int, int]]:
 
 
 def _at_line_start(text: str, start: int) -> bool:
-    """``start`` 前面只有空格（可缩进），再往前是换行或文本开头。
+    """``start`` 前面最多 3 个空格，再往前是换行或文本开头（CommonMark 围栏规则）。
 
-    CommonMark 要求围栏标记位于行首；少了这一条，正文里的行内 `` ``` ``
-    （例如「见 ```mermaid 代码块」）会被当成围栏开启符，与真正的围栏错配。
-    不限制缩进宽度：4 个空格缩进的围栏在 CommonMark 里算缩进代码块，但内容仍
-    旧应受保护，所以只要前面全是空格就算行首。
+    CommonMark 仅把 0–3 个空格缩进的围栏当作代码围栏；4 个及以上空格缩进会由
+    Markdown 按缩进代码块解析，若也当围栏提取并包成 ``<pre><code>``，会在渲染
+    阶段与外层缩进块形成 ``<pre><code><pre>...</pre></code></pre>`` 双重嵌套。
     """
     index = start - 1
+    spaces = 0
     while index >= 0 and text[index] == " ":
+        spaces += 1
+        if spaces > 3:
+            return False
         index -= 1
     return index < 0 or text[index] == "\n"
 
@@ -351,7 +386,13 @@ def scan_math_blocks(text: str) -> list[tuple[int, int]]:
     ):
         if open_token in text:
             spans.extend(
-                find_pairs(text, open_token, close_token, allow_newline=allow_newline)
+                find_pairs(
+                    text,
+                    open_token,
+                    close_token,
+                    allow_newline=allow_newline,
+                    skip_escaped=open_token.startswith("$"),
+                )
             )
     if "\\begin{" in text and "\\end{" in text:
         # One pass collects every \begin{X}/\end{X} offset; pairing then walks
@@ -411,7 +452,13 @@ def _first_after(positions: list[int], offset: int) -> int:
     return positions[index] if index < len(positions) else -1
 
 
-def strip_usepackage_declarations(text: str, collect: Callable[[str], None]) -> str:
+def strip_usepackage_declarations(
+    text: str,
+    collect: Callable[[str], None],
+    *,
+    supported_packages: Collection[str] | None = None,
+    package_aliases: Mapping[str, str] | None = None,
+) -> str:
     """Remove ``\\usepackage{...}`` / ``\\usepackage[...]{...}`` declarations.
 
     ``collect`` receives the brace argument of each matched declaration and may
@@ -470,9 +517,19 @@ def strip_usepackage_declarations(text: str, collect: Callable[[str], None]) -> 
             pieces.append(text[cursor:after])
             cursor = after
             continue
+        names_arg = text[body_start + 1 : end - 1]
         if options is not None:
-            raise ValueError("MathJax package options are not supported")
-        collect(text[body_start + 1 : end - 1])
+            if supported_packages is None:
+                raise ValueError("MathJax package options are not supported")
+            aliases = package_aliases or {}
+            resolved = {
+                aliases.get(name.strip(), name.strip())
+                for name in names_arg.split(",")
+                if name.strip()
+            }
+            if resolved & supported_packages:
+                raise ValueError("MathJax package options are not supported")
+        collect(names_arg)
         pieces.append(text[cursor:start])
         cursor = end
     pieces.append(text[cursor:])

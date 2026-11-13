@@ -6,8 +6,20 @@
 from __future__ import annotations
 
 
-def safe_bool(value) -> bool:
-    """安全布尔解析：只接受布尔值或明确的 true/false 字符串，其他一律视为 False。"""
+def safe_bool(value, default: bool = False) -> bool:
+    """Safely parse a boolean setting without importing the host framework.
+
+    Args:
+        value: Raw config value. Accepts ``bool`` and explicit truthy strings
+            (``true``, ``1``, ``yes``, ``on``); ``None`` falls back to
+            ``default`` and other non-string/non-bool values return ``False``.
+        default: Value returned when ``value`` is ``None``.
+
+    Returns:
+        Normalized boolean setting.
+    """
+    if value is None:
+        return default
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

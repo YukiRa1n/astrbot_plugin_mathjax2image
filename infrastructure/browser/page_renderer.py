@@ -135,12 +135,12 @@ class PageRenderer:
         self._plugin_dir = plugin_dir
         self._viewport_width = viewport_width
         self._viewport_height = viewport_height
-        self._mathjax_timeout = mathjax_timeout
-        self._tikz_timeout = tikz_timeout
-        self._mermaid_timeout = mermaid_timeout
-        self._screenshot_timeout = screenshot_timeout
-        self._max_screenshot_height = max_screenshot_height
-        self._max_screenshot_pixels = max_screenshot_pixels
+        self._mathjax_timeout = max(1, int(mathjax_timeout))
+        self._tikz_timeout = max(1, int(tikz_timeout))
+        self._mermaid_timeout = max(1, int(mermaid_timeout))
+        self._screenshot_timeout = max(1, int(screenshot_timeout))
+        self._max_screenshot_height = max(1, int(max_screenshot_height))
+        self._max_screenshot_pixels = max(1, int(max_screenshot_pixels))
         self._fail_on_mathjax_timeout = fail_on_mathjax_timeout
         # 当前渲染页面的 file URI（安全边界：仅放行此 URI 的本地文件加载）
         # 当前渲染页面的 file URI，按 page 隔离（网络策略只放行各自页面自身资源）
@@ -641,7 +641,7 @@ class PageRenderer:
         Returns:
             Whether the route was fulfilled and needs no browser download.
         """
-        if self._cdn_cache_limit == 0:
+        if self._cdn_cache_limit == 0 and self._disk_cache is None:
             return False
         url = route.request.url
         cached = self._lookup_resource(url)
@@ -742,7 +742,9 @@ class PageRenderer:
         previous = self._cdn_cache.pop(url, None)
         if previous is not None:
             self._cdn_cache_bytes -= previous.size
-        if resource.size > min(self._cdn_cache_limit, _MAX_MEMORY_ASSET_BYTES):
+        if self._cdn_cache_limit == 0 or resource.size > min(
+            self._cdn_cache_limit, _MAX_MEMORY_ASSET_BYTES
+        ):
             return resource
         while self._cdn_cache and (
             self._cdn_cache_bytes + resource.size > self._cdn_cache_limit
@@ -826,17 +828,24 @@ class PageRenderer:
                     shell = shell[: declaration.start()] + shell[declaration.end() :]
                 resident_key = hashlib.sha256(shell.encode()).hexdigest()
         reused = False
+        mathjax_loaded = False
         if resident_key:
             reused = await page.evaluate(
                 "key => window.__residentKey === key", resident_key
             )
         if reused:
-            await page.evaluate(
-                """([content, required]) => {
-                    if (required !== null) window.mathJaxRequired = required;
-                    return window.__replaceRenderContent(content);
-                }""",
-                [content.group(1), math_required],
+            mathjax_loaded = bool(
+                await page.evaluate(
+                    """([content, required]) => {
+                        const loaded = Boolean(
+                            window.MathJax && window.MathJax.typesetPromise
+                        );
+                        if (required !== null) window.mathJaxRequired = required;
+                        window.__replaceRenderContent(content);
+                        return loaded;
+                    }""",
+                    [content.group(1), math_required],
+                )
             )
         else:
             await page.goto(
@@ -861,7 +870,7 @@ class PageRenderer:
         if has_math:
             mathjax_wait_timeout = (
                 self._mathjax_timeout
-                if reused
+                if mathjax_loaded
                 else max(self._mathjax_timeout, _GOTO_TIMEOUT_MS)
             )
             try:
@@ -956,7 +965,8 @@ class PageRenderer:
                             svg.querySelector('[fill-opacity="0.2"]')) return null;
                         // Collapsed SVG paint scopes may leave no group nodes; empty/coordinate-only
                         // drawings have an empty SVG once native compilation or TikZJax finishes.
-                        const nativeStatic = !window.__engines?.tikzjax && !document.querySelector('script[type="text/tikz"]');
+                        const nativeStatic = svg.getAttribute('data-tikz-backend') === 'native' ||
+                            (!window.__engines?.tikzjax && !document.querySelector('script[type="text/tikz"]'));
                         if (!svg.querySelector('path,line,text,circle,ellipse,rect,polygon,polyline,use') &&
                             !nativeStatic && (window.__tikzFinished || 0) < containers.length) return null;
                         totalElements += svg.querySelectorAll('path,line,text,circle,ellipse,rect,polygon,polyline,g,use').length;

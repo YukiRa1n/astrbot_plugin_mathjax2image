@@ -143,6 +143,9 @@ class BrowserManager:
         if self._idle_timer is not None:
             self._idle_timer.cancel()
             self._idle_timer = None
+        if self._idle_cleanup_task is not None:
+            self._idle_cleanup_task.cancel()
+            self._idle_cleanup_task = None
         browser = self._browser
         playwright = self._playwright
         request_context = self.request_context
@@ -153,6 +156,7 @@ class BrowserManager:
         self._playwright = None
         self._pool = asyncio.Queue()
         self._page_available = asyncio.Event()
+        self._lock = asyncio.Lock()
         self._configured_pages = set()
         self._resident_pages.clear()
         self._owned_contexts.clear()
@@ -178,15 +182,14 @@ class BrowserManager:
     async def get_browser(self) -> Browser:
         """获取或创建浏览器实例（自愈并兼容 Loop 重启）"""
         current_loop = asyncio.get_running_loop()
-        if self._loop is None:
-            self._loop = current_loop
-        elif self._loop != current_loop:
-            await self._force_cleanup_loop_resources()
-            self._loop = current_loop
-
         async with self._startup_lock:
             if self._closed:
                 raise BrowserError("BrowserManager is closed")
+            if self._loop is None:
+                self._loop = current_loop
+            elif self._loop != current_loop:
+                await self._force_cleanup_loop_resources()
+                self._loop = current_loop
             if self._browser is not None and self._browser.is_connected():
                 return self._browser
             logger.info("[MathJax2Image] Starting Playwright %s", self.engine)
@@ -386,8 +389,12 @@ class BrowserManager:
         if self._idle_cleanup_task is not None:
             task = self._idle_cleanup_task
             self._idle_cleanup_task = None
+            if not task.done():
+                task.cancel()
             try:
-                await task
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.TimeoutError:
+                logger.warning("[MathJax2Image] 空闲页面清理任务停止超时")
             except asyncio.CancelledError:
                 current = asyncio.current_task()
                 if current is not None and current.cancelling():

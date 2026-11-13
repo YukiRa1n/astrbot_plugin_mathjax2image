@@ -8,6 +8,7 @@ import json
 import math
 import re
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import markdown
@@ -83,6 +84,13 @@ try:  # Pygments 为可选依赖：缺失时代码块以纯文本显示
     from pygments.util import ClassNotFound as _ClassNotFound
 except ImportError:  # pragma: no cover - depends on the environment
     _pygments_highlight = None
+
+
+# 匹配 Markdown 段落以及用于裁剪块级占位符前后空白与 <br>
+_PARAGRAPH_BLOCK = re.compile(r"<p>(?P<body>[\s\S]*?)</p>")
+_EDGE_BREAK_OR_SPACE = re.compile(
+    r"^(?:\s|<br\s*/?>)+|(?:\s|<br\s*/?>)+$", re.IGNORECASE
+)
 
 
 def _highlight_code(code: str, language: str) -> str | None:
@@ -384,7 +392,12 @@ class MarkdownConverter:
             ignored_packages.update(resolved - MATHJAX_PACKAGES)
             declared_packages.update(resolved & MATHJAX_PACKAGES)
 
-        md_text = strip_usepackage_declarations(md_text, collect_packages)
+        md_text = strip_usepackage_declarations(
+            md_text,
+            collect_packages,
+            supported_packages=MATHJAX_PACKAGES,
+            package_aliases=MATHJAX_PACKAGE_ALIASES,
+        )
         if ignored_packages:
             logger.info(
                 "[MathJax2Image] 忽略不支持的宏包声明: %s",
@@ -511,24 +524,21 @@ class MarkdownConverter:
 
     def _preprocess_markdown(self, text: str, token: str = "") -> str:
         """预处理Markdown，自动修复常见格式问题"""
-        # 转义字符处理：\\n -> 真实换行（保护LaTeX命令与代码区间）
-        if "\\n" in text:
-            code_spans = scan_fenced_code(text) if ("`" in text or "~" in text) else []
-            if code_spans:
-                pieces: list[str] = []
-                cursor = 0
-                for start, end in code_spans:
-                    pieces.append(re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:start]))
-                    pieces.append(text[start:end])
-                    cursor = end
-                pieces.append(re.sub(r"\\n(?![a-zA-Z])", "\n", text[cursor:]))
-                text = "".join(pieces)
-            else:
-                text = re.sub(r"\\n(?![a-zA-Z])", "\n", text)
-
-        # 行级标题/列表改写前先遮蔽多行公式区间，避免 $$ / align 等内部被误插空格或空行
-        math_blocks: list[str] = []
         pre_token = token or uuid.uuid4().hex
+        code_blocks: list[str] = []
+        if "`" in text or "~" in text:
+            code_spans = scan_fenced_code(text)
+            if code_spans:
+
+                def _mask_code(index: int, block: str) -> str:
+                    code_blocks.append(block)
+                    return _block_placeholder(pre_token, "PRECODE", index)
+
+                text = substitute_spans(text, code_spans, _mask_code)
+
+        # 行级/换行改写前先遮蔽公式区间，避免矩阵换行 `\\ n` / `\\n` 以及 `$$` / align 等
+        # 内部 `#`、`- ` 被误改写成物理换行、标题空格或空行。
+        math_blocks: list[str] = []
         if "$" in text or "\\(" in text or "\\[" in text or "\\begin{" in text:
             math_spans = scan_math_blocks(text)
             if math_spans:
@@ -538,6 +548,10 @@ class MarkdownConverter:
                     return _block_placeholder(pre_token, "PREMATH", index)
 
                 text = substitute_spans(text, math_spans, _mask_math)
+
+        # 转义字符处理：\\n -> 真实换行（已保护代码与公式区间）
+        if "\\n" in text:
+            text = re.sub(r"\\n(?![a-zA-Z])", "\n", text)
 
         lines = text.split("\n")
         result = []
@@ -549,37 +563,41 @@ class MarkdownConverter:
             stripped = line.strip()
 
             if open_fence is None:
-                fence_match = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+                fence_match = re.match(r"^( {0,3})(`{3,}|~{3,})(.*)$", line)
                 if fence_match and (
-                    fence_match.group(1)[0] == "~" or "`" not in fence_match.group(2)
+                    fence_match.group(2)[0] == "~" or "`" not in fence_match.group(3)
                 ):
                     open_fence = (
-                        fence_match.group(1)[0],
-                        len(fence_match.group(1)),
+                        fence_match.group(2)[0],
+                        len(fence_match.group(2)),
                     )
                     result.append(line)
                     continue
             else:
                 fence_char, fence_len = open_fence
-                if len(stripped) >= fence_len and stripped == fence_char * len(
-                    stripped
+                close_match = re.fullmatch(r" {0,3}([`~]+)[ \t]*", line)
+                if (
+                    close_match
+                    and close_match.group(1)[0] == fence_char
+                    and len(close_match.group(1)) >= fence_len
                 ):
                     open_fence = None
                 result.append(line)
                 continue
 
-            # 修复标题格式
-            heading_match = re.match(r"^(#{1,6})([^#\s])", stripped)
+            # 修复标题格式（仅 CommonMark 0–3 空格缩进行，不改写 4 空格缩进代码块）
+            heading_match = re.match(r"^( {0,3})(#{1,6})([^#\s].*)$", line)
             if heading_match:
-                stripped = (
+                line = (
                     heading_match.group(1)
+                    + heading_match.group(2)
                     + " "
-                    + stripped[len(heading_match.group(1)) :]
+                    + heading_match.group(3)
                 )
-                line = stripped
+                stripped = line.strip()
 
             # 在标题或列表项前添加空行
-            is_heading = bool(re.match(r"^#{1,6}\s+", stripped))
+            is_heading = bool(re.match(r"^ {0,3}#{1,6}\s+", line))
             is_list_item = bool(re.match(r"^[-*]\s+", stripped)) or bool(
                 re.match(r"^\d+\.\s+", stripped)
             )
@@ -610,6 +628,10 @@ class MarkdownConverter:
         if math_blocks:
             text = _placeholder_pattern(pre_token, "PREMATH").sub(
                 lambda m: math_blocks[int(m.group("index"))], text
+            )
+        if code_blocks:
+            text = _placeholder_pattern(pre_token, "PRECODE").sub(
+                lambda m: code_blocks[int(m.group("index"))], text
             )
         return text
 
@@ -778,18 +800,55 @@ class MarkdownConverter:
             lambda m: m.group(0).replace("&gt;", ">"), escaped
         )
 
+    def _restore_placeholders(
+        self,
+        html: str,
+        blocks: list[str],
+        token: str,
+        kind: str,
+        *,
+        is_block: Callable[[str], bool],
+    ) -> str:
+        """Restore placeholders and split surrounding ``<p>`` for block elements."""
+        if not blocks:
+            return html
+        placeholder_re = _placeholder_pattern(token, kind)
+
+        def _unwrap_p(match: re.Match[str]) -> str:
+            body = match.group("body")
+            if token not in body:
+                return match.group(0)
+            parts: list[str] = []
+            cursor = 0
+            found_block = False
+            for pm in placeholder_re.finditer(body):
+                replacement = blocks[int(pm.group("index"))]
+                if not is_block(replacement):
+                    continue
+                found_block = True
+                prefix = _EDGE_BREAK_OR_SPACE.sub("", body[cursor : pm.start()])
+                if prefix:
+                    parts.append(f"<p>{prefix}</p>")
+                parts.append(replacement)
+                cursor = pm.end()
+            if not found_block:
+                return match.group(0)
+            suffix = _EDGE_BREAK_OR_SPACE.sub("", body[cursor:])
+            if suffix:
+                parts.append(f"<p>{suffix}</p>")
+            return "\n".join(parts)
+
+        if "<p>" in html:
+            html = _PARAGRAPH_BLOCK.sub(_unwrap_p, html)
+        return placeholder_re.sub(lambda m: blocks[int(m.group("index"))], html)
+
     def _restore_trusted_html_blocks(
         self, html: str, blocks: list[str], token: str
     ) -> str:
-        """还原插件内部HTML块，并移除Markdown自动生成的段落包裹。
-
-        单次正则遍历，而非逐块 ``str.replace``：后者是 O(块数 × 文档长度)，
-        上万块时还原阶段自己就能跑成秒级。
-        """
-        if not blocks:
-            return html
-        pattern = _placeholder_pattern(token, "HTML", paragraph_wrapped=True)
-        return pattern.sub(lambda m: blocks[int(m.group("index"))], html)
+        """还原插件内部HTML块，并移除Markdown自动生成的段落包裹。"""
+        return self._restore_placeholders(
+            html, blocks, token, "HTML", is_block=lambda _: True
+        )
 
     def _restore_math_blocks(self, html: str, blocks: list[str], token: str) -> str:
         """还原数学公式块。
@@ -810,26 +869,9 @@ class MarkdownConverter:
         if not blocks:
             return html
         rendered = [self._render_code_block(block) for block in blocks]
-        pattern = re.compile(
-            r"(?P<open><p>)?"
-            + _placeholder_pattern(token, "CODE").pattern
-            + r"(?P<close>[ \t]*</p>)?"
+        return self._restore_placeholders(
+            html, rendered, token, "CODE", is_block=lambda b: b.startswith("<pre")
         )
-
-        def restore(match: re.Match[str]) -> str:
-            block = rendered[int(match.group("index"))]
-            # 独占一段的围栏代码块会被 Markdown 套上 <p>；<p><pre> 不是合法
-            # HTML，浏览器会在代码块前后各补一个空段落，徒增间距。行内代码
-            # 和只占一侧的包装保持原样，避免破坏所在段落。
-            if (
-                block.startswith("<pre")
-                and match.group("open")
-                and match.group("close")
-            ):
-                return block
-            return (match.group("open") or "") + block + (match.group("close") or "")
-
-        return pattern.sub(restore, html)
 
     def _render_code_block(self, block: str) -> str:
         """把一个代码块源码渲染为 ``<pre><code>`` HTML。"""
