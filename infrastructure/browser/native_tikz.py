@@ -79,11 +79,12 @@ _PLOT_STATEMENT = re.compile(r"(?:\\addplot\s*3?\+?|\bplot\b)")
 _PLOT_SOURCE_KEYWORD = re.compile(r"\b(?:file|table|graphics)\b")
 _TEX_COMMENT = re.compile(r"(?<!\\)%[^\n]*\n?")
 # Control *symbols* (backslash + one non-letter) that drawing code may use.
-_ALLOWED_TEX_SYMBOLS = frozenset("\\{}%$&_#@,;:! -'\"|./^~=*+<>()[?")
+_ALLOWED_TEX_SYMBOLS = frozenset("\\{}%$&_#,;:! -'\"|./^~=*+<>()[]?`")
 _BEGIN_ENVIRONMENT = re.compile(r"\\begin\{([^}]*)\}")
 _ALLOWED_ENVIRONMENTS = frozenset(
     """
-    tikzpicture tikzcd scope axis document semiverbatim picture pgfpicture
+    tikzpicture tikzcd scope axis loglogaxis semilogxaxis semilogyaxis
+    polaraxis groupplot document semiverbatim picture pgfpicture
     """.split()
 )
 # The converter only ever writes these three data-* attributes onto a block.

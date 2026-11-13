@@ -368,7 +368,7 @@ class MarkdownConverter:
         md_text, code_blocks = self._extract_code_blocks(md_text, token, code_spans)
         md_text = self._fix_tikz_comments(md_text)
         md_text, trusted_html_blocks = self._extract_trusted_html_blocks(md_text, token)
-        md_text = self._preprocess_markdown(md_text)
+        md_text = self._preprocess_markdown(md_text, token)
         declared_packages = set()
 
         ignored_packages = set()
@@ -509,7 +509,7 @@ class MarkdownConverter:
             lines[index] = head + percent + tail
         return "\n".join(lines)
 
-    def _preprocess_markdown(self, text: str) -> str:
+    def _preprocess_markdown(self, text: str, token: str = "") -> str:
         """预处理Markdown，自动修复常见格式问题"""
         # 转义字符处理：\\n -> 真实换行（保护LaTeX命令与代码区间）
         if "\\n" in text:
@@ -525,6 +525,19 @@ class MarkdownConverter:
                 text = "".join(pieces)
             else:
                 text = re.sub(r"\\n(?![a-zA-Z])", "\n", text)
+
+        # 行级标题/列表改写前先遮蔽多行公式区间，避免 $$ / align 等内部被误插空格或空行
+        math_blocks: list[str] = []
+        pre_token = token or uuid.uuid4().hex
+        if "$" in text or "\\(" in text or "\\[" in text or "\\begin{" in text:
+            math_spans = scan_math_blocks(text)
+            if math_spans:
+
+                def _mask_math(index: int, block: str) -> str:
+                    math_blocks.append(block)
+                    return _block_placeholder(pre_token, "PREMATH", index)
+
+                text = substitute_spans(text, math_spans, _mask_math)
 
         lines = text.split("\n")
         result = []
@@ -593,7 +606,12 @@ class MarkdownConverter:
 
             result.append(line)
 
-        return "\n".join(result)
+        text = "\n".join(result)
+        if math_blocks:
+            text = _placeholder_pattern(pre_token, "PREMATH").sub(
+                lambda m: math_blocks[int(m.group("index"))], text
+            )
+        return text
 
     def _extract_math_blocks(self, text: str, token: str) -> tuple[str, list[str]]:
         """提取数学公式块（线性扫描，避免未闭合定界符触发二次复杂度）"""
@@ -795,7 +813,7 @@ class MarkdownConverter:
         pattern = re.compile(
             r"(?P<open><p>)?"
             + _placeholder_pattern(token, "CODE").pattern
-            + r"(?P<close></p>)?"
+            + r"(?P<close>[ \t]*</p>)?"
         )
 
         def restore(match: re.Match[str]) -> str:
@@ -815,19 +833,27 @@ class MarkdownConverter:
 
     def _render_code_block(self, block: str) -> str:
         """把一个代码块源码渲染为 ``<pre><code>`` HTML。"""
-        # 闭合符允许比开启符长（CommonMark），也允许缩进：``\2(?:\1)*`` 表示
-        # “同类字符、且不短于开启符”。用固定三反引号的 ``\1`` 会把 4 反引号
-        # 围栏里那行 3 反引号误当成闭合符，把代码截断。
-        fence = re.fullmatch(r"([`~])(\1{2,})([^\n]*)\n([\s\S]*?)\n *\2(?:\1)*", block)
-        if fence is None:
-            return "<code>" + html_lib.escape(block.strip("`")) + "</code>"
-        language = self._sanitize_language(fence.group(3).strip())
-        lang_class = f' class="language-{language}"' if language else ""
-        code = fence.group(4)
-        body = _highlight_code(code, language)
-        if body is None:
-            body = html_lib.escape(code)
-        return f"<pre><code{lang_class}>{body}</code></pre>"
+        # 闭合符允许比开启符长（CommonMark），也允许缩进与行尾空白；
+        # 空代码块只有开启行与闭合行之间一个换行符。
+        first_nl = block.find("\n")
+        if first_nl != -1:
+            last_nl = block.rfind("\n")
+            open_match = re.fullmatch(r"([`~])(\1{2,})([^\n]*)", block[:first_nl])
+            if open_match:
+                fence_char = open_match.group(1)
+                fence_len = len(open_match.group(2)) + 1
+                stripped_close = block[last_nl + 1 :].lstrip(" ").rstrip(" \t")
+                if len(stripped_close) >= fence_len and set(stripped_close) == {
+                    fence_char
+                }:
+                    language = self._sanitize_language(open_match.group(3).strip())
+                    lang_class = f' class="language-{language}"' if language else ""
+                    code = "" if first_nl == last_nl else block[first_nl + 1 : last_nl]
+                    body = _highlight_code(code, language)
+                    if body is None:
+                        body = html_lib.escape(code)
+                    return f"<pre><code{lang_class}>{body}</code></pre>"
+        return "<code>" + html_lib.escape(block.strip("`")) + "</code>"
 
     def _sanitize_language(self, language: str) -> str:
         """仅保留安全的代码语言标识"""

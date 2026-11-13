@@ -165,7 +165,7 @@
     "mathjax_timeout": {
         "description": "MathJax 渲染超时（毫秒）",
         "type": "int",
-        "hint": "默认 10000",
+        "hint": "默认 10000。仅作用于复用的常驻页面；新建冷页面至少等待 60000ms 以完成首次 CDN 脚本初始化",
         "default": 10000
     },
     "mermaid_timeout": {
@@ -177,7 +177,7 @@
     "fail_on_mathjax_timeout": {
         "description": "MathJax 超时则失败",
         "type": "bool",
-        "hint": "开启后公式未渲染完成将拒绝出图，避免半成品截图",
+        "hint": "开启后公式未渲染完成将拒绝出图，避免半成品截图（冷页面按不低于 60000ms 超时阈值判定）",
         "default": false
     },
     "max_screenshot_height": {

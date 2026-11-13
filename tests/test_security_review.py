@@ -1,7 +1,9 @@
 """Regressions for the 2026-11 security review findings."""
 
+import asyncio
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from astrbot_plugin_mathjax2image.domain.errors import RenderError
@@ -629,3 +631,99 @@ def test_non_math_to_math_resident_reuse_waits_for_typeset_promise():
     )
     result = json.loads(proc.stdout.strip().splitlines()[-1])
     assert result == {"readyBeforeTypeset": False, "readyAfterTypeset": True}
+
+
+def test_empty_fences_and_trailing_space_and_multiline_math_preprocess():
+    from astrbot_plugin_mathjax2image.infrastructure.converter.markdown_converter import (
+        MarkdownConverter,
+    )
+
+    mc = MarkdownConverter(_TEMPLATE)
+
+    empty_py = mc.convert_to_html("```python\n```")
+    assert '<pre><code class="language-python"></code></pre>' in empty_py
+    assert "<p><pre>" not in empty_py
+
+    empty_tilde = mc.convert_to_html("~~~\n~~~")
+    assert "<pre><code></code></pre>" in empty_tilde
+    assert "<p><pre>" not in empty_tilde
+
+    trailing_ws = mc.convert_to_html("```python\nx = 1\n```   ")
+    assert "<p><pre>" not in trailing_ws
+    assert "</pre></p>" not in trailing_ws
+    assert "<pre><code" in trailing_ws
+
+    math_src = "$$\n\\begin{aligned}\n#1\n- item\n\\end{aligned}\n$$"
+    math_html = mc.convert_to_html(math_src)
+    assert "# 1" not in math_html
+    assert "#1\n- item" in math_html
+
+
+@pytest.mark.asyncio
+async def test_auto_send_direct_does_not_clear_other_session_last_rendered_image(
+    tmp_path, monkeypatch
+):
+    from astrbot_plugin_mathjax2image.handlers import llm_tool_handler
+
+    monkeypatch.setattr(llm_tool_handler, "Comp", MagicMock())
+    monkeypatch.setattr(llm_tool_handler, "MessageChain", MagicMock())
+
+    pending_img = tmp_path / "pending.png"
+    direct_img = tmp_path / "direct.png"
+    pending_img.write_bytes(b"p")
+    direct_img.write_bytes(b"d")
+
+    orchestrator = MagicMock()
+    orchestrator.render = AsyncMock(return_value=direct_img)
+    context = MagicMock()
+    context.send_message = AsyncMock(return_value=True)
+    handler = llm_tool_handler.LLMToolHandler(orchestrator, context)
+    handler._last_rendered_image = pending_img
+
+    event = MagicMock()
+    event.unified_msg_origin = "session-2"
+    event.get_sender_id.return_value = "user-2"
+    result = await handler.handle_render_math(event, "$x$", auto_send=True)
+
+    assert result == llm_tool_handler.IMAGE_SENT_RESULT
+    assert handler._last_rendered_image == pending_img
+
+
+@pytest.mark.asyncio
+async def test_browser_manager_close_continues_after_idle_cleanup_error():
+    from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
+        BrowserManager,
+    )
+
+    manager = BrowserManager(max_pages=1)
+    browser = MagicMock()
+    browser.close = AsyncMock()
+    playwright = MagicMock()
+    playwright.stop = AsyncMock()
+    manager._browser = browser
+    manager._owns_browser = True
+    manager._playwright = playwright
+
+    async def failing_cleanup():
+        raise RuntimeError("boom")
+
+    manager._idle_cleanup_task = asyncio.create_task(failing_cleanup())
+    await asyncio.sleep(0)
+
+    await manager.close()
+    browser.close.assert_awaited_once()
+    playwright.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_native_tikz_allows_bracket_backtick_and_pgfplots_axis_variants(tmp_path):
+    from astrbot_plugin_mathjax2image.infrastructure.browser.native_tikz import (
+        NativeTikzRenderer,
+    )
+
+    renderer = NativeTikzRenderer(str(tmp_path))
+    for code in (
+        r"\begin{loglogaxis}\addplot {x};\end{loglogaxis}",
+        r"\begin{tikzpicture}\node {$\left[a\right]$ \`a};\end{tikzpicture}",
+    ):
+        renderer._reject_unsafe_tex(code)

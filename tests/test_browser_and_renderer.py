@@ -3,9 +3,7 @@
 MathJax2Image 浏览器池与渲染器测试
 """
 
-import os
 import pytest
-import asyncio
 from pathlib import Path
 from playwright.async_api import Error as PlaywrightError
 from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import BrowserManager

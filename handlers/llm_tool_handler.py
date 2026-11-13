@@ -247,7 +247,8 @@ class LLMToolHandler:
             return f"发送图片失败: {str(e)}"
         finally:
             remove_artifact(image_path)
-            self._last_rendered_image = None
+            if getattr(self, "_last_rendered_image", None) == image_path:
+                self._last_rendered_image = None
 
     def _evict_oldest_pending_image(self) -> None:
         """丢弃最早的一张待发送产物（调用方持有 _pending_lock）。"""

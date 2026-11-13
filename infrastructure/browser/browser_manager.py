@@ -384,7 +384,16 @@ class BrowserManager:
             self._idle_timer.cancel()
             self._idle_timer = None
         if self._idle_cleanup_task is not None:
-            await self._idle_cleanup_task
+            task = self._idle_cleanup_task
+            self._idle_cleanup_task = None
+            try:
+                await task
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
+            except Exception as exc:
+                logger.warning("[MathJax2Image] 空闲页面清理任务异常: %s", exc)
         self._page_available.set()
         async with self._lock, self._startup_lock:
             while not self._pool.empty():
