@@ -74,6 +74,11 @@ class AssetDiskCache:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 if meta.get("url") != url:
                     return None
+                if str(meta.get("content_type", "")).split(";", 1)[
+                    0
+                ].strip().lower() == "text/css" and not meta.get("css_base_resolved"):
+                    # Older entries may contain redirected CSS with the wrong base URL.
+                    return None
                 max_age = self.max_age(url)
                 if max_age is not None and time.time() - meta["stored"] > max_age:
                     self._remove(body_path, meta_path)
@@ -103,6 +108,8 @@ class AssetDiskCache:
             "size": size,
             "stored": time.time(),
         }
+        if content_type.split(";", 1)[0].strip().lower() == "text/css":
+            meta["css_base_resolved"] = True
         with self._lock:
             try:
                 self._directory.mkdir(parents=True, exist_ok=True)

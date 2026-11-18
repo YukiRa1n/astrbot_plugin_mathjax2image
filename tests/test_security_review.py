@@ -799,12 +799,10 @@ async def test_resident_plain_to_math_uses_cold_timeout_and_disk_cache_works_wit
     assert not renderer._cdn_cache
 
     # Reused plain-text page (MathJax never loaded) must get >= 60s wait timeout
-    html = (
-        '<html><script>window.mathJaxRequired = true; window.__replaceRenderContent = () => {};</script><body><main class="render-content">$x$</main></body></html>'
-    )
+    html = '<html><script>window.mathJaxRequired = true; window.__replaceRenderContent = () => {};</script><body><main class="render-content">$x$</main></body></html>'
     waited_timeouts = []
     page = MagicMock()
-    page.evaluate = AsyncMock(side_effect=[True, False, None, True])
+    page.evaluate = AsyncMock(side_effect=[True, False, None, True, None])
 
     async def fake_wait_for_function(_expr, timeout=None):
         waited_timeouts.append(timeout)
@@ -818,7 +816,7 @@ async def test_resident_plain_to_math_uses_cold_timeout_and_disk_cache_works_wit
     # Warm page (MathJax already loaded) uses configured mathjax_timeout
     renderer._mathjax_timeout = 1234
     page2 = MagicMock()
-    page2.evaluate = AsyncMock(side_effect=[True, True, None, True])
+    page2.evaluate = AsyncMock(side_effect=[True, True, None, True, None])
     page2.wait_for_function = fake_wait_for_function
     await renderer._load_and_wait(page2, html)
     assert waited_timeouts[-1] == 1234
@@ -879,7 +877,9 @@ def test_converter_edge_cases_from_re_review():
     assert "$a*b + c*d$" in html_dollar
 
     # 2. Set notation skips macro/script brace arguments (\frac, \text, subscript)
-    pre_expr = pre.preprocess(r"$\frac{1}{a \mid b} + \text{u \mid v} + {x \mid x > 0}$")
+    pre_expr = pre.preprocess(
+        r"$\frac{1}{a \mid b} + \text{u \mid v} + {x \mid x > 0}$"
+    )
     assert r"\frac{1}{a \mid b}" in pre_expr
     assert r"\text{u \mid v}" in pre_expr
     assert r"\lbrace x \mid x > 0\rbrace " in pre_expr

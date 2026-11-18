@@ -31,6 +31,16 @@ def _body(source: str) -> str:
     return re.search(r'<main class="render-content">([\s\S]*?)</main>', html).group(1)
 
 
+def test_enumerate_preserves_numbering_and_inline_code_spacing():
+    source = (
+        "\\begin{enumerate}\n\\item Install `numpy`\n\\item Import it\n\\end{enumerate}"
+    )
+    body = _body(source)
+    assert body.count("<li>") == 2
+    assert "<li>Install <code>numpy</code></li>" in body
+    assert "<li>Import it</li>" in body
+
+
 def test_document_preamble_is_dropped():
     body = _body(
         "\\documentclass{article}\n\\usepackage{amsmath,tikz}\n"

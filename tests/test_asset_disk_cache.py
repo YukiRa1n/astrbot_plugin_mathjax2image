@@ -173,6 +173,63 @@ async def test_cdn_redirect_target_is_checked_before_fetch(tmp_path, cache_mb, a
     assert not renderer._cdn_pending
 
 
+def test_legacy_css_cache_is_refetched(tmp_path):
+    cache = AssetDiskCache(tmp_path, 1024)
+    assert cache.put(SCOPED, b"a{}", "text/css")
+    _, metadata = cache._paths(SCOPED)
+    entry = json.loads(metadata.read_text(encoding="utf-8"))
+    del entry["css_base_resolved"]
+    metadata.write_text(json.dumps(entry), encoding="utf-8")
+    assert cache.get(SCOPED) is None
+    assert cache.put(SCOPED, b"b{}", "text/css")
+    assert cache.get(SCOPED) == (b"b{}", "text/css")
+
+
+@pytest.mark.browser
+@pytest.mark.asyncio
+async def test_redirected_stylesheet_resolves_relative_imports(tmp_path, monkeypatch):
+    from playwright.async_api import Route
+    from astrbot_plugin_mathjax2image.infrastructure.browser import BrowserManager
+
+    base = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/"
+    entry = base + "entry/style.css"
+    final = base + "styles/theme.css"
+    palette = base + "styles/palette.css"
+    requests = []
+
+    async def fetch(route, *, url, **options):
+        requests.append(url)
+        if url == entry:
+            redirect = _response(status=302)
+            redirect.headers["location"] = final
+            return redirect
+        bodies = {
+            final: b'@import "palette.css";',
+            palette: b"body { color: rgb(7,8,9) }",
+        }
+        return _response(bodies[url], content_type="text/css")
+
+    monkeypatch.setattr(Route, "fetch", fetch)
+    manager = BrowserManager(max_pages=1)
+    renderer = PageRenderer(manager, tmp_path)
+    html = f'<link rel="stylesheet" href="{entry}"><main>test</main>'
+    try:
+        take_screenshot = renderer._take_screenshot
+
+        async def check_color(page, output):
+            assert (
+                await page.evaluate("getComputedStyle(document.body).color")
+                == "rgb(7, 8, 9)"
+            )
+            await take_screenshot(page, output)
+
+        renderer._take_screenshot = check_color
+        await renderer.render_to_image(html, tmp_path / "redirect.png")
+        assert palette in requests and base + "entry/palette.css" not in requests
+    finally:
+        await manager.close()
+
+
 @pytest.mark.asyncio
 async def test_concurrent_requests_wait_for_one_download(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path)

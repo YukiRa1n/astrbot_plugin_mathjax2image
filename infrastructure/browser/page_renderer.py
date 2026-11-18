@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 import traceback
@@ -569,7 +570,7 @@ class PageRenderer:
             route: An intercepted GET request for a remote asset.
 
         Returns:
-            Final response. The caller owns its disposal.
+            Final response and its validated URL. The caller owns response disposal.
 
         Raises:
             RenderError: A redirect target or download exceeds the policy.
@@ -586,7 +587,7 @@ class PageRenderer:
                 url=url, timeout=max(1, int(remaining * 1000)), max_redirects=0
             )
             if response.status not in _REDIRECT_STATUSES:
-                return response
+                return response, url
             try:
                 location = response.headers.get("location")
                 if not location:
@@ -636,14 +637,26 @@ class PageRenderer:
             if cached is not None:
                 await cached.fulfill(route)
                 return
-            response = await self._fetch_remote_resource(route)
-            if not cacheable or response.status != 200:
-                await route.fulfill(response=response)
-                return
-            body = await response.body()
+            response, final_url = await self._fetch_remote_resource(route)
             content_type = response.headers.get(
                 "content-type", "application/octet-stream"
             )
+            stylesheet = content_type.split(";", 1)[0].strip().lower() == "text/css"
+            if response.status == 200 and stylesheet and final_url != url:
+                # An imported sheet resolves nested imports, fonts and images against
+                # its own URL. Its browser request goes through the same CDN policy.
+                body = (
+                    "@import url(" + json.dumps(final_url, ensure_ascii=False) + ");"
+                ).encode("utf-8")
+                content_type = "text/css; charset=utf-8"
+                if not cacheable:
+                    await route.fulfill(body=body, content_type=content_type)
+                    return
+            elif not cacheable or response.status != 200:
+                await route.fulfill(response=response)
+                return
+            else:
+                body = await response.body()
             if self._disk_cache is not None:
                 await run_in_thread(self._disk_cache.put, url, body, content_type)
             cached = self._store_resource(url, body, content_type)
@@ -795,6 +808,16 @@ class PageRenderer:
                 logger.warning(f"[MathJax2Image] MathJax 等待超时: {e}")
                 if self._fail_on_mathjax_timeout:
                     raise RenderError(f"MathJax 渲染超时: {e}")
+
+            if complete:
+                error = await page.evaluate("""() => {
+                    const node = document.querySelector(
+                        'main.render-content mjx-merror, main.render-content [data-mjx-error]'
+                    );
+                    return node && (node.getAttribute('data-mjx-error') || node.textContent || 'Invalid formula');
+                }""")
+                if error:
+                    raise RenderError(f"MathJax 公式编译失败: {error[:300]}")
 
         # 等待 Mermaid（若页面含 mermaid 块）
         await self._wait_for_mermaid(page)
