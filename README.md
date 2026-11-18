@@ -142,6 +142,7 @@ $$\dv[2]{x}{t} + \pdv{f}{x}, \qquad \ce{2H2 + O2 -> 2H2O}$$
 | `max_queued_renders` / `render_queue_timeout` | `8` / `30000` | 排队容量上限与排队超时（毫秒） |
 | `browser_max_idle_pages` / `browser_idle_timeout` | `1` / `30` | 空闲保留页面数与空闲回收时间（秒，`0` 关闭定时回收） |
 | `resource_cache_max_mb` / `asset_disk_cache_max_mb` | `64` / `256` | 静态资源内存缓存与磁盘持久化缓存上限（MiB，`0` 关闭） |
+| `tikz_svg_cache_max_mb` | `16` | TikZ 图形 SVG 内存缓存上限（MiB）。更换图注或正文可复用同图，最多 128 张，保留 5 分钟；`0` 关闭。 |
 | `image_cache_max_mb` | `8` | 近期渲染结果图片缓存上限（MiB，`0` 关闭） |
 | `auto_install_browser` | `false` | 浏览器缺失时是否在运行时自动执行安装 |
 

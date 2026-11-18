@@ -126,6 +126,7 @@ class MathJax2ImagePlugin(Star):
                 self.config.get("precompute_pgfplots", True), default=True
             ),
             plot_max_points=_cfg_int("plot_max_points", 6400),
+            tikz_svg_cache_max_mb=_cfg_int("tikz_svg_cache_max_mb", 16),
             max_concurrent_tikz=_cfg_int("max_concurrent_tikz", 1),
             tikz_backend=tikz_backend,
             native_tex_bin=str(self.config.get("native_tex_bin", "") or "").strip(),

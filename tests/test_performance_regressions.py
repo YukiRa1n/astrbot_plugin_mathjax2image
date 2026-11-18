@@ -106,7 +106,7 @@ async def test_tikz_queue_leaves_capacity_for_plain_content(render_engine_factor
 
     renderer._tikz_slots.acquire = observed_acquire
 
-    async def render(html, output):
+    async def render(html, output, batch=None):
         if '<script type="text/tikz"' in html:
             entered.set()
             await finish.wait()

@@ -88,6 +88,7 @@ class RenderOrchestrator:
         resident_engines: bool = True,
         tikz_backend: str = "wasm",
         native_tex_bin: str = "",
+        tikz_svg_cache_max_mb: int = 16,
     ):
         self._plugin_dir = plugin_dir
         self._bg_color = bg_color
@@ -136,6 +137,7 @@ class RenderOrchestrator:
             resident_engines=resident_engines,
             tikz_backend=tikz_backend,
             native_tex_bin=native_tex_bin,
+            tikz_svg_cache_max_mb=tikz_svg_cache_max_mb,
             render_semaphore=self._render_semaphore,
             render_queue_timeout=self._queue_timeout,
         )

@@ -92,6 +92,12 @@
         "hint": "默认 256。把字体和渲染库保存到插件数据目录，重启后无需重新下载；0 表示禁用。仅缓存固定版本的 CDN 资源，未带版本号的字体最多保留 7 天",
         "default": 256
     },
+    "tikz_svg_cache_max_mb": {
+        "description": "TikZ 图形 SVG 缓存上限（MiB）",
+        "type": "int",
+        "hint": "相同图形可在不同正文中复用。默认 16，最多 128 张，保留 5 分钟。设为 0 关闭。",
+        "default": 16
+    },
     "image_cache_max_mb": {
         "description": "渲染图片缓存上限（MiB）",
         "type": "int",

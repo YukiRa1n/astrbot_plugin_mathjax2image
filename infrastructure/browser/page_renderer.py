@@ -19,7 +19,12 @@ from ...domain.errors import RenderError
 from ...utils.async_tasks import run_in_thread
 from .asset_disk_cache import AssetDiskCache
 from .native_tikz import NativeTikzRenderer
+from .tikz_svg_cache import MATH_REQUIRED_DECLARATION, FigureBatch, TikzSvgCache
 from .tikz_worker import optimize_tikz_worker
+
+_PLACE_FIGURES = (
+    Path(__file__).resolve().parents[2] / "static/tikz_svg_cache.js"
+).read_text(encoding="utf-8")
 
 _GOTO_TIMEOUT_MS = 60_000
 _RENDER_URL = "https://render.mathjax2image.invalid/"
@@ -27,7 +32,6 @@ _ASSET_FETCH_TIMEOUT_S = 30.0
 _MAX_ASSET_REDIRECTS = 4
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _RENDER_CONTENT = re.compile(r'<main class="render-content">([\s\S]*)</main>')
-_MATH_REQUIRED_DECLARATION = re.compile(r"window\.mathJaxRequired = (true|false);")
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
 _CACHEABLE_SUFFIXES = (
     ".js",
@@ -117,6 +121,7 @@ class PageRenderer:
         render_queue_timeout: float = 30.0,
         asset_cache_dir: Path | None = None,
         asset_disk_cache_max_mb: int = 256,
+        tikz_svg_cache_max_mb: int = 16,
     ):
         if tikz_backend not in {"wasm", "native"}:
             raise ValueError("tikz_backend must be wasm or native")
@@ -156,6 +161,7 @@ class PageRenderer:
         self._image_cache_bytes = 0
         self._image_cache_limit = max(0, int(image_cache_max_mb)) * 1024 * 1024
         self._image_pending: dict[bytes, asyncio.Future] = {}
+        self._figure_cache = TikzSvgCache(int(tikz_svg_cache_max_mb) * 1024 * 1024)
         self._tikz_slots = asyncio.Semaphore(max(1, int(max_concurrent_tikz)))
         self._render_semaphore = render_semaphore
         self._render_queue_timeout = render_queue_timeout
@@ -220,6 +226,32 @@ class PageRenderer:
         Returns:
             Whether rendering completed without a timeout fallback.
         """
+        batch = None
+        if (
+            self._figure_cache.limit
+            and '<div class="tikz-diagram"><script type="text/tikz"' in html
+        ):
+            content = _RENDER_CONTENT.search(html)
+            if content:
+                try:
+                    batch = await self._figure_cache.prepare(
+                        html, *content.span(1), self._tikz_timeout / 1000
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise RenderError("TikZ 图形等待超时，请稍后重试") from exc
+        complete = False
+        try:
+            complete = await self._render_document(
+                batch.html if batch else html, output, batch
+            )
+            return complete
+        finally:
+            if batch is not None:
+                self._figure_cache.finish(batch, complete)
+
+    async def _render_document(
+        self, html: str, output: Path, batch: FigureBatch | None
+    ) -> bool:
         content = _RENDER_CONTENT.search(html)
         start, end = content.span(1) if content else (0, len(html))
         heavy = html.find('<script type="text/tikz"', start, end) != -1
@@ -254,6 +286,8 @@ class PageRenderer:
                         "[MathJax2Image] Native TikZ unavailable; falling back to WASM: %s",
                         exc,
                     )
+            if batch is not None:
+                return await self._do_render(html, output, batch)
             return await self._do_render(html, output)
         finally:
             if render_acquired:
@@ -261,7 +295,9 @@ class PageRenderer:
             if heavy:
                 self._tikz_slots.release()
 
-    async def _do_render(self, html: str, output: Path) -> bool:
+    async def _do_render(
+        self, html: str, output: Path, batch: FigureBatch | None = None
+    ) -> bool:
         """执行实际的渲染操作"""
         inject_script = self._get_inject_script()
         page = None
@@ -294,6 +330,18 @@ class PageRenderer:
                     self._load_and_wait(page, html),
                     timeout=overall_timeout_s,
                 )
+                if batch is not None:
+                    batch.compiled = await asyncio.wait_for(
+                        page.evaluate(
+                            _PLACE_FIGURES,
+                            {
+                                "hits": batch.hits,
+                                "native": self._native_tikz is not None,
+                                "budget": self._figure_cache.limit,
+                            },
+                        ),
+                        timeout=_GOTO_TIMEOUT_MS / 1000,
+                    )
                 await asyncio.wait_for(
                     self._take_screenshot(page, output),
                     timeout=self._screenshot_timeout / 1000.0
@@ -746,7 +794,7 @@ class PageRenderer:
                 shell += str('<pre class="mermaid">' in content.group(1))
                 # 是否需要公式只影响本次排版，不应让公式/TikZ/纯文本文档
                 # 之间切换时重新加载页面；复用时单独传入页面
-                declaration = _MATH_REQUIRED_DECLARATION.search(shell)
+                declaration = MATH_REQUIRED_DECLARATION.search(shell)
                 if declaration:
                     math_required = declaration.group(1) == "true"
                     shell = shell[: declaration.start()] + shell[declaration.end() :]
