@@ -226,7 +226,10 @@ class RenderOrchestrator:
             try:
                 if self._closed:
                     raise RenderError("渲染引擎已关闭")
-                if not await self._dependency_installer.check_and_install():
+                if (
+                    not self._browser_manager.cdp_url
+                    and not await self._dependency_installer.check_and_install()
+                ):
                     raise DependencyError(
                         "Playwright系统依赖未安装",
                         install_command="playwright install-deps chromium",

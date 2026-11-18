@@ -175,8 +175,8 @@ class BrowserManager:
 
     @staticmethod
     def _launch_options(engine: str) -> dict:
-        # Playwright already supplies background-task and extension switches.
-        # Its default headless channel selects the separate Chromium shell.
+        if engine == "chromium":
+            return {"headless": True, "chromium_sandbox": True}
         return {"headless": True}
 
     async def get_browser(self) -> Browser:

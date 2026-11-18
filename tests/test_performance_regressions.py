@@ -106,11 +106,11 @@ async def test_tikz_queue_leaves_capacity_for_plain_content(render_engine_factor
 
     renderer._tikz_slots.acquire = observed_acquire
 
-    async def render(html_path, output):
-        if '<script type="text/tikz"' in html_path.read_text(encoding="utf-8"):
+    async def render(html, output):
+        if '<script type="text/tikz"' in html:
             entered.set()
             await finish.wait()
-        output.write_bytes(html_path.read_bytes())
+        output.write_text(html, encoding="utf-8")
         return True
 
     renderer._do_render = AsyncMock(side_effect=render)
@@ -161,8 +161,8 @@ async def test_cancelled_cpu_work_keeps_its_slot_until_thread_exits(
     else:
         engine._markdown_converter.convert_to_html = blocked
 
-    async def render(html_path, output):
-        output.write_bytes(html_path.read_bytes())
+    async def render(html, output):
+        output.write_text(html, encoding="utf-8")
         return True
 
     engine._page_renderer._do_render = AsyncMock(side_effect=render)

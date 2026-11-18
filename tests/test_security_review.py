@@ -313,7 +313,7 @@ def test_markdown_trusted_block_strict_attribute_and_body_validation(block, trus
 
 
 @pytest.mark.asyncio
-async def test_resident_key_ignores_mermaid_prose_and_skips_stateful_macros(tmp_path):
+async def test_resident_key_ignores_mermaid_prose_and_skips_stateful_macros():
     from unittest.mock import AsyncMock, MagicMock
 
     from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
@@ -329,8 +329,6 @@ async def test_resident_key_ignores_mermaid_prose_and_skips_stateful_macros(tmp_
 
     async def get_resident_key(markdown_source: str) -> str:
         html = md.convert_to_html(markdown_source)
-        html_file = tmp_path / "doc.html"
-        html_file.write_text(html, encoding="utf-8")
         recorded_keys: list[str] = []
 
         async def fake_eval(script, arg=None):
@@ -346,7 +344,7 @@ async def test_resident_key_ignores_mermaid_prose_and_skips_stateful_macros(tmp_
         page = MagicMock()
         page.goto = AsyncMock()
         page.evaluate = AsyncMock(side_effect=fake_eval)
-        await renderer._load_and_wait(page, html_file)
+        await renderer._load_and_wait(page, html)
         return recorded_keys[-1]
 
     plain_key = await get_resident_key("Hello world")
@@ -367,13 +365,14 @@ async def test_resident_key_ignores_mermaid_prose_and_skips_stateful_macros(tmp_
 
 
 @pytest.mark.asyncio
-async def test_cdn_pending_released_on_continue_error_and_aborted_render(tmp_path):
+async def test_render_document_is_available_only_to_the_active_main_frame(tmp_path):
     from unittest.mock import AsyncMock, MagicMock
 
     from astrbot_plugin_mathjax2image.infrastructure.browser.browser_manager import (
         BrowserManager,
     )
     from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
+        _RENDER_URL,
         PageRenderer,
     )
 
@@ -382,39 +381,45 @@ async def test_cdn_pending_released_on_continue_error_and_aborted_render(tmp_pat
     renderer = PageRenderer(bm, plugin_dir)
 
     mock_page = MagicMock()
-    mock_page.route = AsyncMock()
-    mock_page.context = MagicMock()
+    mock_page.context.route = AsyncMock()
     await renderer._setup_network_policy(mock_page)
-    handler = mock_page.route.call_args_list[0][0][1]
-
-    url = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"
-    mock_route = MagicMock()
-    mock_route.request.url = url
-    mock_route.request.method = "GET"
-    mock_route.continue_ = AsyncMock(side_effect=RuntimeError("Target closed"))
-
-    with pytest.raises(RuntimeError, match="Target closed"):
-        await handler(mock_route)
-    assert url not in renderer._cdn_pending
-
-    # Also verify _do_render releases page-owned pending futures on failure.
-    owner_route = MagicMock()
-    owner_route.request.url = url
-    owner_route.request.method = "GET"
-    assert await renderer._serve_cached_resource(owner_route, page=mock_page) is False
-    assert url in renderer._cdn_pending
-    pending_future = renderer._cdn_pending[url][0]
+    handler = mock_page.context.route.call_args.args[1]
+    route = MagicMock(fulfill=AsyncMock(), abort=AsyncMock())
+    route.request.url = _RENDER_URL
+    route.request.method = "GET"
+    route.request.is_navigation_request.return_value = True
+    route.request.frame = mock_page.main_frame
 
     bm.acquire_page = AsyncMock(return_value=(mock_page, True))
     bm.release_page = AsyncMock()
-    renderer._load_and_wait = AsyncMock(side_effect=RuntimeError("boom"))
-    html_path = tmp_path / "fail.html"
-    html_path.write_text("<html></html>", encoding="utf-8")
+    html = "<html><p>Document in memory</p></html>"
 
-    with pytest.raises(RenderError):
-        await renderer._do_render(html_path, tmp_path / "out.png")
-    assert url not in renderer._cdn_pending
-    assert pending_future.done() and pending_future.result() is None
+    async def load(page, source):
+        assert page is mock_page
+        assert source == html
+        await handler(route)
+        route.fulfill.assert_awaited_once_with(
+            body=html, content_type="text/html; charset=utf-8"
+        )
+        route.request.frame = MagicMock()
+        await handler(route)
+        route.abort.assert_awaited_once_with("blockedbyclient")
+        raise RuntimeError("Rendering interrupted")
+
+    renderer._load_and_wait = load
+
+    with pytest.raises(RenderError, match="Rendering interrupted"):
+        await renderer._do_render(html, tmp_path / "out.png")
+    route.reset_mock()
+    route.request.frame = mock_page.main_frame
+    await handler(route)
+    route.abort.assert_awaited_once_with("blockedbyclient")
+    route.fulfill.assert_not_awaited()
+    route.reset_mock()
+    route.request.url = (tmp_path / "document.html").as_uri()
+    await handler(route)
+    route.abort.assert_awaited_once_with("blockedbyclient")
+    assert not renderer._render_documents
 
 
 def test_windows_native_job_kill_on_close_and_access_denied(monkeypatch):
@@ -675,17 +680,16 @@ async def test_auto_send_direct_does_not_clear_other_session_last_rendered_image
 
     orchestrator = MagicMock()
     orchestrator.render = AsyncMock(return_value=direct_img)
-    context = MagicMock()
-    context.send_message = AsyncMock(return_value=True)
-    handler = llm_tool_handler.LLMToolHandler(orchestrator, context)
+    handler = llm_tool_handler.LLMToolHandler(orchestrator)
     handler._last_rendered_image = pending_img
 
-    event = MagicMock()
+    event = MagicMock(send=AsyncMock(return_value=None))
     event.unified_msg_origin = "session-2"
     event.get_sender_id.return_value = "user-2"
     result = await handler.handle_render_math(event, "$x$", auto_send=True)
 
     assert result == llm_tool_handler.IMAGE_SENT_RESULT
+    event.send.assert_awaited_once()
     assert handler._last_rendered_image == pending_img
 
 
@@ -788,16 +792,15 @@ async def test_resident_plain_to_math_uses_cold_timeout_and_disk_cache_works_wit
     assert renderer._disk_cache.put(url, b"window.MathJax={};", "text/javascript")
     route = MagicMock()
     route.request.url = url
+    route.request.method = "GET"
     route.fulfill = AsyncMock()
-    assert await renderer._serve_cached_resource(route) is True
+    await renderer._serve_remote_resource(route)
     route.fulfill.assert_awaited_once()
     assert not renderer._cdn_cache
 
     # Reused plain-text page (MathJax never loaded) must get >= 60s wait timeout
-    html_file = tmp_path / "doc.html"
-    html_file.write_text(
-        '<html><script>window.mathJaxRequired = true; window.__replaceRenderContent = () => {};</script><body><main class="render-content">$x$</main></body></html>',
-        encoding="utf-8",
+    html = (
+        '<html><script>window.mathJaxRequired = true; window.__replaceRenderContent = () => {};</script><body><main class="render-content">$x$</main></body></html>'
     )
     waited_timeouts = []
     page = MagicMock()
@@ -809,7 +812,7 @@ async def test_resident_plain_to_math_uses_cold_timeout_and_disk_cache_works_wit
     page.wait_for_function = fake_wait_for_function
     renderer._wait_for_mermaid = AsyncMock()
     renderer._wait_for_tikz = AsyncMock()
-    await renderer._load_and_wait(page, html_file)
+    await renderer._load_and_wait(page, html)
     assert waited_timeouts[-1] >= 60_000
 
     # Warm page (MathJax already loaded) uses configured mathjax_timeout
@@ -817,7 +820,7 @@ async def test_resident_plain_to_math_uses_cold_timeout_and_disk_cache_works_wit
     page2 = MagicMock()
     page2.evaluate = AsyncMock(side_effect=[True, True, None, True])
     page2.wait_for_function = fake_wait_for_function
-    await renderer._load_and_wait(page2, html_file)
+    await renderer._load_and_wait(page2, html)
     assert waited_timeouts[-1] == 1234
 
 

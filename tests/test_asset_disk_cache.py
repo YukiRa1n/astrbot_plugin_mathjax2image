@@ -98,87 +98,139 @@ def _route(url):
     route.request.method = "GET"
     route.fulfill = AsyncMock()
     route.continue_ = AsyncMock()
+    route.abort = AsyncMock()
+    route.fetch = AsyncMock(return_value=_response())
     return route
 
 
-def _finished(url, body=b"body", status=200, content_type="text/javascript"):
-    """A browser request that completed with ``body``."""
+def _response(body=b"body", status=200, content_type="text/javascript"):
     response = MagicMock(status=status, headers={"content-type": content_type})
     response.body = AsyncMock(return_value=body)
-    request = MagicMock(url=url)
-    request.response = AsyncMock(return_value=response)
-    return request
+    response.dispose = AsyncMock()
+    return response
 
 
 async def _handle(renderer, route):
     """Run the page's network policy handler for one request."""
-    page = MagicMock(route=AsyncMock())
+    page = MagicMock()
+    page.context.route = AsyncMock()
     await renderer._setup_network_policy(page)
-    await page.route.call_args.args[1](route)
-    return page
+    await page.context.route.call_args.args[1](route)
 
 
 @pytest.mark.asyncio
-async def test_miss_is_downloaded_by_browser_and_captured(tmp_path):
+async def test_cache_miss_downloads_and_caches_validated_response(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "c")
     first = _route(PINNED)
+    first.fetch.return_value = _response(b"mathjax")
 
-    page = await _handle(renderer, first)
+    await _handle(renderer, first)
 
-    first.continue_.assert_awaited_once()
-    events = {call.args[0] for call in page.context.on.call_args_list}
-    assert events == {"requestfinished", "requestfailed"}
-    await renderer._capture_response(_finished(PINNED, b"mathjax"))
+    first.fetch.assert_awaited_once()
+    first.continue_.assert_not_awaited()
+    assert first.fulfill.call_args.kwargs["body"] == b"mathjax"
     second = _route(PINNED)
     await _handle(renderer, second)
-    second.continue_.assert_not_awaited()
+    second.fetch.assert_not_awaited()
     assert second.fulfill.call_args.kwargs["body"] == b"mathjax"
     assert renderer._disk_cache.get(PINNED) == (b"mathjax", "text/javascript")
     assert not renderer._cdn_pending
 
 
 @pytest.mark.asyncio
-async def test_context_is_watched_once(tmp_path):
-    renderer = PageRenderer(MagicMock(), tmp_path)
-    context = MagicMock(spec=["on"])
-    renderer._watch_asset_downloads(context)
-    renderer._watch_asset_downloads(context)
-    assert context.on.call_count == 2
+@pytest.mark.parametrize("cache_mb", [0, 1])
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_cdn_redirect_target_is_checked_before_fetch(tmp_path, cache_mb, allowed):
+    renderer = PageRenderer(MagicMock(), tmp_path, resource_cache_max_mb=cache_mb)
+    redirect = _response(status=302)
+    target = PINNED.replace("tex-chtml.js", "tex-svg.js")
+    redirect.headers["location"] = (
+        "tex-svg.js" if allowed else "https://example.com/asset.js"
+    )
+    final = _response(b"redirected")
+    route = _route(PINNED)
+    route.fetch.side_effect = [redirect, final]
+    await _handle(renderer, route)
+
+    redirect.dispose.assert_awaited_once()
+    route.continue_.assert_not_awaited()
+    assert all(
+        call.kwargs["max_redirects"] == 0 for call in route.fetch.await_args_list
+    )
+    if allowed:
+        assert [call.kwargs["url"] for call in route.fetch.await_args_list] == [
+            PINNED,
+            target,
+        ]
+        route.fulfill.assert_awaited_once()
+        route.abort.assert_not_awaited()
+        final.dispose.assert_awaited_once()
+    else:
+        route.fetch.assert_awaited_once()
+        route.fulfill.assert_not_awaited()
+        route.abort.assert_awaited_once_with("blockedbyclient")
+        assert not renderer._cdn_cache
+    assert not renderer._cdn_pending
 
 
 @pytest.mark.asyncio
 async def test_concurrent_requests_wait_for_one_download(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path)
-    assert not await renderer._serve_cached_resource(_route(PINNED))
+    started, finish = asyncio.Event(), asyncio.Event()
+    owner_route = _route(PINNED)
+
+    async def fetch(**kwargs):
+        started.set()
+        await finish.wait()
+        return _response(b"shared")
+
+    owner_route.fetch.side_effect = fetch
+    owner = asyncio.create_task(renderer._serve_remote_resource(owner_route))
+    await started.wait()
     waiter_route = _route(PINNED)
-    waiter = asyncio.create_task(renderer._serve_cached_resource(waiter_route))
+    waiter = asyncio.create_task(renderer._serve_remote_resource(waiter_route))
     await asyncio.sleep(0)
     assert not waiter.done()
 
-    await renderer._capture_response(_finished(PINNED, b"shared"))
-
-    assert await asyncio.wait_for(waiter, 1)
+    finish.set()
+    await asyncio.wait_for(asyncio.gather(owner, waiter), 1)
+    waiter_route.fetch.assert_not_awaited()
     assert waiter_route.fulfill.call_args.kwargs["body"] == b"shared"
 
 
 @pytest.mark.asyncio
 async def test_failed_download_releases_waiters(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path)
-    assert not await renderer._serve_cached_resource(_route(PINNED))
-    waiter = asyncio.create_task(renderer._serve_cached_resource(_route(PINNED)))
+    started, finish = asyncio.Event(), asyncio.Event()
+    owner_route = _route(PINNED)
+
+    async def fetch(**kwargs):
+        started.set()
+        await finish.wait()
+        raise RuntimeError("network unavailable")
+
+    owner_route.fetch.side_effect = fetch
+    owner = asyncio.create_task(_handle(renderer, owner_route))
+    await started.wait()
+    route = _route(PINNED)
+    waiter = asyncio.create_task(_handle(renderer, route))
     await asyncio.sleep(0)
 
-    renderer._release_pending(PINNED)  # requestfailed
-
-    assert await asyncio.wait_for(waiter, 1) is False
-    assert not renderer._cdn_cache
+    finish.set()
+    await asyncio.wait_for(asyncio.gather(owner, waiter), 1)
+    owner_route.abort.assert_awaited_once()
+    route.fetch.assert_awaited_once()
+    route.fulfill.assert_awaited_once()
+    assert not renderer._cdn_pending
 
 
 @pytest.mark.asyncio
 async def test_non_200_responses_are_not_cached(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "c")
-    assert not await renderer._serve_cached_resource(_route(PINNED))
-    await renderer._capture_response(_finished(PINNED, b"missing", status=404))
+    route = _route(PINNED)
+    route.fetch.return_value = _response(b"missing", status=404)
+    await _handle(renderer, route)
+    route.fulfill.assert_awaited_once_with(response=route.fetch.return_value)
     assert not renderer._cdn_cache
     assert renderer._disk_cache.get(PINNED) is None
     assert not renderer._cdn_pending
@@ -189,17 +241,14 @@ async def test_stale_pending_download_is_taken_over(tmp_path, monkeypatch):
     from astrbot_plugin_mathjax2image.infrastructure.browser import page_renderer
 
     renderer = PageRenderer(MagicMock(), tmp_path)
-    assert not await renderer._serve_cached_resource(_route(PINNED))
-    future, _ = renderer._cdn_pending[PINNED]
+    future = asyncio.get_running_loop().create_future()
     renderer._cdn_pending[PINNED] = (future, 0.0)
     monkeypatch.setattr(page_renderer, "_PENDING_TTL_S", 1.0)
 
-    # A page closed mid-download never reports back; do not wait for it.
-    assert (
-        await asyncio.wait_for(renderer._serve_cached_resource(_route(PINNED)), 1)
-        is False
-    )
-    assert renderer._cdn_pending[PINNED][0] is not future
+    route = _route(PINNED)
+    await asyncio.wait_for(renderer._serve_remote_resource(route), 1)
+    route.fetch.assert_awaited_once()
+    assert not renderer._cdn_pending
 
 
 @pytest.mark.asyncio
@@ -230,12 +279,12 @@ async def test_eviction_during_delivery_keeps_the_body(tmp_path):
         await finish.wait()
 
     route.fulfill = AsyncMock(side_effect=slow_fulfill)
-    delivery = asyncio.create_task(renderer._serve_cached_resource(route))
+    delivery = asyncio.create_task(renderer._serve_remote_resource(route))
     await entered.wait()
     renderer._store_resource(SCOPED, b"abcde", "text/css")  # evicts PINNED
     finish.set()
 
-    assert await delivery
+    await delivery
     assert route.fulfill.call_args.kwargs["body"] == b"12345"
     assert list(renderer._cdn_cache) == [SCOPED]
 
@@ -249,9 +298,9 @@ async def test_tikz_worker_is_patched_in_memory_and_raw_on_disk(tmp_path, monkey
     )
     monkeypatch.setattr(page_renderer, "optimize_tikz_worker", lambda body: b"patched")
     renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "c")
-    assert not await renderer._serve_cached_resource(_route(worker))
-
-    await renderer._capture_response(_finished(worker, b"raw"))
+    route = _route(worker)
+    route.fetch.return_value = _response(b"raw")
+    await renderer._serve_remote_resource(route)
 
     assert renderer._cdn_cache[worker].body == b"patched"
     assert renderer._disk_cache.get(worker)[0] == b"raw"
@@ -261,8 +310,9 @@ async def test_tikz_worker_is_patched_in_memory_and_raw_on_disk(tmp_path, monkey
 async def test_renderer_serves_assets_from_disk_after_restart(tmp_path):
     cache_dir = tmp_path / "asset_cache"
     first = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=cache_dir)
-    assert not await first._serve_cached_resource(_route(PINNED))
-    await first._capture_response(_finished(PINNED, b"mathjax"))
+    initial = _route(PINNED)
+    initial.fetch.return_value = _response(b"mathjax")
+    await first._serve_remote_resource(initial)
 
     # A new renderer, as after AstrBot restarts, must not touch the network.
     second = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=cache_dir)
@@ -351,14 +401,13 @@ async def test_full_font_concurrent_requests_share_one_download(tmp_path):
     first, second = _route(FULL_FONT), _route(FULL_FONT)
     first.fetch = AsyncMock(return_value=response)
     second.fetch = AsyncMock(side_effect=AssertionError("Duplicate font download"))
-    owner = asyncio.create_task(renderer._serve_cached_resource(first))
+    owner = asyncio.create_task(renderer._serve_remote_resource(first))
     await entered.wait()
-    waiter = asyncio.create_task(renderer._serve_cached_resource(second))
+    waiter = asyncio.create_task(renderer._serve_remote_resource(second))
     await asyncio.sleep(0)
     assert not waiter.done()
     finish.set()
-    assert await owner
-    assert await waiter
+    await asyncio.gather(owner, waiter)
     first.fetch.assert_awaited_once()
     second.fetch.assert_not_awaited()
     assert second.fulfill.call_args.kwargs["body"] == b"shared font"
@@ -366,33 +415,16 @@ async def test_full_font_concurrent_requests_share_one_download(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_full_font_fetch_failure_allows_browser_fallback(tmp_path):
+async def test_full_font_fetch_failure_does_not_retry_outside_network_policy(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path)
     route = _route(FULL_FONT)
     route.fetch = AsyncMock(side_effect=RuntimeError("network unavailable"))
     await _handle(renderer, route)
-    route.continue_.assert_awaited_once()
+    route.abort.assert_awaited_once_with("blockedbyclient")
+    route.continue_.assert_not_awaited()
     route.fulfill.assert_not_awaited()
     assert not renderer._cdn_pending
     assert not renderer._cdn_cache
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", [302, 404])
-async def test_full_font_error_or_redirect_is_delivered_without_caching(
-    tmp_path, status
-):
-    renderer = PageRenderer(MagicMock(), tmp_path, asset_cache_dir=tmp_path / "c")
-    response = MagicMock(status=status)
-    response.dispose = AsyncMock()
-    response.body = AsyncMock(side_effect=AssertionError("Do not cache error bodies"))
-    route = _route(FULL_FONT)
-    route.fetch = AsyncMock(return_value=response)
-    await _handle(renderer, route)
-    route.fulfill.assert_awaited_once_with(response=response)
-    response.dispose.assert_awaited_once()
-    assert not renderer._cdn_pending
-    assert renderer._disk_cache.get(FULL_FONT) is None
 
 
 @pytest.mark.asyncio
@@ -409,7 +441,7 @@ async def test_cancelled_font_download_disposes_response_and_releases_waiters(tm
     response.body = body
     route = _route(FULL_FONT)
     route.fetch = AsyncMock(return_value=response)
-    task = asyncio.create_task(renderer._serve_cached_resource(route))
+    task = asyncio.create_task(renderer._serve_remote_resource(route))
     await entered.wait()
     pending = renderer._cdn_pending[FULL_FONT][0]
     task.cancel()
@@ -425,10 +457,10 @@ async def test_cancelled_font_download_disposes_response_and_releases_waiters(tm
 async def test_font_download_respects_disabled_cache(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path, resource_cache_max_mb=0)
     route = _route(FULL_FONT)
-    route.fetch = AsyncMock(side_effect=AssertionError("Cache is disabled"))
     await _handle(renderer, route)
-    route.fetch.assert_not_awaited()
-    route.continue_.assert_awaited_once()
+    route.fetch.assert_awaited_once()
+    route.fulfill.assert_awaited_once_with(response=route.fetch.return_value)
+    assert not renderer._cdn_cache
     assert not renderer._cdn_pending
 
 
@@ -455,12 +487,12 @@ async def test_same_font_requested_during_disk_lookup_downloads_once(
     response.dispose = AsyncMock()
     first, second = _route(FULL_FONT), _route(FULL_FONT)
     first.fetch = second.fetch = AsyncMock(return_value=response)
-    a = asyncio.create_task(renderer._serve_cached_resource(first))
+    a = asyncio.create_task(renderer._serve_remote_resource(first))
     await checking.wait()
-    b = asyncio.create_task(renderer._serve_cached_resource(second))
+    b = asyncio.create_task(renderer._serve_remote_resource(second))
     await asyncio.sleep(0)
     release.set()
-    assert await asyncio.gather(a, b) == [True, True]
+    await asyncio.gather(a, b)
     first.fetch.assert_awaited_once()
     assert all(
         r.fulfill.call_args.kwargs["body"] == b"font bytes" for r in (first, second)

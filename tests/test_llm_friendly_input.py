@@ -81,7 +81,7 @@ async def test_tikz_compile_error_does_not_assume_chinese_is_the_cause():
     orchestrator.render = AsyncMock(
         side_effect=RenderError("渲染失败: TikZ渲染失败：1 个图编译错误")
     )
-    handler = LLMToolHandler(orchestrator, MagicMock())
+    handler = LLMToolHandler(orchestrator)
 
     result = await handler.handle_render_math(MagicMock(), TIKZ)
 
@@ -107,11 +107,11 @@ async def test_sent_result_tells_the_model_not_to_repeat_latex(tmp_path, monkeyp
     image.write_bytes(b"png")
     orchestrator = MagicMock()
     orchestrator.render = AsyncMock(return_value=image)
-    context = MagicMock()
-    context.send_message = AsyncMock(return_value=True)
-    handler = llm_tool_handler.LLMToolHandler(orchestrator, context)
+    event = MagicMock(send=AsyncMock(return_value=None))
+    handler = llm_tool_handler.LLMToolHandler(orchestrator)
 
-    result = await handler.handle_render_math(MagicMock(), "$x$")
+    result = await handler.handle_render_math(event, "$x$")
 
     assert result == llm_tool_handler.IMAGE_SENT_RESULT
+    event.send.assert_awaited_once()
     assert "已发送" in result and "LaTeX" in result

@@ -152,7 +152,6 @@ class MathJax2ImagePlugin(Star):
         # LLM工具处理器
         self._llm_tool_handler = LLMToolHandler(
             render_orchestrator=self._render_orchestrator,
-            context=self.context,
         )
 
     # ==================== 命令处理 ====================

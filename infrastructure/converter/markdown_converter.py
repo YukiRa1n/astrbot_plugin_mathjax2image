@@ -412,8 +412,7 @@ class MarkdownConverter:
         md_text = self._escape_raw_html(md_text)
 
         # Markdown转换
-        html_body = markdown.markdown(
-            md_text,
+        parser = markdown.Markdown(
             extensions=[
                 "fenced_code",
                 "tables",
@@ -425,6 +424,11 @@ class MarkdownConverter:
             },
             output_format="html",  # 使用标准 HTML5 输出
         )
+        # MathJax consumes escaped dollars only on pages where it is loaded.
+        # Markdown's inline escape handling leaves literal code blocks intact.
+        if not math_blocks:
+            parser.ESCAPED_CHARS.append("$")
+        html_body = parser.convert(md_text)
 
         # Select optional packages from math only, never from code examples.
         math_source = "\n".join(math_blocks)
@@ -937,5 +941,8 @@ class MarkdownConverter:
         )
         template = template.replace(
             "{{MATH_PACKAGES}}", json.dumps(list(math_packages or ()))
+        )
+        template = template.replace(
+            "{{MATH_ALLOWED_PACKAGES}}", json.dumps(sorted(MATHJAX_PACKAGES))
         )
         return template.replace("{{CONTENT}}", html_body)

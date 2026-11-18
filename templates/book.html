@@ -37,12 +37,17 @@
         // MathJax 按需异步加载；排版前需等它启动完成
         window.__mathJaxStartup = new Promise(resolve => { window.__resolveMathJaxStartup = resolve; });
         const requestedPackages = {{MATH_PACKAGES}};
+        const allowedPackages = {{MATH_ALLOWED_PACKAGES}};
         window.MathJax = {
             tex: {
                 inlineMath: [['$', '$'], ['\\(', '\\)']],
                 displayMath: [['$$', '$$'], ['\\[', '\\]']],
                 packages: {'[+]': ['ams', 'newcommand', 'boldsymbol', 'mathtools', 'extpfeil', ...requestedPackages]},
                 autoload: {html: []},
+                require: {
+                    defaultAllow: false,
+                    allow: Object.fromEntries(allowedPackages.map(name => [name, true]))
+                },
                 macros: {
                     // 群论/代数
                     Stab: '\\operatorname{Stab}',

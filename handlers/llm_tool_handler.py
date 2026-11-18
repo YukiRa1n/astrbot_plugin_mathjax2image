@@ -35,13 +35,8 @@ class LLMToolHandler:
     #: 而且 _schedule_pending_image_cleanup 会遍历全部条目，表必须保持很小。
     _MAX_PENDING_IMAGES = 32
 
-    def __init__(
-        self,
-        render_orchestrator: "RenderOrchestrator",
-        context,
-    ):
+    def __init__(self, render_orchestrator: "RenderOrchestrator"):
         self._render_orchestrator = render_orchestrator
-        self._context = context
 
         self._pending_images: dict[str, tuple[Path, float]] = {}
         self._pending_lock = asyncio.Lock()
@@ -193,9 +188,7 @@ class LLMToolHandler:
             if getattr(self, "_closed", False):
                 return "插件已卸载，未发送图片"
             chain = [Comp.Image.fromBytes(image_bytes)]
-            result = await self._context.send_message(
-                event.unified_msg_origin, MessageChain(chain)
-            )
+            result = await event.send(MessageChain(chain))
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
                 return "发送图片失败: 平台不可用或已断开"
@@ -235,9 +228,7 @@ class LLMToolHandler:
             if getattr(self, "_closed", False):
                 return "插件已卸载，未发送图片"
             chain = [Comp.Image.fromBytes(image_bytes)]
-            result = await self._context.send_message(
-                event.unified_msg_origin, MessageChain(chain)
-            )
+            result = await event.send(MessageChain(chain))
             if result is False:
                 logger.warning(f"[MathJax2Image] 发送图片被平台拒绝: {image_name}")
                 return "发送图片失败: 平台不可用或已断开"

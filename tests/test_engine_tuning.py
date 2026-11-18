@@ -28,7 +28,7 @@ async def test_concurrent_start_uses_one_driver_and_shell(monkeypatch):
     results = await asyncio.gather(*(manager.get_browser() for _ in range(6)))
     assert all(result is browser for result in results)
     driver.start.assert_awaited_once()
-    browser_type.launch.assert_awaited_once_with(headless=True)
+    browser_type.launch.assert_awaited_once_with(headless=True, chromium_sandbox=True)
     await manager.close()
     context.dispose.assert_awaited_once()
     playwright.stop.assert_awaited_once()
@@ -79,7 +79,7 @@ async def test_queue_caps_active_work_and_rejects_excess(render_engine_factory):
     both_running = asyncio.Event()
     finish = asyncio.Event()
 
-    async def render(html_path, output):
+    async def render(html, output):
         nonlocal running, peak
         running += 1
         peak = max(peak, running)
@@ -87,7 +87,7 @@ async def test_queue_caps_active_work_and_rejects_excess(render_engine_factory):
             both_running.set()
         try:
             await finish.wait()
-            output.write_bytes(html_path.read_bytes())
+            output.write_text(html, encoding="utf-8")
             return True
         finally:
             running -= 1
@@ -115,10 +115,10 @@ async def test_queue_timeout_and_cancellation_release_admission(render_engine_fa
     started = asyncio.Event()
     finish = asyncio.Event()
 
-    async def render(html_path, output):
+    async def render(html, output):
         started.set()
         await finish.wait()
-        output.write_bytes(html_path.read_bytes())
+        output.write_text(html, encoding="utf-8")
         return True
 
     orchestrator._page_renderer._do_render = AsyncMock(side_effect=render)
@@ -235,9 +235,12 @@ async def test_zero_cache_budgets_disable_retention(tmp_path):
     renderer = PageRenderer(
         manager, tmp_path, resource_cache_max_mb=0, image_cache_max_mb=0
     )
-    route = MagicMock(fulfill=AsyncMock())
-    assert not await renderer._serve_cached_resource(route)
-    route.fulfill.assert_not_awaited()
+    renderer._store_resource(
+        "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js",
+        b"script",
+        "text/javascript",
+    )
+    assert not renderer._cdn_cache
 
     async def render(html, output):
         output.write_bytes(b"png")

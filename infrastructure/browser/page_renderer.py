@@ -5,17 +5,14 @@
 
 import asyncio
 import hashlib
-import os
 import re
-import tempfile
 import time
 import traceback
-import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from ...domain.errors import RenderError
 from ...utils.async_tasks import run_in_thread
@@ -24,6 +21,10 @@ from .native_tikz import NativeTikzRenderer
 from .tikz_worker import optimize_tikz_worker
 
 _GOTO_TIMEOUT_MS = 60_000
+_RENDER_URL = "https://render.mathjax2image.invalid/"
+_ASSET_FETCH_TIMEOUT_S = 30.0
+_MAX_ASSET_REDIRECTS = 4
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _RENDER_CONTENT = re.compile(r'<main class="render-content">([\s\S]*)</main>')
 _MATH_REQUIRED_DECLARATION = re.compile(r"window\.mathJaxRequired = (true|false);")
 _EXTRA_MARGIN_MS = 10_000  # 截图等余量
@@ -142,20 +143,14 @@ class PageRenderer:
         self._max_screenshot_height = max(1, int(max_screenshot_height))
         self._max_screenshot_pixels = max(1, int(max_screenshot_pixels))
         self._fail_on_mathjax_timeout = fail_on_mathjax_timeout
-        # 当前渲染页面的 file URI（安全边界：仅放行此 URI 的本地文件加载）
-        # 当前渲染页面的 file URI，按 page 隔离（网络策略只放行各自页面自身资源）
-        self._current_page_uris: dict = {}
+        self._render_documents: dict = {}
         # 进程级 CDN 资源缓存(URL → bytes),避免跨页重复下载 MathJax/TikZJax。
         # 只在事件循环线程上访问，不需要锁。
         self._cdn_cache: OrderedDict[str, _CachedResource] = OrderedDict()
         self._cdn_cache_bytes = 0
         self._cdn_cache_limit = max(0, int(resource_cache_max_mb)) * 1024 * 1024
-        # URL → (浏览器下载完成的通知, 登记时间)
+        # URL → (资源下载完成的通知, 登记时间)
         self._cdn_pending: dict[str, tuple[asyncio.Future, float]] = {}
-        # page → [(url, owner_future)]，异常中断时立即唤醒同资源的并发等待者
-        self._page_pending_assets: dict = {}
-        # 已监听下载事件的浏览器上下文（上下文关闭后自动移除）
-        self._watched_contexts: weakref.WeakSet = weakref.WeakSet()
         self._image_cache = OrderedDict()
         self._image_cache_bytes = 0
         self._image_cache_limit = max(0, int(image_cache_max_mb)) * 1024 * 1024
@@ -215,7 +210,7 @@ class PageRenderer:
             self._image_pending.pop(key, None)
 
     async def _render_uncached(self, html: str, output: Path) -> bool:
-        """Render a private temporary HTML file and remove it after use.
+        """Render the HTML in a leased browser page.
 
         Args:
             html: Complete HTML document.
@@ -258,28 +253,14 @@ class PageRenderer:
                         "[MathJax2Image] Native TikZ unavailable; falling back to WASM: %s",
                         exc,
                     )
-            # 使用系统临时目录（插件目录可能因 pip 安装到 site-packages 而只读）
-            # 使用 mkstemp 确保文件权限为 0600，避免其他本地用户读取渲染内容
-            temp_dir = Path(tempfile.gettempdir()) / "astrbot_mathjax2image"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            fd, tmp_path_str = tempfile.mkstemp(suffix=".html", dir=str(temp_dir))
-            tmp_path = Path(tmp_path_str)
-
-            logger.info(f"[MathJax2Image] HTML 临时文件: {tmp_path}")
-
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(html)
-                return await self._do_render(tmp_path, output)
-            finally:
-                tmp_path.unlink(missing_ok=True)
+            return await self._do_render(html, output)
         finally:
             if render_acquired:
                 self._render_semaphore.release()
             if heavy:
                 self._tikz_slots.release()
 
-    async def _do_render(self, html_path: Path, output: Path) -> bool:
+    async def _do_render(self, html: str, output: Path) -> bool:
         """执行实际的渲染操作"""
         inject_script = self._get_inject_script()
         page = None
@@ -296,8 +277,7 @@ class PageRenderer:
                 await self._setup_font_routes(page)
                 self._setup_logging(page)
 
-            # 记录当前渲染页面的 file URI，网络策略据此放行自身资源
-            self._current_page_uris[page] = html_path.resolve().as_uri()
+            self._render_documents[page] = html
             # 单次渲染整体超时，防止恶意/超长内容长时间占满页面池
             # (goto + MathJax + Mermaid + TikZ 串行最坏约 145s)
             overall_timeout_ms = (
@@ -310,7 +290,7 @@ class PageRenderer:
             overall_timeout_s = overall_timeout_ms / 1000.0
             try:
                 complete = await asyncio.wait_for(
-                    self._load_and_wait(page, html_path),
+                    self._load_and_wait(page, html),
                     timeout=overall_timeout_s,
                 )
                 await asyncio.wait_for(
@@ -334,11 +314,7 @@ class PageRenderer:
             raise RenderError(f"渲染失败: {e}")
         finally:
             if page is not None:
-                self._current_page_uris.pop(page, None)
-                tracked = self._page_pending_assets.pop(page, ())
-                if exception_occurred:
-                    for pending_url, pending_owner in tracked:
-                        self._release_pending(pending_url, owner=pending_owner)
+                self._render_documents.pop(page, None)
                 await self._browser_manager.release_page(page, exception_occurred)
 
     def _get_inject_script(self) -> str:
@@ -534,50 +510,35 @@ class PageRenderer:
         await page.route("**/*.otf", handle_font_route)
 
     async def _setup_network_policy(self, page) -> None:
-        """只允许本地页面和模板所需 CDN，避免渲染内容触发任意出站请求。"""
+        """Serve the current document and restrict network access in its context."""
 
         async def handle_request(route):
-            parsed = urlparse(route.request.url)
-            if parsed.scheme == "file":
-                # 安全边界：只放行当前渲染页面自身的 file URI。
-                # 攻击者可通过 Markdown 图片语法构造 file:/// 引用，若全部放行
-                # 即可读取服务器本地文件（图片/SVG）并回传给请求者。
-                page_uri = self._current_page_uris.get(page)
-                if page_uri and route.request.url == page_uri:
-                    await route.continue_()
-                    return
-                logger.warning(
-                    "[MathJax2Image] 已阻止渲染页面加载本地文件: %s",
-                    route.request.url,
+            request = route.request
+            url = request.url
+            if (
+                url == _RENDER_URL
+                and page in self._render_documents
+                and request.method == "GET"
+                and request.is_navigation_request()
+                and request.frame == page.main_frame
+            ):
+                await route.fulfill(
+                    body=self._render_documents[page],
+                    content_type="text/html; charset=utf-8",
                 )
-                await route.abort("blockedbyclient")
                 return
-            if parsed.scheme in {"about", "data", "blob"}:
+            if urlparse(url).scheme in {"about", "data", "blob"}:
                 await route.continue_()
                 return
-            if self._is_allowed_remote_url(route.request.url):
-                # Routing disables Chromium's HTTP cache. Cache only static GET
-                # assets, with a byte budget and TTL, across isolated pages.
-                if self._is_cacheable_asset(
-                    route.request
-                ) and await self._serve_cached_resource(route, page=page):
-                    return
-                # 未命中时由浏览器自己下载（其 DNS/连接回退远快于驱动端
-                # 请求），下载完成后由 _capture_response 写入缓存。
+            if request.method == "GET" and self._is_allowed_remote_url(url):
                 try:
-                    await route.continue_()
-                except BaseException:
-                    self._release_pending(route.request.url)
-                    raise
-                return
-            logger.warning(
-                "[MathJax2Image] 已阻止渲染页面访问非白名单资源: %s",
-                route.request.url,
-            )
+                    await self._serve_remote_resource(route)
+                    return
+                except Exception as exc:
+                    logger.warning("[MathJax2Image] Asset request failed: %s", exc)
             await route.abort("blockedbyclient")
 
-        await page.route("**/*", handle_request)
-        self._watch_asset_downloads(page.context)
+        await page.context.route("**/*", handle_request)
 
     @classmethod
     def _is_allowed_remote_url(cls, url: str) -> bool:
@@ -601,116 +562,100 @@ class PageRenderer:
             and parsed.path.endswith(_CACHEABLE_SUFFIXES)
         )
 
-    def _watch_asset_downloads(self, context) -> None:
-        """Capture browser-downloaded assets once per browser context.
-
-        Worker requests (TikZ TeX snapshot and package files) belong to the
-        context too, so they are captured as well.
-        """
-        if context in self._watched_contexts:
-            return
-        try:
-            self._watched_contexts.add(context)
-            context.on(
-                "requestfinished",
-                lambda request: asyncio.ensure_future(self._capture_response(request)),
-            )
-            context.on(
-                "requestfailed",
-                lambda request: (
-                    None
-                    if urlparse(request.url).path.endswith((".ttf", ".otf"))
-                    else self._release_pending(request.url)
-                ),
-            )
-        except Exception as exc:  # pragma: no cover - mocked or closed contexts
-            logger.debug("[MathJax2Image] 无法监听资源下载: %s", exc)
-
-    async def _serve_cached_resource(self, route, page=None) -> bool:
-        """Serve a cached asset or download a full font before delivering it.
-
-        Full TTF/OTF fonts can exceed Chromium's response inspector buffer.
-        Download them through the route API so their bytes remain available
-        for caching. Other misses use the browser and its completion event.
-        Concurrent requests wait for the first download.
+    async def _fetch_remote_resource(self, route):
+        """Fetch an asset without allowing the browser to follow unchecked redirects.
 
         Args:
-            route: An already allowlisted static GET request.
-            page: Optional page owning the intercepted request.
+            route: An intercepted GET request for a remote asset.
 
         Returns:
-            Whether the route was fulfilled and needs no browser download.
+            Final response. The caller owns its disposal.
+
+        Raises:
+            RenderError: A redirect target or download exceeds the policy.
         """
-        if self._cdn_cache_limit == 0 and self._disk_cache is None:
-            return False
         url = route.request.url
-        cached = self._lookup_resource(url)
-        owner = None
-        while cached is None:
-            pending = self._cdn_pending.get(url)
-            remaining = pending[1] + _PENDING_TTL_S - time.monotonic() if pending else 0
+        deadline = time.monotonic() + _ASSET_FETCH_TIMEOUT_S
+        for _ in range(_MAX_ASSET_REDIRECTS + 1):
+            if not self._is_allowed_remote_url(url):
+                raise RenderError("CDN resource redirected outside the allowlist")
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
-                # Claim the miss before yielding, including during disk I/O.
-                owner = asyncio.get_running_loop().create_future()
-                self._cdn_pending[url] = (owner, time.monotonic())
-                if page is not None:
-                    self._page_pending_assets.setdefault(page, []).append((url, owner))
-                break
+                raise RenderError("CDN resource download timed out")
+            response = await route.fetch(
+                url=url, timeout=max(1, int(remaining * 1000)), max_redirects=0
+            )
+            if response.status not in _REDIRECT_STATUSES:
+                return response
             try:
-                cached = await asyncio.wait_for(asyncio.shield(pending[0]), remaining)
-            except asyncio.TimeoutError:
-                pass
-            if cached is None:
-                cached = self._lookup_resource(url)
-        if cached is None and self._disk_cache is not None:
-            try:
+                location = response.headers.get("location")
+                if not location:
+                    raise RenderError("CDN redirect did not include a Location header")
+                url = urljoin(url, location)
+            finally:
+                await response.dispose()
+        raise RenderError("CDN resource exceeded the redirect limit")
+
+    async def _serve_remote_resource(self, route) -> None:
+        """Fulfill a GET from the cache or a validated CDN response.
+
+        Args:
+            route: An intercepted GET request for an allowlisted asset.
+        """
+        url = route.request.url
+        cacheable = (
+            self._cdn_cache_limit > 0 or self._disk_cache is not None
+        ) and self._is_cacheable_asset(route.request)
+        cached = None
+        owner = None
+        response = None
+        if cacheable:
+            cached = self._lookup_resource(url)
+            while cached is None:
+                pending = self._cdn_pending.get(url)
+                remaining = (
+                    pending[1] + _PENDING_TTL_S - time.monotonic() if pending else 0
+                )
+                if remaining <= 0:
+                    owner = asyncio.get_running_loop().create_future()
+                    self._cdn_pending[url] = (owner, time.monotonic())
+                    break
+                try:
+                    cached = await asyncio.wait_for(
+                        asyncio.shield(pending[0]), remaining
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                if cached is None:
+                    cached = self._lookup_resource(url)
+        try:
+            if owner is not None and self._disk_cache is not None:
                 hit = await run_in_thread(self._disk_cache.get, url)
                 if hit is not None:
                     cached = self._store_resource(url, *hit)
-            except BaseException:
-                self._release_pending(url, owner=owner)
-                raise
-        if cached is not None:
+            if cached is not None:
+                await cached.fulfill(route)
+                return
+            response = await self._fetch_remote_resource(route)
+            if not cacheable or response.status != 200:
+                await route.fulfill(response=response)
+                return
+            body = await response.body()
+            content_type = response.headers.get(
+                "content-type", "application/octet-stream"
+            )
+            if self._disk_cache is not None:
+                await run_in_thread(self._disk_cache.put, url, body, content_type)
+            cached = self._store_resource(url, body, content_type)
+            await cached.fulfill(route)
+        finally:
+            pending = self._cdn_pending.get(url)
+            if owner is not None and pending is not None and pending[0] is owner:
+                del self._cdn_pending[url]
             if owner is not None:
-                self._release_pending(url, cached, owner=owner)
-            await cached.fulfill(route)
-            return True
-        if urlparse(url).path.endswith((".ttf", ".otf")):
-            response = None
-            try:
-                # Never follow redirects outside the page's network allowlist.
-                # A redirect response is delivered to the browser to route again.
-                response = await route.fetch(timeout=30_000, max_redirects=0)
-                if response.status != 200:
-                    self._release_pending(url, cached, owner=owner)
-                    await route.fulfill(response=response)
-                    return True
-                body = await response.body()
-                content_type = response.headers.get(
-                    "content-type", "application/octet-stream"
-                )
-                if self._disk_cache is not None:
-                    await run_in_thread(self._disk_cache.put, url, body, content_type)
-                cached = self._store_resource(url, body, content_type)
-            except Exception as exc:
-                logger.debug(
-                    "[MathJax2Image] Font download failed; using browser fallback: %s: %s",
-                    url,
-                    exc,
-                )
-                return False
-            finally:
-                # Release before fulfill: requestfinished must not capture the
-                # same body again through Chromium's limited inspector buffer.
-                self._release_pending(url, cached, owner=owner)
-                if response is not None:
-                    try:
-                        await response.dispose()
-                    except Exception:
-                        pass  # The context may already be closed on cancellation.
-            await cached.fulfill(route)
-            return True
-        return False
+                owner.set_result(cached)
+            if response is not None:
+                await response.dispose()
 
     def _lookup_resource(self, url: str) -> "_CachedResource | None":
         """Return a fresh memory entry and mark it most recently used."""
@@ -756,39 +701,6 @@ class PageRenderer:
         self._cdn_cache_bytes += resource.size
         return resource
 
-    async def _capture_response(self, request) -> None:
-        """Store an asset the browser downloaded after a cache miss."""
-        url = request.url
-        pending = self._cdn_pending.get(url)
-        if pending is None or urlparse(url).path.endswith((".ttf", ".otf")):
-            return
-        resource = None
-        try:
-            response = await request.response()
-            if response is None or response.status != 200:
-                return
-            body = await response.body()
-            content_type = response.headers.get(
-                "content-type", "application/octet-stream"
-            )
-            if self._disk_cache is not None:
-                await run_in_thread(self._disk_cache.put, url, body, content_type)
-            resource = self._store_resource(url, body, content_type)
-        except Exception as exc:
-            logger.debug("[MathJax2Image] 缓存已下载资源失败: %s: %s", url, exc)
-        finally:
-            self._release_pending(url, resource, owner=pending[0])
-
-    def _release_pending(
-        self, url: str, resource: _CachedResource | None = None, *, owner=None
-    ) -> None:
-        """Wake requests waiting for a browser download of ``url``."""
-        pending = self._cdn_pending.get(url)
-        if pending is not None and (owner is None or pending[0] is owner):
-            del self._cdn_pending[url]
-            if not pending[0].done():
-                pending[0].set_result(resource)
-
     def _setup_logging(self, page) -> None:
         """设置页面日志"""
         page.on(
@@ -796,9 +708,8 @@ class PageRenderer:
         )
         page.on("pageerror", lambda err: logger.error(f"[Browser Error] {err}"))
 
-    async def _load_and_wait(self, page, html_path: Path) -> bool:
+    async def _load_and_wait(self, page, html: str) -> bool:
         """加载页面并等待渲染完成"""
-        html = await asyncio.to_thread(html_path.read_text, encoding="utf-8")
         content = _RENDER_CONTENT.search(html)
         resident_key = ""
         math_required = None
@@ -849,7 +760,7 @@ class PageRenderer:
             )
         else:
             await page.goto(
-                html_path.resolve().as_uri(),
+                _RENDER_URL,
                 wait_until="domcontentloaded",
                 timeout=_GOTO_TIMEOUT_MS,
             )

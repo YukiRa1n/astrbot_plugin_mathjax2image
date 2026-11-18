@@ -43,8 +43,8 @@ async def test_native_failure_falls_back_to_original_html(tmp_path, failure):
     html = '<div class="tikz-diagram"><script type="text/tikz">x</script></div>'
     seen = []
 
-    async def render(path, output):
-        seen.append(path.read_text(encoding="utf-8"))
+    async def render(html, output):
+        seen.append(html)
         return True
 
     renderer._do_render = render
@@ -58,8 +58,8 @@ async def test_native_success_and_cancel_release_slot(tmp_path):
     renderer = PageRenderer(MagicMock(), tmp_path, tikz_backend="native")
     renderer._native_tikz.render_html = AsyncMock(return_value="<svg/>")
 
-    async def render(path, output):
-        assert path.read_text(encoding="utf-8") == "<svg/>"
+    async def render(html, output):
+        assert html == "<svg/>"
         return True
 
     renderer._do_render = render

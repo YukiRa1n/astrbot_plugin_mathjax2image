@@ -37,6 +37,8 @@ Linux 环境建议在部署阶段安装系统依赖：
 playwright install-deps chromium
 ```
 
+本地 Chromium 默认启用沙箱。Linux 容器内请用支持 Chromium 沙箱的非 root 用户运行 AstrBot，也可以连接已配置沙箱的独立 Chromium CDP 服务。
+
 首次渲染需联网拉取固定版本的 MathJax、TikZJax、Mermaid 与字体资源，后续自动从本地磁盘缓存复用。
 
 <details>
@@ -134,7 +136,7 @@ $$\dv[2]{x}{t} + \pdv{f}{x}, \qquad \ce{2H2 + O2 -> 2H2O}$$
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `browser_engine` | `chromium` | 浏览器内核（`chromium` / `firefox` / `webkit`） |
-| `browser_cdp_url` / `allow_remote_cdp` | 空 / `false` | 连接外部共享 Chromium CDP 地址（默认仅允许本机回环地址） |
+| `browser_cdp_url` / `allow_remote_cdp` | 空 / `false` | 连接外部共享 Chromium CDP 地址（默认仅允许本机回环地址，远端无需共享文件系统） |
 | `resident_engines` | `true` | 兼容任务间常驻复用 MathJax / TikZ 引擎 |
 | `browser_max_pages` / `max_concurrent_renders` | `2` / `2` | 页面池上限与并发渲染数（实际并发取较小值） |
 | `max_queued_renders` / `render_queue_timeout` | `8` / `30000` | 排队容量上限与排队超时（毫秒） |

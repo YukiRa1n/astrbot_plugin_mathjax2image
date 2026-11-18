@@ -83,6 +83,14 @@ def test_inline_code_keeps_its_paragraph():
     assert body.strip().endswith("</p>")
 
 
+def test_escaped_dollars_in_prose_and_code():
+    plain = _body(r"Price: \$5. Example: `\$5`" + "\n\n    " + r"\$5")
+    assert "<p>Price: $5. Example: <code>\\$5</code>" in plain
+    assert "<pre><code>\\$5" in plain
+    mixed = _body(r"Price: \$5. Formula: $x^2$")
+    assert r"Price: \$5. Formula: $x^2$" in mixed
+
+
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [

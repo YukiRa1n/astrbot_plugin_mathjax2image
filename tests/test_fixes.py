@@ -301,7 +301,7 @@ class TestPendingImagesTTL:
             LLMToolHandler,
         )
 
-        handler = LLMToolHandler(MagicMock(), MagicMock())
+        handler = LLMToolHandler(MagicMock())
         handler._IMAGE_TTL_SECONDS = 0.02
         handler._get_session_key = MagicMock(return_value="session1")
 
@@ -360,7 +360,7 @@ class TestPendingImagesLock:
 
         # 真正跑 __init__：旧写法用 __new__ 再自己赋值，再断言自己赋的值，
         # 即使实现删掉这把锁也照样通过。
-        handler = LLMToolHandler(MagicMock(), MagicMock())
+        handler = LLMToolHandler(MagicMock())
 
         assert isinstance(handler._pending_lock, asyncio.Lock)
         assert isinstance(handler._active_renders, set)
@@ -381,7 +381,6 @@ class TestPendingImagesLock:
         handler._IMAGE_TTL_SECONDS = 300
         handler._render_orchestrator = MagicMock()
         handler._latex_preprocessor = MagicMock()
-        handler._context = MagicMock()
         handler._get_session_key = MagicMock(return_value="session-x")
 
         image_file = tmp_path / "img.png"
@@ -417,7 +416,6 @@ class TestPendingImagesLock:
         handler._IMAGE_TTL_SECONDS = 300
         handler._render_orchestrator = MagicMock()
         handler._latex_preprocessor = MagicMock()
-        handler._context = MagicMock()
         handler._get_session_key = MagicMock(return_value="s1")
 
         old_file = tmp_path / "old.png"
@@ -745,19 +743,18 @@ class TestHandleSendImageUsesLock:
             LLMToolHandler,
         )
 
-        handler = LLMToolHandler(MagicMock(), MagicMock())
+        handler = LLMToolHandler(MagicMock())
         handler._get_session_key = MagicMock(return_value="session-close")
         image = tmp_path / "pending.png"
         image.write_bytes(b"png")
         handler._pending_images["session-close"] = (image, time.time())
-        handler._context = MagicMock()
-        handler._context.send_message = AsyncMock()
+        event = MagicMock(send=AsyncMock())
 
         await handler.close()
-        result = await handler.handle_send_image(MagicMock())
+        result = await handler.handle_send_image(event)
 
         assert "卸载" in result
-        handler._context.send_message.assert_not_awaited()
+        event.send.assert_not_awaited()
         assert not image.exists()
 
     @pytest.mark.asyncio
@@ -771,7 +768,6 @@ class TestHandleSendImageUsesLock:
         handler._pending_images = {}
         handler._pending_lock = asyncio.Lock()
         handler._IMAGE_TTL_SECONDS = 300
-        handler._context = MagicMock()
         handler._get_session_key = MagicMock(return_value="session-a")
 
         event = MagicMock()
@@ -804,23 +800,6 @@ class TestSafeEvalResultSizeLimit:
         assert math.isnan(result)
 
 
-class TestPageRendererFullUuid:
-    """Fix 5: page_renderer temp file must use full uuid, not truncated."""
-
-    def test_temp_file_uses_full_uuid(self):
-        import inspect
-        from astrbot_plugin_mathjax2image.infrastructure.browser.page_renderer import (
-            PageRenderer,
-        )
-
-        source = inspect.getsource(PageRenderer._render_uncached)
-        # mkstemp 生成随机唯一文件名（比 uuid 更安全，且文件权限 0600）
-        assert "tempfile.mkstemp" in source or "uuid.uuid4().hex" in source
-        assert "uuid.uuid4().hex[:8]" not in source
-        assert "uuid.uuid4().hex[:16]" not in source
-        assert "uuid.uuid4().hex[:12]" not in source
-
-
 # ---- architecture and lifecycle optimization ----
 
 
@@ -841,7 +820,10 @@ def test_non_chromium_launch_options_do_not_receive_chromium_flags():
 
     assert BrowserManager._launch_options("firefox") == {"headless": True}
     assert BrowserManager._launch_options("webkit") == {"headless": True}
-    assert BrowserManager._launch_options("chromium") == {"headless": True}
+    assert BrowserManager._launch_options("chromium") == {
+        "headless": True,
+        "chromium_sandbox": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -976,18 +958,17 @@ async def test_llm_send_removes_artifact_after_embedding(tmp_path, monkeypatch):
     handler._pending_images = {"session": (image_path, time.time())}
     handler._pending_lock = asyncio.Lock()
     handler._last_rendered_image = image_path
-    handler._context = MagicMock()
-    handler._context.send_message = AsyncMock()
     image_factory = MagicMock()
     image_factory.fromBytes = MagicMock(return_value="embedded-image")
     monkeypatch.setattr(module.Comp, "Image", image_factory, raising=False)
-    event = MagicMock(unified_msg_origin="session")
+    event = MagicMock(unified_msg_origin="session", send=AsyncMock(return_value=None))
     # 模拟 get_sender_id 返回空（私聊），会话键退化为 origin
     event.get_sender_id = MagicMock(return_value="")
 
     result = await handler.handle_send_image(event)
 
     assert "已发送" in result
+    event.send.assert_awaited_once()
     image_factory.fromBytes.assert_called_once_with(b"pending-image")
     assert not image_path.exists()
     assert handler._last_rendered_image is None
@@ -1007,12 +988,13 @@ async def test_llm_send_restores_pending_after_platform_rejection(
     image_path = tmp_path / "pending-rejected.png"
     image_path.write_bytes(b"pending-image")
     timestamp = time.time()
-    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler = LLMToolHandler(MagicMock())
     handler._pending_images = {"session": (image_path, timestamp)}
     handler._last_rendered_image = image_path
-    handler._context.send_message = AsyncMock(side_effect=[False, True])
     handler._get_session_key = MagicMock(return_value="session")
-    event = MagicMock(unified_msg_origin="session")
+    event = MagicMock(
+        unified_msg_origin="session", send=AsyncMock(side_effect=[False, None])
+    )
 
     try:
         first_result = await handler.handle_send_image(event)
@@ -1028,7 +1010,7 @@ async def test_llm_send_restores_pending_after_platform_rejection(
         assert "session" not in handler._pending_images
         assert not image_path.exists()
         assert handler._last_rendered_image is None
-        assert handler._context.send_message.await_count == 2
+        assert event.send.await_count == 2
     finally:
         await handler.close()
 
@@ -1045,14 +1027,14 @@ async def test_llm_send_restores_pending_after_send_exception(tmp_path, monkeypa
     image_path = tmp_path / "pending-exception.png"
     image_path.write_bytes(b"pending-image")
     timestamp = time.time()
-    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler = LLMToolHandler(MagicMock())
     handler._pending_images = {"session": (image_path, timestamp)}
     handler._last_rendered_image = image_path
-    handler._context.send_message = AsyncMock(
-        side_effect=[RuntimeError("platform unavailable"), True]
-    )
     handler._get_session_key = MagicMock(return_value="session")
-    event = MagicMock(unified_msg_origin="session")
+    event = MagicMock(
+        unified_msg_origin="session",
+        send=AsyncMock(side_effect=[RuntimeError("platform unavailable"), None]),
+    )
 
     try:
         first_result = await handler.handle_send_image(event)
@@ -1068,41 +1050,12 @@ async def test_llm_send_restores_pending_after_send_exception(tmp_path, monkeypa
         assert "session" not in handler._pending_images
         assert not image_path.exists()
         assert handler._last_rendered_image is None
-        assert handler._context.send_message.await_count == 2
+        assert event.send.await_count == 2
     finally:
         await handler.close()
 
 
 # ===== Regression tests for review fixes =====
-
-
-def test_network_policy_file_logic_is_correct():
-    """验证 file:// 放行逻辑：仅当前页面 URI 放行，其余中止。"""
-    from urllib.parse import urlparse
-
-    # 复现 page_renderer 中的判定逻辑
-    current_page_uri = "file:///C:/tmp/temp_abcd1234.html"
-
-    def should_allow(url: str) -> str:
-        parsed = urlparse(url)
-        if parsed.scheme == "file":
-            return "continue" if url == current_page_uri else "abort"
-        if parsed.scheme in {"about", "data", "blob"}:
-            return "continue"
-        if parsed.scheme == "https" and parsed.hostname in {"unpkg.com"}:
-            return "continue"
-        return "abort"
-
-    # 页面自身 URI 放行
-    assert should_allow("file:///C:/tmp/temp_abcd1234.html") == "continue"
-    # 任意其他本地文件被阻止（本地文件读取通道）
-    assert should_allow("file:///C:/Windows/System32/secret.svg") == "abort"
-    assert should_allow("file:///C:/Users/me/.ssh/id_rsa") == "abort"
-    # data:/about:/blob 放行
-    assert should_allow("data:image/png;base64,AAAA") == "continue"
-    assert should_allow("about:blank") == "continue"
-    # 非白名单 https 被阻止
-    assert should_allow("https://evil.example.com/x.png") == "abort"
 
 
 def test_safe_eval_giant_int_returns_nan_not_crash():
@@ -1307,7 +1260,7 @@ async def test_render_math_rejects_whitespace_only_content():
     """只有空白的 content 不该触发渲染。"""
     from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
 
-    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler = LLMToolHandler(MagicMock())
     result = await handler.handle_render_math(MagicMock(), "  \n\t ", auto_send=False)
     assert "不能为空" in result
 
@@ -1324,7 +1277,7 @@ async def test_pending_images_are_hard_capped(tmp_path):
     """
     from astrbot_plugin_mathjax2image.handlers.llm_tool_handler import LLMToolHandler
 
-    handler = LLMToolHandler(MagicMock(), MagicMock())
+    handler = LLMToolHandler(MagicMock())
     handler._MAX_PENDING_IMAGES = 3
     paths = []
     try:
